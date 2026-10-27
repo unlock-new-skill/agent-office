@@ -77,7 +77,7 @@ Schema version 6 (`PRAGMA user_version=6`); v2–v5 upgrade in place. No in-plac
 | `src/server/office-routes.ts` | REST surface for the above |
 | `src/connector/hook-runner.ts` | Hook logic (register, telemetry, Stop wake with retry, remote permission) |
 | `src/server/mcp-stdio.ts` | MCP tools `agent_office_*` |
-| `src/client/map3d/office-3d.ts` | 3D map (default): Three.js isometric low-poly office reusing the 2D layout; loaded lazily as its own chunk; rebuilds meshes only on org layout changes, restyles actors on status changes |
+| `src/client/map3d/office-3d.ts` | 3D map (default): Three.js isometric open-plan office floor (department zones with own flooring, windowed shell, pantry/lounge, plants, pendant lamps; props in `office-3d-props.ts`, clock-driven lighting in `day-night.ts`) reusing the 2D layout; loaded lazily as its own chunk; rebuilds meshes only on org layout changes, restyles actors on status changes |
 | `src/client/map/` | Map tab: pure room/desk layout + hit testing (`office-map-layout.ts`) and Canvas 2D pixel painter (`office-map-painter.ts`), no game engine |
 | `src/client/` | React UI: Chat (sidebar, messages, members/tasks) and Org (seat cards, drag-assign) |
 

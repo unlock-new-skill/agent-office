@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { SeatStatus } from '../state/office-store.js';
 import { CELL_H, CELL_W, TILE, seatHash, type MapLayout } from '../map/office-map-layout.js';
+import { currentHour, lightingAt } from './day-night.js';
+import { box, cube, floorTexture, makeCoffeeTable, makePantry, makePendantLamp, makePlant, makeSofa, shared, ZONE_FLOORS, type FloorKind } from './office-3d-props.js';
 import type { SeatSprite } from '../map/office-map-painter.js';
 
 export type Target3D = { seatId: string } | { agentId: string };
@@ -21,18 +23,6 @@ const SCREEN: Record<SeatStatus, number> = { working: 0x60a5fa, listening: 0x22c
 const ICON: Partial<Record<SeatStatus, { text: string; bg: string; fg: string }>> = {
   blocked: { text: '!', bg: '#f59e0b', fg: '#1f1300' }, wake_limited: { text: '✕', bg: '#f87171', fg: '#2a0a0a' },
   idle: { text: 'Zz', bg: '#cbd5e1', fg: '#1e293b' }, listening: { text: '…', bg: '#e2e8f0', fg: '#16a34a' },
-};
-
-const box = new THREE.BoxGeometry(1, 1, 1);
-const materialCache = new Map<string, THREE.MeshStandardMaterial>();
-const shared = (color: number, options: { roughness?: number; metalness?: number } = {}): THREE.MeshStandardMaterial => {
-  const key = `${color}:${options.roughness ?? 0.8}:${options.metalness ?? 0}`;
-  let material = materialCache.get(key);
-  if (!material) { material = new THREE.MeshStandardMaterial({ color, roughness: options.roughness ?? 0.8, metalness: options.metalness ?? 0 }); materialCache.set(key, material); }
-  return material;
-};
-const cube = (material: THREE.Material, size: [number, number, number], at: [number, number, number], parent: THREE.Object3D): THREE.Mesh => {
-  const mesh = new THREE.Mesh(box, material); mesh.scale.set(...size); mesh.position.set(...at); mesh.castShadow = true; mesh.receiveShadow = true; parent.add(mesh); return mesh;
 };
 
 const textTexture = (lines: Array<{ text: string; font: string; color: string }>, width: number, height: number, background: string | null, radius = 18): THREE.CanvasTexture => {
@@ -55,16 +45,11 @@ const label = (text: string, color = '#e2e8f0'): THREE.Sprite => {
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: textTexture([{ text: text.length > 22 ? `${text.slice(0, 21)}…` : text, font: '600 34px system-ui, sans-serif', color }], 384, 64, 'rgba(15,23,42,0.72)', 26), depthWrite: false }));
   sprite.scale.set(2.4, 0.4, 1); return sprite;
 };
-const floorTexture = (): THREE.CanvasTexture => {
-  const canvas = document.createElement('canvas'); canvas.width = 64; canvas.height = 64; const context = canvas.getContext('2d')!;
-  for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) { context.fillStyle = (x + y) % 2 ? '#d9dde3' : '#ffffff'; context.fillRect(x * 32, y * 32, 32, 32); }
-  const texture = new THREE.CanvasTexture(canvas); texture.wrapS = texture.wrapT = THREE.RepeatWrapping; texture.colorSpace = THREE.SRGBColorSpace; texture.magFilter = THREE.NearestFilter;
-  return texture;
-};
-
 /**
- * Low-poly isometric office: rooms per department, a desk per seat and voxel agents whose screen glow, pose and
- * floating icon show their live status. Rebuilds geometry only when the org layout changes; status changes just
+ * Low-poly isometric open-plan office floor: departments are zones with their own flooring (no walls between them),
+ * inside a building with windowed outer walls, pillars, a pantry, a lounge, plants and pendant lamps. Daylight follows
+ * the local clock (sun path, sky through the windows, lamps at night). Voxel agents show their live status through
+ * screen glow, pose and a floating icon. Rebuilds geometry only when the org layout changes; status changes just
  * restyle existing actors. Orbit (drag), zoom (wheel) and pan (right drag); hover/click pick seats and lobby agents.
  */
 export class Office3D {
@@ -87,7 +72,15 @@ export class Office3D {
   private hovered: string | null = null;
   private selected: string | null = null;
   private model: Office3DModel | null = null;
-  private readonly floorMap = floorTexture();
+  private readonly floors = new Map<FloorKind, THREE.CanvasTexture>();
+  private readonly hemisphere = new THREE.HemisphereLight(0xdbe7ff, 0x2a2f38, 1.9);
+  private readonly ground = new THREE.MeshStandardMaterial({ color: 0x3b4048, roughness: 1 });
+  private glass: THREE.MeshStandardMaterial | null = null;
+  private bulbs: THREE.MeshStandardMaterial[] = [];
+  private lamps: THREE.PointLight[] = [];
+  private center = new THREE.Vector3();
+  private reach = 20;
+  private lightingCheckedAt = -Infinity;
   private downAt: { x: number; y: number } | null = null;
 
   constructor(private readonly host: HTMLElement, private readonly handlers: Handlers) {
@@ -97,11 +90,11 @@ export class Office3D {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     host.appendChild(this.renderer.domElement);
     this.scene.background = new THREE.Color(0x0e1116);
-    this.scene.fog = new THREE.Fog(0x0e1116, 80, 160);
-    this.scene.add(new THREE.HemisphereLight(0xdbe7ff, 0x2a2f38, 1.9));
+    this.scene.fog = new THREE.Fog(0x0e1116, 90, 200);
+    this.scene.add(this.hemisphere);
     this.sun.castShadow = true; this.sun.shadow.mapSize.set(2048, 2048); this.sun.shadow.bias = -0.0005; this.sun.shadow.normalBias = 0.02;
     this.scene.add(this.sun, this.sun.target, this.world);
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ color: 0x11151b, roughness: 1 }));
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), this.ground);
     ground.rotation.x = -Math.PI / 2; ground.position.y = -0.06; ground.receiveShadow = true; this.scene.add(ground);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true; this.controls.minPolarAngle = 0.35; this.controls.maxPolarAngle = 1.25; this.controls.minZoom = 0.5; this.controls.maxZoom = 4; this.controls.screenSpacePanning = true;
@@ -142,7 +135,7 @@ export class Office3D {
     this.renderer.domElement.removeEventListener('pointerleave', this.onPointerLeave);
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.removeEventListener('click', this.onClick);
-    this.clearWorld(); this.floorMap.dispose(); this.renderer.dispose(); this.renderer.domElement.remove();
+    this.clearWorld(); for (const texture of this.floors.values()) texture.dispose(); this.ground.dispose(); this.renderer.dispose(); this.renderer.domElement.remove();
   }
 
   private resize(): void {
@@ -160,54 +153,128 @@ export class Office3D {
       if (object instanceof THREE.Mesh && object.userData.ownMaterial) { const material = object.material as THREE.MeshStandardMaterial; material.map?.dispose(); material.dispose(); }
     });
     // Icon textures are shared across rebuilds; sprites above only disposed their own label maps.
-    this.world.clear(); this.actors.clear(); this.hitBoxes = []; this.signs = [];
+    for (const lamp of this.lamps) lamp.dispose();
+    this.world.clear(); this.actors.clear(); this.hitBoxes = []; this.signs = []; this.bulbs = []; this.lamps = []; this.glass = null;
+  }
+
+  private floorFor(kind: FloorKind): THREE.CanvasTexture {
+    let texture = this.floors.get(kind);
+    if (!texture) { texture = floorTexture(kind); this.floors.set(kind, texture); }
+    return texture;
+  }
+
+  /** Floor slab with a tiled pattern; each slab owns a texture clone so its repeat matches its size. */
+  private slab(kind: FloorKind, color: number, x: number, z: number, w: number, d: number, y: number, tile = 2): THREE.Mesh {
+    const map = this.floorFor(kind).clone(); map.repeat.set(w / tile, d / tile); map.needsUpdate = true;
+    const mesh = cube(new THREE.MeshStandardMaterial({ color, map, roughness: kind === 'tile' || kind === 'terrazzo' ? 0.45 : 0.9 }), [w, 0.1, d], [x + w / 2, y, z + d / 2], this.world, false);
+    mesh.userData.ownMaterial = true; return mesh;
   }
 
   private rebuild(model: Office3DModel): void {
     this.clearWorld();
     const { layout } = model;
-    for (const room of layout.rooms) {
-      const x0 = room.x * U; const z0 = room.y * U; const w = room.w * U; const d = room.h * U;
-      const tint = new THREE.Color(room.color).lerp(new THREE.Color(0x3a404a), room.paused ? 0.9 : 0.72);
-      const floorMaterial = new THREE.MeshStandardMaterial({ color: tint, map: this.floorMap.clone(), roughness: 0.9 });
-      floorMaterial.map!.repeat.set(w / 2, d / 2); floorMaterial.map!.needsUpdate = true;
-      const floor = cube(floorMaterial, [w, 0.12, d], [x0 + w / 2, 0, z0 + d / 2], this.world); floor.castShadow = false; floor.userData.ownMaterial = true;
-      const wall = shared(new THREE.Color(room.color).lerp(new THREE.Color(0x111827), 0.55).getHex());
-      const trim = shared(new THREE.Color(room.color).getHex(), { roughness: 0.4 });
-      cube(wall, [w, 1.3, 0.25], [x0 + w / 2, 0.65, z0 + 0.125], this.world);
-      cube(wall, [0.25, 1.3, d], [x0 + 0.125, 0.65, z0 + d / 2], this.world);
-      cube(trim, [w, 0.1, 0.3], [x0 + w / 2, 1.33, z0 + 0.125], this.world);
-      cube(trim, [0.3, 0.1, d], [x0 + 0.125, 1.33, z0 + d / 2], this.world);
-      const sign = label(room.name); sign.position.set(x0 + w / 2, 2.1, z0 + 0.4); sign.scale.set(Math.min(w * 0.8, 6), 0.75, 1); this.world.add(sign);
+    // Building footprint: the layout plus a strip on the right for the pantry, with a margin all round.
+    const contentDepth = Math.max(...layout.rooms.map(room => (room.y + room.h) * U), layout.lobby ? (layout.lobby.y + layout.lobby.h) * U : 0, 12.5);
+    const x0 = -1; const z0 = -1; const x1 = layout.width * U + 8; const z1 = contentDepth + 1.5;
+    this.buildShell(x0, z0, x1, z1);
+    layout.rooms.forEach((room, index) => {
+      const rx = room.x * U; const rz = room.y * U; const w = room.w * U; const d = room.h * U;
+      const kind = ZONE_FLOORS[index % ZONE_FLOORS.length]!;
+      const tint = new THREE.Color(0xffffff).lerp(new THREE.Color(room.color), kind === 'carpet' ? 0.55 : 0.28);
+      if (room.paused) tint.lerp(new THREE.Color(0x4b5563), 0.5);
+      this.slab(kind, tint.getHex(), rx, rz, w, d, 0.06);
+      // Zone outline in the department colour instead of walls.
+      const edge = shared(new THREE.Color(room.color).getHex(), { roughness: 0.4 });
+      cube(edge, [w, 0.04, 0.12], [rx + w / 2, 0.13, rz + 0.06], this.world, false); cube(edge, [w, 0.04, 0.12], [rx + w / 2, 0.13, rz + d - 0.06], this.world, false);
+      cube(edge, [0.12, 0.04, d], [rx + 0.06, 0.13, rz + d / 2], this.world, false); cube(edge, [0.12, 0.04, d], [rx + w - 0.06, 0.13, rz + d / 2], this.world, false);
+      const sign = label(room.name); sign.position.set(rx + w / 2, 3.4, rz + 0.6); sign.scale.set(Math.min(w * 0.8, 6), 0.75, 1); this.world.add(sign);
+      cube(shared(0x111827), [0.03, 1.2, 0.03], [rx + w / 2, 4.3, rz + 0.6], this.world, false);
       this.signs.push({ sprite: sign, roomId: room.departmentId, name: room.name, color: room.color, paused: room.paused });
+      const rows = Math.max(1, Math.ceil(room.desks.length / 3));
+      for (let row = 0; row < rows; row++) this.bulbs.push(makePendantLamp(this.world, rx + w / 2, (room.desks[row * 3]?.y ?? room.y) * U + 1.6));
+      this.addLampLight(rx + w / 2, rz + d / 2, Math.max(w, d));
+      makePlant(this.world, rx + w - 0.5, rz + d - 0.5, false, index);
       for (const desk of room.desks) this.addDesk(desk.seatId, desk.x, desk.y, desk.leader, model);
-    }
+    });
     if (layout.lobby) {
-      const lobby = layout.lobby; const x0 = lobby.x * U; const z0 = lobby.y * U; const w = lobby.w * U; const d = lobby.h * U;
-      const floor = cube(new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.95 }), [w, 0.12, d], [x0 + w / 2, 0, z0 + d / 2], this.world); floor.castShadow = false; floor.userData.ownMaterial = true;
-      cube(shared(0x475569), [w, 0.5, 0.2], [x0 + w / 2, 0.25, z0 + 0.1], this.world);
-      const sign = label('Lobby'); sign.position.set(x0 + w / 2, 1.3, z0 + 0.5); sign.scale.set(3, 0.6, 1); this.world.add(sign);
-      // Two potted plants make the lobby read as a waiting area.
-      for (const corner of [x0 + 0.6, x0 + w - 0.6]) { cube(shared(0x7c4a2d), [0.5, 0.45, 0.5], [corner, 0.28, z0 + 0.7], this.world); cube(shared(0x16a34a), [0.7, 0.7, 0.7], [corner, 0.85, z0 + 0.7], this.world); }
+      const lobby = layout.lobby; const lx = lobby.x * U; const lz = lobby.y * U; const w = lobby.w * U; const d = lobby.h * U;
+      this.slab('carpet', 0x8b9bb4, lx, lz, w, d, 0.06, 3);
+      const sign = label('Lobby'); sign.position.set(lx + w / 2, 3.2, lz + 0.6); sign.scale.set(3, 0.6, 1); this.world.add(sign);
+      makeSofa(this.world, lx + w / 2, lz + 0.9, 0, 0x64748b);
+      makePlant(this.world, lx + 0.5, lz + 0.5, false, 3); makePlant(this.world, lx + w - 0.5, lz + 0.5, false, 5);
+      this.bulbs.push(makePendantLamp(this.world, lx + w / 2, lz + d / 2));
+      this.addLampLight(lx + w / 2, lz + d / 2, Math.max(w, d));
       for (const spot of lobby.spots) this.addLobbyAgent(spot.agentId, (spot.x + 20) * U, (spot.y + 30) * U, model.lobbyLabels.get(spot.agentId) ?? spot.agentId);
     }
-    this.frameScene(layout);
+    // Pantry and lounge in the strip to the right of the departments.
+    const px = layout.width * U + 0.5;
+    this.slab('tile', 0xf1f5f9, px, z0 + 1, 7, 6, 0.06);
+    makePantry(this.world, px + 0.6, z0 + 1.2);
+    const pantrySign = label('Pantry'); pantrySign.position.set(px + 3.5, 3.2, z0 + 1.6); pantrySign.scale.set(2.6, 0.55, 1); this.world.add(pantrySign);
+    this.bulbs.push(makePendantLamp(this.world, px + 2.2, z0 + 3.8), makePendantLamp(this.world, px + 4.8, z0 + 3.8));
+    this.addLampLight(px + 3.5, z0 + 4, 8);
+    makeSofa(this.world, px + 3.5, z0 + 9.5, Math.PI / 2, 0x0f766e); makeCoffeeTable(this.world, px + 5, z0 + 9.5); makePlant(this.world, px + 3.5, z0 + 11.6, false, 7);
+    this.bulbs.push(makePendantLamp(this.world, px + 4.4, z0 + 9.5)); this.addLampLight(px + 4.4, z0 + 9.5, 6);
+    // Trees at the corners and plants along the windows.
+    makePlant(this.world, x0 + 1.1, z0 + 1.1, true, 1); makePlant(this.world, x1 - 1.1, z0 + 7.5, true, 2); makePlant(this.world, x0 + 1.1, z1 - 1.1, true, 4);
+    for (let x = x0 + 6; x < x1 - 9; x += 9) makePlant(this.world, x, z0 + 0.7, false, x);
+    this.frameScene(x0, z0, x1, z1);
+    this.lightingCheckedAt = -Infinity;
   }
 
-  private frameScene(layout: MapLayout): void {
-    const width = layout.width * U; const depth = layout.height * U; const center = new THREE.Vector3(width / 2, 0, depth / 2);
+  /** Outer shell: floor slab, windowed walls on the two far sides, low parapets on the near sides, pillars. */
+  private buildShell(x0: number, z0: number, x1: number, z1: number): void {
+    const w = x1 - x0; const d = z1 - z0; const H = 3.8;
+    this.slab('concrete', 0xd6d3d1, x0, z0, w, d, 0, 3);
+    const wall = shared(0xe7e5e4, { roughness: 0.9 }); const frame = shared(0x334155, { roughness: 0.4, metalness: 0.5 });
+    this.glass = new THREE.MeshStandardMaterial({ color: 0x9ec9f5, emissive: 0x9ec9f5, emissiveIntensity: 0.35, transparent: true, opacity: 0.55, roughness: 0.05, metalness: 0.1 });
+    const glassMesh = (size: [number, number, number], at: [number, number, number]): void => { const mesh = cube(this.glass!, size, at, this.world, false); mesh.receiveShadow = false; };
+    // Back wall (along x at z0) and left wall (along z at x0): solid base and lintel, glass between mullions.
+    cube(wall, [w, 0.9, 0.3], [x0 + w / 2, 0.45, z0], this.world); cube(wall, [w, 0.6, 0.3], [x0 + w / 2, H - 0.3, z0], this.world);
+    cube(wall, [0.3, 0.9, d], [x0, 0.45, z0 + d / 2], this.world); cube(wall, [0.3, 0.6, d], [x0, H - 0.3, z0 + d / 2], this.world);
+    glassMesh([w, H - 1.5, 0.08], [x0 + w / 2, 0.9 + (H - 1.5) / 2, z0]); glassMesh([0.08, H - 1.5, d], [x0, 0.9 + (H - 1.5) / 2, z0 + d / 2]);
+    for (let x = x0; x <= x1 + 0.01; x += 3) cube(frame, [0.14, H - 1.5, 0.36], [x, 0.9 + (H - 1.5) / 2, z0], this.world);
+    for (let z = z0; z <= z1 + 0.01; z += 3) cube(frame, [0.36, H - 1.5, 0.14], [x0, 0.9 + (H - 1.5) / 2, z], this.world);
+    // Near sides stay low so the camera can look in.
+    cube(wall, [w, 0.45, 0.3], [x0 + w / 2, 0.22, z1], this.world); cube(wall, [0.3, 0.45, d], [x1, 0.22, z0 + d / 2], this.world);
+    for (const [px, pz] of [[x0, z0], [x1, z0], [x0, z1], [x1, z1]] as const) cube(shared(0xd6d3d1), [0.7, px === x0 || pz === z0 ? H : 0.6, 0.7], [px, (px === x0 || pz === z0 ? H : 0.6) / 2, pz], this.world);
+  }
+
+  private addLampLight(x: number, z: number, size: number): void {
+    const light = new THREE.PointLight(0xffd9a0, 0, size * 1.6, 1.4); light.position.set(x, 3.6, z); this.world.add(light); this.lamps.push(light);
+  }
+
+  /** Sun, sky, ambient and interior lamps for the current local hour; re-evaluated once a minute. */
+  private applyLighting(): void {
+    const light = lightingAt(currentHour());
+    const sky = new THREE.Color(light.skyColor);
+    (this.scene.background as THREE.Color).copy(sky).multiplyScalar(0.55 + light.daylight * 0.25);
+    (this.scene.fog as THREE.Fog).color.copy(this.scene.background as THREE.Color);
+    this.hemisphere.intensity = light.ambientIntensity; this.hemisphere.color.copy(sky).lerp(new THREE.Color(0xffffff), 0.6);
+    this.sun.color.setHex(light.sunColor); this.sun.intensity = light.sunIntensity;
+    const distance = this.reach * 1.5 + 30;
+    this.sun.position.set(this.center.x + Math.sin(light.sunAzimuth) * distance * Math.cos(light.sunElevation), Math.sin(light.sunElevation) * distance, this.center.z - Math.cos(light.sunAzimuth) * distance * Math.cos(light.sunElevation) * 0.6);
+    this.sun.target.position.copy(this.center);
+    this.ground.color.setHex(0x3b4048).multiplyScalar(0.45 + light.daylight * 0.55);
+    if (this.glass) { this.glass.color.copy(sky); this.glass.emissive.copy(sky); this.glass.emissiveIntensity = 0.25 + light.daylight * 0.35; }
+    for (const bulb of this.bulbs) bulb.emissiveIntensity = 0.3 + light.lampIntensity * 2.6;
+    for (const lamp of this.lamps) lamp.intensity = light.lampIntensity * 18;
+  }
+
+  private frameScene(x0: number, z0: number, x1: number, z1: number): void {
+    const width = x1 - x0; const depth = z1 - z0; const center = new THREE.Vector3(x0 + width / 2, 0, z0 + depth / 2);
+    this.center.copy(center); this.reach = Math.max(width, depth);
     // Seen diagonally, the floor's on-screen height is about a third of width + depth; keep a margin for walls and signs.
-    this.span = (width + depth) * 0.36 + 4;
-    this.controls.target.copy(center);
-    this.camera.position.set(center.x + 40, 42, center.z + 40); this.camera.zoom = 1; this.camera.lookAt(center);
-    const reach = Math.max(width, depth);
-    this.sun.position.set(center.x - reach * 0.35, 40, center.z - reach * 0.1); this.sun.target.position.copy(center);
-    const shadow = this.sun.shadow.camera; shadow.left = -reach; shadow.right = reach; shadow.top = reach; shadow.bottom = -reach; shadow.near = 1; shadow.far = 140; shadow.updateProjectionMatrix();
+    this.span = (width + depth) * 0.35 + 6;
+    center.y = 1.2; this.controls.target.copy(center);
+    this.camera.position.set(center.x + 40, center.y + 42, center.z + 40); this.camera.zoom = 1; this.camera.lookAt(center);
+    const reach = this.reach;
+    const shadow = this.sun.shadow.camera; shadow.left = -reach; shadow.right = reach; shadow.top = reach; shadow.bottom = -reach; shadow.near = 1; shadow.far = reach * 4 + 80; shadow.updateProjectionMatrix();
     this.resize(); this.controls.update();
   }
 
   private addDesk(seatId: string, px: number, py: number, leader: boolean, model: Office3DModel): void {
-    const root = new THREE.Group(); root.position.set((px + CELL_W / 2) * U, 0.06, (py + 22) * U); this.world.add(root);
+    const root = new THREE.Group(); root.position.set((px + CELL_W / 2) * U, 0.11, (py + 22) * U); this.world.add(root);
     if (leader) { const rug = cube(shared(0x9a3412, { roughness: 1 }), [2.7, 0.02, 3.1], [0, 0.01, 0.35], root); rug.castShadow = false; }
     const wood = shared(0xa16207, { roughness: 0.6 }); const dark = shared(0x713f12); const metal = shared(0x1f2937, { roughness: 0.4, metalness: 0.3 });
     cube(wood, [2.3, 0.12, 0.95], [0, 0.78, -0.35], root);
@@ -225,7 +292,7 @@ export class Office3D {
   }
 
   private addLobbyAgent(agentId: string, x: number, z: number, text: string): void {
-    const root = new THREE.Group(); root.position.set(x, 0.06, z); this.world.add(root);
+    const root = new THREE.Group(); root.position.set(x, 0.11, z); this.world.add(root);
     const person = this.makePerson(agentId, false, true); root.add(person.group);
     const tag = label(text, '#94a3b8'); tag.position.set(0, 0.2, 0.9); tag.scale.set(2.2, 0.36, 1); root.add(tag);
     this.registerActor(agentId, root, person, null, true);
@@ -314,6 +381,7 @@ export class Office3D {
         actor.icon.material.opacity = actor.status === 'blocked' ? 0.55 + Math.abs(Math.sin(phase * 4)) * 0.45 : 1;
       }
     }
+    if (t - this.lightingCheckedAt > 60) { this.lightingCheckedAt = t; this.applyLighting(); }
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   };
