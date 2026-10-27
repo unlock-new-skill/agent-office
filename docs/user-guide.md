@@ -136,9 +136,9 @@ Tab **Tasks** ở panel phải: xem task của phòng, tạo task mới, đổi 
 
 ---
 
-### Tab Map (bản đồ pixel)
+### Tab Map (3D / 2D)
 
-Mỗi phòng ban là một căn phòng, mỗi ghế là một bàn làm việc; lead có thảm vàng + vương miện. Trạng thái nhìn bằng hình: màn hình xanh dương + gõ phím = **working**, bong bóng "…" = **listening**, "!" vàng nhấp nháy = **chờ duyệt quyền**, "Zz" = **idle — needs nudge**, "✕" đỏ = **wake limit**, nhân vật mờ = **offline**, ghế trống = **vacant**, phòng tối + PAUSED = phòng đang pause. **Lobby** chứa session chưa ngồi ghế. Rê chuột xem nhanh, bấm để mở thẻ chi tiết (có Copy join).
+Mặc định là **văn phòng 3D** (kéo để xoay, cuộn để zoom, kéo chuột phải để di chuyển; bấm nút **2D** ở góc phải để về bản pixel — lựa chọn được nhớ trên trình duyệt, máy không hỗ trợ WebGL tự dùng 2D). Mỗi phòng ban là một căn phòng, mỗi ghế là một bàn làm việc; lead có thảm vàng + vương miện. Trạng thái nhìn bằng hình (cả 3D lẫn 2D): màn hình xanh dương + gõ phím = **working**, bong bóng "…" = **listening**, "!" vàng nhấp nháy = **chờ duyệt quyền**, "Zz" = **idle — needs nudge**, "✕" đỏ = **wake limit**, nhân vật mờ = **offline**, ghế trống = **vacant**, phòng tối + PAUSED = phòng đang pause. **Lobby** chứa session chưa ngồi ghế. Rê chuột xem nhanh, bấm để mở thẻ chi tiết (có Copy join).
 
 ---
 

@@ -5,17 +5,25 @@ import { StatusDot } from '../components/status-dot.js';
 import { hitTest, layoutOffice } from '../map/office-map-layout.js';
 import { paintOffice, type PaintInput, type SeatSprite } from '../map/office-map-painter.js';
 import { SEAT_STATUS_LABEL, seatStatus, unassignedAgents, type OfficeState, type SeatStatus } from '../state/office-store.js';
+import { Map3DStage } from './map-3d-stage.js';
 
 type Props = { state: OfficeState; notify: (text: string) => void };
 type Target = { seatId: string } | { agentId: string };
 const LEGEND: SeatStatus[] = ['working', 'listening', 'blocked', 'idle', 'wake_limited', 'offline', 'vacant'];
 const keyOf = (target: Target | null): string | null => target ? ('seatId' in target ? target.seatId : target.agentId) : null;
+/** 3D rooms are laid out on a fixed-width grid (about three rooms per row); the camera does the fitting. */
+const LAYOUT_WIDTH_3D = 620;
+type Mode = '3d' | '2d';
+const MODE_KEY = 'agent-office.map-mode';
+const savedMode = (): Mode => { try { return localStorage.getItem(MODE_KEY) === '2d' ? '2d' : '3d'; } catch { return '3d'; } };
 
-/** Pixel office: one room per department, a desk per seat, agents drawn with their live status. */
+/** Office map, 3D (Three.js, default) or 2D pixel canvas: one room per department, a desk per seat, agents with live status. */
 export function MapView({ state, notify }: Props): ReactNode {
   const host = useRef<HTMLDivElement>(null); const canvas = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0); const [hover, setHover] = useState<{ target: Target; x: number; y: number } | null>(null); const [selected, setSelected] = useState<Target | null>(null);
   const scale = width >= 1200 ? 3 : 2;
+  const [mode, setModeState] = useState<Mode>(savedMode);
+  const setMode = (next: Mode): void => { setModeState(next); setHover(null); try { localStorage.setItem(MODE_KEY, next); } catch { /* preference is optional */ } };
 
   useEffect(() => {
     const element = host.current; if (!element) return;
@@ -26,7 +34,8 @@ export function MapView({ state, notify }: Props): ReactNode {
 
   const seats = useMemo(() => state.org?.seats ?? [], [state.org]);
   const lobbyAgents = useMemo(() => unassignedAgents(state), [state]);
-  const layout = useMemo(() => layoutOffice(state.org?.departments ?? [], seats, lobbyAgents.map(agent => agent.id), Math.max(width / scale, 120)), [state.org, seats, lobbyAgents, width, scale]);
+  const layout = useMemo(() => layoutOffice(state.org?.departments ?? [], seats, lobbyAgents.map(agent => agent.id), mode === '3d' ? LAYOUT_WIDTH_3D : Math.max(width / scale, 120)), [state.org, seats, lobbyAgents, width, scale, mode]);
+  const leaders = useMemo(() => new Set(seats.filter(seat => seat.role === 'leader').map(seat => seat.id)), [seats]);
   const sprites = useMemo(() => new Map<string, SeatSprite>(seats.map(seat => [seat.id, { title: seat.title, status: seatStatus(seat, state.agents) }])), [seats, state.agents]);
   const lobbyLabels = useMemo(() => new Map(lobbyAgents.map(agent => [agent.id, sessionLabel(agent)])), [lobbyAgents]);
 
@@ -34,6 +43,7 @@ export function MapView({ state, notify }: Props): ReactNode {
   const frame = useRef<Omit<PaintInput, 'time'>>({ layout, seats: sprites, lobbyLabels, hovered: null, selected: null });
   frame.current = { layout, seats: sprites, lobbyLabels, hovered: keyOf(hover?.target ?? null), selected: keyOf(selected) };
   useEffect(() => {
+    if (mode !== '2d') return;
     const element = canvas.current; const context = element?.getContext('2d'); if (!element || !context) return;
     let handle = 0;
     const draw = (time: number): void => {
@@ -49,7 +59,7 @@ export function MapView({ state, notify }: Props): ReactNode {
     };
     handle = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(handle);
-  }, [scale]);
+  }, [scale, mode]);
 
   const targetAt = (event: MouseEvent<HTMLCanvasElement>): Target | null => {
     const box = event.currentTarget.getBoundingClientRect();
@@ -85,10 +95,19 @@ export function MapView({ state, notify }: Props): ReactNode {
     <div className="map-view">
       <div className="map-legend" aria-label="Status legend">
         {counts.map(([status, count]) => <span key={status} className="map-legend-item"><StatusDot status={status} />{SEAT_STATUS_LABEL[status]} <strong>{count}</strong></span>)}
+        <span className="spacer" />
+        <span className="map-mode" role="group" aria-label="Map style">
+          <button type="button" className={mode === '3d' ? 'active' : ''} aria-pressed={mode === '3d'} onClick={() => setMode('3d')}>3D</button>
+          <button type="button" className={mode === '2d' ? 'active' : ''} aria-pressed={mode === '2d'} onClick={() => setMode('2d')}>2D</button>
+        </span>
+        {mode === '3d' && <span className="muted map-hint">drag: rotate · wheel: zoom · right-drag: pan</span>}
       </div>
-      <div className="map-stage" ref={host} onMouseLeave={() => setHover(null)}>
-        <canvas ref={canvas} className="map-canvas" role="img" aria-label={`Office map: ${counts.filter(([, count]) => count > 0).map(([status, count]) => `${count} ${SEAT_STATUS_LABEL[status]}`).join(', ')}`}
-          onMouseMove={onMove} onClick={event => setSelected(targetAt(event))} style={{ cursor: hover ? 'pointer' : 'default' }} />
+      <div className={`map-stage ${mode === '3d' ? 'is-3d' : ''}`} ref={host} onMouseLeave={() => setHover(null)}>
+        {mode === '3d'
+          ? <Map3DStage layout={layout} seats={sprites} leaders={leaders} lobbyLabels={lobbyLabels} hovered={keyOf(hover?.target ?? null)} selected={keyOf(selected)}
+              onHover={(target, x, y) => setHover(target ? { target, x, y } : null)} onSelect={setSelected} onUnavailable={() => { setMode('2d'); notify('3D is not available in this browser; showing the 2D map.'); }} />
+          : <canvas ref={canvas} className="map-canvas" role="img" aria-label={`Office map: ${counts.filter(([, count]) => count > 0).map(([status, count]) => `${count} ${SEAT_STATUS_LABEL[status]}`).join(', ')}`}
+          onMouseMove={onMove} onClick={event => setSelected(targetAt(event))} style={{ cursor: hover ? 'pointer' : 'default' }} />}
         {tip && hover && !selected && <div className="map-tooltip" style={{ left: hover.x + 14, top: hover.y + 14 }}><strong>{tip.title}</strong>{tip.lines.slice(0, 3).map(line => <span key={line}>{line}</span>)}</div>}
       </div>
       {detail && (
