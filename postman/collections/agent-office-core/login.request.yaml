@@ -1,0 +1,14 @@
+$kind: http-request
+method: POST
+url: '{{base_url}}/v1/auth/login'
+order: 2000
+headers:
+  - key: Content-Type
+    value: application/json
+  - key: Origin
+    value: '{{base_url}}'
+body:
+  type: json
+  content: |-
+    {"password":"{{manager_password}}"}
+examples: './.resources/login.resources/examples'

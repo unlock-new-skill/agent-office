@@ -1,0 +1,116 @@
+openapi: 3.1.0
+info:
+  title: Agent Office Core API
+  version: 1.0.0
+  description: Local-only Phase 1 daemon contract for Claude Code telemetry. Browser mutations require exact Origin and X-CSRF-Token; agent ingest uses scoped bearer credentials.
+servers:
+  - url: http://127.0.0.1:8080
+  - url: https://my-studio.victorpham.dev
+paths:
+  /healthz:
+    get:
+      responses: {'200': {description: Health and setup status}, '403': {description: Host rejected}}
+  /v1/auth/login:
+    post:
+      parameters: [{in: header, name: Origin, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LoginRequest'}}}}
+      responses: {'200': {description: Session cookie and CSRF token}, '400': {description: Malformed JSON}, '401': {$ref: '#/components/responses/Unauthorized'}, '429': {description: Five attempts per peer or twenty global attempts per minute}}
+  /v1/auth/logout:
+    post:
+      security: [{cookieAuth: []}]
+      parameters: [{in: header, name: X-CSRF-Token, required: true, schema: {type: string}}]
+      responses: {'200': {description: Session revoked}}
+  /v1/me:
+    get:
+      security: [{cookieAuth: []}]
+      responses: {'200': {description: Current manager session}}
+  /v1/agents:
+    get:
+      security: [{cookieAuth: []}]
+      responses: {'200': {description: Agent projections}}
+  /v1/channels:
+    get:
+      security: [{cookieAuth: []}]
+      responses: {'200': {description: Channel projections}}
+  /v1/agents/enrollment:
+    post:
+      security: [{cookieAuth: []}]
+      parameters: [{in: header, name: X-CSRF-Token, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/EnrollmentRequest'}}}}
+      responses: {'201': {description: One-time enrollment credential}}
+  /v1/agents/register:
+    post:
+      security: [{bearerAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RegistrationRequest'}}}}
+      responses: {'201': {description: Session-scoped agent credential}, '401': {$ref: '#/components/responses/Unauthorized'}}
+  /v1/credentials/{credentialId}/revoke:
+    post:
+      security: [{cookieAuth: []}]
+      parameters: [{in: path, name: credentialId, required: true, schema: {type: string}}, {in: header, name: X-CSRF-Token, required: true, schema: {type: string}}]
+      responses: {'200': {description: Credential revoked}}
+  /v1/agents/events:
+    post:
+      security: [{bearerAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Telemetry'}}}}
+      responses: {'201': {description: Server-derived event envelope}, '400': {description: Malformed or invalid telemetry}, '401': {$ref: '#/components/responses/Unauthorized'}, '409': {description: Conflicting event or cursor state}, '413': {description: Event body exceeds 64 KiB}, '429': {description: Per-session or global event admission limit}}
+  /v1/events:
+    get:
+      security: [{cookieAuth: []}]
+      parameters: [{name: generation, in: query, required: true, schema: {type: string}}, {name: after, in: query, required: true, schema: {type: integer, minimum: 0}}]
+      responses: {'200': {description: Replay page with deltas nextAfter hasMore and highWater}, '409': {description: Generation or future cursor reset}}
+  /v1/seats/{id}/handoff:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: '{handoff: SeatHandoff | null}'}, '403': {description: Agent asked for another seat (forbidden_handoff)}, '404': {description: Unknown seat}}
+    put:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [body], additionalProperties: false, properties: {body: {type: string, maxLength: 8000}}}}}}
+      responses: {'200': {description: Saved SeatHandoff}, '403': {description: Agent may only write its own seat}}
+  /v1/permissions:
+    get:
+      security: [{cookieAuth: []}]
+      responses: {'200': {description: '{enabled: boolean, pending: PermissionRequest[]}'}}
+    post:
+      security: [{bearerAuth: []}]
+      description: Filed by the PermissionRequest hook. String inputs only, each truncated to 2000 chars.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [tool], additionalProperties: false, properties: {tool: {type: string, maxLength: 128}, input: {type: object}}}}}}
+      responses: {'201': {description: Pending PermissionRequest}, '403': {description: remote_approval_disabled}, '409': {description: too_many_pending_permissions (8 per agent)}}
+  /v1/permissions/{id}/decision:
+    get:
+      security: [{bearerAuth: []}]
+      description: Long-poll by the agent that filed the request. Still pending when the wait ends → status expired.
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}, {in: query, name: wait, schema: {type: integer, minimum: 0, maximum: 600}}]
+      responses: {'200': {description: PermissionRequest with status allowed | denied | expired}, '403': {description: Not the filing agent}}
+    post:
+      security: [{cookieAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}, {in: header, name: X-CSRF-Token, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [behavior], additionalProperties: false, properties: {behavior: {enum: [allow, deny]}, message: {type: string, maxLength: 500}}}}}}
+      responses: {'200': {description: Decided PermissionRequest}, '409': {description: permission_already_resolved}}
+components:
+  securitySchemes:
+    cookieAuth: {type: apiKey, in: cookie, name: agent_office_session}
+    bearerAuth: {type: http, scheme: bearer}
+  responses:
+    Unauthorized: {description: Authentication failed}
+  schemas:
+    LoginRequest: {type: object, required: [password], additionalProperties: false, properties: {password: {type: string, minLength: 1, maxLength: 256, description: 'Login accepts any non-empty attempt; first-run setup/reset enforces 12+ characters.'}}}
+    EnrollmentRequest:
+      type: object
+      required: [agentId, project, sessionId, incarnation]
+      additionalProperties: false
+      properties: {agentId: {type: string, minLength: 1, maxLength: 128}, project: {type: string, minLength: 1, maxLength: 512}, sessionId: {type: string, minLength: 1, maxLength: 128}, incarnation: {type: string, minLength: 1, maxLength: 128}}
+    RegistrationRequest: {type: object, required: [nonce], additionalProperties: false, properties: {nonce: {type: string, minLength: 1, maxLength: 128}}}
+    Telemetry:
+      type: object
+      required: [id, ts, kind]
+      description: 'Runtime requires turnId for non-session events and invocationId for tool events. Other known fields remain optional because source hooks may omit correlation.'
+      properties:
+        id: {type: string, minLength: 1, maxLength: 128}
+        ts: {type: string, format: date-time}
+        kind: {type: string, enum: [session.start, session.end, turn.start, turn.stop, tool.start, tool.done, tool.fail, permission.request]}
+        turnId: {type: string, minLength: 1, maxLength: 128}
+        invocationId: {type: string, minLength: 1, maxLength: 128}
+        tool: {type: string, maxLength: 128}
+        summary: {type: string, maxLength: 200}

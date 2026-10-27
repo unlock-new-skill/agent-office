@@ -1,0 +1,12 @@
+$kind: http-example
+name: 201 Created
+request:
+  url: '{{base_url}}/v1/agents/enrollment'
+  method: POST
+response:
+  statusCode: 201
+  statusText: Created
+  headers: []
+  body:
+    type: json
+    content: '{"id":"<enrollment-id>","token":"<one-time-enrollment-token>","nonce":"<registration-nonce>"}'

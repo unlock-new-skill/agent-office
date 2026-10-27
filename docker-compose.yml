@@ -1,0 +1,32 @@
+services:
+  agent-office:
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "8080:8080"
+    environment:
+      AGENT_OFFICE_PASSWORD: ${AGENT_OFFICE_PASSWORD:?set AGENT_OFFICE_PASSWORD for local container}
+      AGENT_OFFICE_HOST: 0.0.0.0
+      AGENT_OFFICE_CONTAINER_MODE: "true"
+      AGENT_OFFICE_PORT: 8080
+      AGENT_OFFICE_DATA_DIR: /app/data
+    volumes:
+      - agent-office-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://0.0.0.0:8080/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  test:
+    build:
+      context: .
+      target: build
+    command: ["npm", "test"]
+    environment:
+      NODE_ENV: test
+    profiles: [test]
+
+volumes:
+  agent-office-data:

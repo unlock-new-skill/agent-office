@@ -1,0 +1,7 @@
+$kind: http-request
+method: GET
+url: '{{base_url}}/v1/wake?wait=5'
+order: 12100
+headers:
+  - key: Authorization
+    value: 'Bearer {{agent_token}}'

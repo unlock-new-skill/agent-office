@@ -1,0 +1,14 @@
+# Reverse proxy for Agent Office. Caddy forwards the original Host and appends the client IP to X-Forwarded-For,
+# which the daemon trusts (AGENT_OFFICE_TRUST_PROXY=true) for login throttling. Long-polls and WebSockets need no
+# extra settings: Caddy has no response timeout by default.
+{$DOMAIN} {
+	encode gzip
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy agent-office:8080
+	log {
+		output stdout
+		format console
+	}
+}

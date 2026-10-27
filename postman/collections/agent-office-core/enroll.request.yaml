@@ -1,0 +1,16 @@
+$kind: http-request
+method: POST
+url: '{{base_url}}/v1/agents/enrollment'
+order: 5000
+headers:
+  - key: Content-Type
+    value: application/json
+  - key: X-CSRF-Token
+    value: '{{csrf_token}}'
+  - key: Origin
+    value: '{{base_url}}'
+body:
+  type: json
+  content: |-
+    {"agentId":"agent-1","project":"probe","sessionId":"session-1","incarnation":"inc-1"}
+examples: './.resources/enroll.resources/examples'

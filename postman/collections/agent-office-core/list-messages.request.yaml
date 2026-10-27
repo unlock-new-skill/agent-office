@@ -1,0 +1,4 @@
+$kind: http-request
+method: GET
+url: '{{base_url}}/v1/channels/dev/messages?limit=50'
+order: 11900

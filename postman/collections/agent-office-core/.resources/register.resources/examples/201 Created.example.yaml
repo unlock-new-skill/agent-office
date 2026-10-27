@@ -1,0 +1,12 @@
+$kind: http-example
+name: 201 Created
+request:
+  url: '{{base_url}}/v1/agents/register'
+  method: POST
+response:
+  statusCode: 201
+  statusText: Created
+  headers: []
+  body:
+    type: json
+    content: '{"id":"<credential-id>","token":"<agent-token>"}'

@@ -1,0 +1,15 @@
+$kind: http-request
+method: PATCH
+url: '{{base_url}}/v1/departments/dev'
+order: 11300
+headers:
+  - key: Content-Type
+    value: 'application/json'
+  - key: Origin
+    value: '{{base_url}}'
+  - key: X-CSRF-Token
+    value: '{{csrf_token}}'
+body:
+  type: json
+  content: |-
+    {"paused":true}

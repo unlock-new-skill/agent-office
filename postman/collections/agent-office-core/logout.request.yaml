@@ -1,0 +1,10 @@
+$kind: http-request
+method: POST
+url: '{{base_url}}/v1/auth/logout'
+order: 4000
+headers:
+  - key: X-CSRF-Token
+    value: '{{csrf_token}}'
+  - key: Origin
+    value: '{{base_url}}'
+examples: './.resources/logout.resources/examples'

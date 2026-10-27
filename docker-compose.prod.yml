@@ -1,0 +1,57 @@
+# Public deployment. The daemon is published on loopback only; a reverse proxy on the host terminates HTTPS:
+#   - existing nginx: deploy/nginx-site.conf + certbot (default), or
+#   - no proxy on the host: --profile caddy runs Caddy on 80/443 with automatic Let's Encrypt.
+# First start: cp deploy/.env.prod.example .env && edit, then deploy/setup-manager.sh (asks for the manager password).
+services:
+  agent-office:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${AGENT_OFFICE_BIND_PORT:-8090}:8080"
+    environment:
+      # Optional: only read when the database does not exist yet. Prefer deploy/setup-manager.sh (prompt, not stored).
+      AGENT_OFFICE_PASSWORD: ${AGENT_OFFICE_PASSWORD:-}
+      AGENT_OFFICE_HOST: 0.0.0.0
+      AGENT_OFFICE_CONTAINER_MODE: "true"
+      AGENT_OFFICE_PORT: 8080
+      AGENT_OFFICE_DATA_DIR: /app/data
+      AGENT_OFFICE_PUBLIC_ORIGIN: https://${AGENT_OFFICE_DOMAIN:?set AGENT_OFFICE_DOMAIN}
+      AGENT_OFFICE_TRUST_PROXY: "true"
+      AGENT_OFFICE_MIN_PASSWORD_LENGTH: 16
+      AGENT_OFFICE_REMOTE_APPROVAL: ${AGENT_OFFICE_REMOTE_APPROVAL:-true}
+      # Upper bound for the wait agents may request; agents choose their own (default 290s).
+      AGENT_OFFICE_WAKE_WAIT_SECONDS: 580
+      AGENT_OFFICE_MAX_AUTO_WAKES: ${AGENT_OFFICE_MAX_AUTO_WAKES:-15}
+    volumes:
+      - agent-office-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://0.0.0.0:8080/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    mem_limit: 512m
+
+  caddy:
+    image: caddy:2.8.4-alpine
+    profiles: [caddy]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${AGENT_OFFICE_DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      agent-office:
+        condition: service_healthy
+    mem_limit: 128m
+
+volumes:
+  agent-office-data:
+  caddy-data:
+  caddy-config:

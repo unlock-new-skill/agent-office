@@ -1,0 +1,79 @@
+# Agent Office organization seed. Copy to office.yaml and edit; loaded once when the database has no departments.
+# Seat ids are used for @mentions (e.g. "@dev-be"). Each department has at most one leader;
+# all leaders are automatically members of the #leaders channel.
+departments:
+  - id: devops
+    name: DevOps
+    color: "#0ea5e9"
+    seats:
+      - id: ops-lead
+        title: Ops Lead
+        role: leader
+        description: Owns all operations work end to end — CI/CD, infrastructure, deployments, monitoring and incident response.
+
+  - id: dev
+    name: Dev
+    color: "#22c55e"
+    seats:
+      - id: dev-lead
+        title: Dev Lead
+        role: leader
+        description: Coordinates the Dev team. Breaks requests into tasks, assigns them, reviews results and reports to other leaders. Does not code directly.
+      - id: dev-fe
+        title: Dev FE
+        role: member
+        description: Frontend developer — web UI, client-side state, styling and browser integration.
+      - id: dev-be
+        title: Dev BE
+        role: member
+        description: Backend developer — APIs, services, databases and server-side integrations.
+      - id: dev-unity
+        title: Dev Unity
+        role: member
+        description: Unity game developer — gameplay systems, scenes, prefabs and engine integration.
+      - id: dev-mobile
+        title: Dev Mobile
+        role: member
+        description: Mobile developer — iOS/Android apps, mobile builds and store packaging.
+      - id: dev-docs
+        title: Dev Docs
+        role: member
+        description: Writes and maintains technical documentation for every repo so bugs can be traced later — architecture notes, flows, changelogs.
+
+  - id: ba
+    name: BA
+    color: "#f59e0b"
+    seats:
+      - id: ba-lead
+        title: BA Lead
+        role: leader
+        description: Lead and main business analyst — gathers requirements, writes specs and acceptance criteria, coordinates with other leaders.
+      - id: ba-docs
+        title: BA Docs
+        role: member
+        description: Keeps business documentation up to date — requirement docs, user flows and decision records.
+
+  - id: design
+    name: Design
+    color: "#ec4899"
+    seats:
+      - id: design-lead
+        title: Design Lead
+        role: leader
+        description: Leads art direction and design consistency; assigns design work and reviews assets.
+      - id: design-atom
+        title: Atom Asset Designer
+        role: member
+        description: Designs atomic UI/game assets — icons, buttons, tiles and reusable visual building blocks.
+      - id: design-map
+        title: Map Designer
+        role: member
+        description: Designs game maps and levels — layouts, environments and tilemaps.
+      - id: design-character
+        title: Character & Monster Designer
+        role: member
+        description: Designs characters and monsters — concepts, sprites and animation sheets.
+      - id: design-item
+        title: Item Art Designer
+        role: member
+        description: Creates item artwork — weapons, consumables, equipment and inventory images.

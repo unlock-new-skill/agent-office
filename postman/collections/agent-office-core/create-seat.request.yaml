@@ -1,0 +1,15 @@
+$kind: http-request
+method: POST
+url: '{{base_url}}/v1/departments/qa/seats'
+order: 11200
+headers:
+  - key: Content-Type
+    value: 'application/json'
+  - key: Origin
+    value: '{{base_url}}'
+  - key: X-CSRF-Token
+    value: '{{csrf_token}}'
+body:
+  type: json
+  content: |-
+    {"title":"QA Lead","role":"leader","description":"Owns test plans and regression runs."}

@@ -1,0 +1,5 @@
+$kind: http-request
+method: GET
+url: '{{base_url}}/v1/me'
+order: 3000
+examples: './.resources/me.resources/examples'

@@ -1,0 +1,10 @@
+$kind: http-request
+method: GET
+url: '{{base_url}}/v1/events?generation={{generation}}&after=0'
+order: 8000
+queryParams:
+  - key: generation
+    value: '{{generation}}'
+  - key: after
+    value: '0'
+examples: './.resources/replay.resources/examples'

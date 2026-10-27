@@ -1,0 +1,7 @@
+$kind: http-request
+method: GET
+url: '{{base_url}}/v1/me'
+order: 11700
+headers:
+  - key: Authorization
+    value: 'Bearer {{agent_token}}'

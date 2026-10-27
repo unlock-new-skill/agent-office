@@ -1,0 +1,76 @@
+asyncapi: 3.0.0
+info:
+  title: Agent Office Core Stream
+  version: 1.0.0
+  description: Authenticated loopback WebSocket stream. Browser clients must send exact Host and Origin plus the manager session cookie.
+servers:
+  local:
+    host: 127.0.0.1:8080
+    protocol: ws
+channels:
+  agentStream:
+    address: /v1/stream
+    messages:
+      snapshot: {$ref: '#/components/messages/Snapshot'}
+      delta: {$ref: '#/components/messages/Delta'}
+      reset: {$ref: '#/components/messages/Reset'}
+operations:
+  receiveStream:
+    action: receive
+    channel: {$ref: '#/channels/agentStream'}
+    security: [{cookieAuth: []}]
+    summary: Receive snapshot, bounded catch-up, live deltas and explicit reset frames.
+components:
+  securitySchemes:
+    cookieAuth: {type: http, scheme: cookie, name: agent_office_session}
+  messages:
+    Snapshot:
+      payload:
+        type: object
+        required: [type, generation, seq, agents, channels]
+        properties:
+          type: {const: snapshot}
+          generation: {type: string}
+          seq: {type: integer, minimum: 0}
+          agents: {type: array}
+          channels: {type: array}
+    Delta:
+      payload:
+        type: object
+        required: [type, generation, seq, event]
+        properties:
+          type: {const: delta}
+          generation: {type: string}
+          seq: {type: integer, minimum: 1}
+          event: {$ref: '#/components/schemas/EventEnvelope'}
+    Reset:
+      payload:
+        type: object
+        required: [type, reason, snapshot]
+        properties:
+          type: {const: reset}
+          reason: {type: string, enum: [cursor_invalid, cursor_future, cursor_generation_mismatch, stream_repair_failed]}
+          snapshot: {type: object}
+  schemas:
+    EventEnvelope:
+      type: object
+      required: [v, id, producerId, producerIncarnation, seq, datasetGeneration, ts, source, agentId, sessionId, incarnation, sessionIncarnation, project, kind]
+      properties:
+        v: {const: 1}
+        id: {type: string, maxLength: 128}
+        producerId: {type: string, maxLength: 128}
+        producerIncarnation: {type: string, maxLength: 128}
+        seq: {type: integer, minimum: 1}
+        datasetGeneration: {type: string, maxLength: 128}
+        ts: {type: string, format: date-time}
+        source: {const: claude}
+        agentId: {type: string, maxLength: 128}
+        sessionId: {type: string, maxLength: 128}
+        incarnation: {type: string, maxLength: 128}
+        sessionIncarnation: {type: string, maxLength: 128}
+        project: {type: string, maxLength: 512}
+        kind: {type: string}
+        turnId: {type: string, maxLength: 128}
+        invocationId: {type: string, maxLength: 128}
+        tool: {type: string, maxLength: 128}
+        summary: {type: string, maxLength: 200}

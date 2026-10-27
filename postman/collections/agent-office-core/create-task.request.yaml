@@ -1,0 +1,13 @@
+$kind: http-request
+method: POST
+url: '{{base_url}}/v1/tasks'
+order: 12200
+headers:
+  - key: Content-Type
+    value: 'application/json'
+  - key: Authorization
+    value: 'Bearer {{agent_token}}'
+body:
+  type: json
+  content: |-
+    {"title":"Login API","body":"JWT + refresh","assigneeSeatId":"dev-be"}

@@ -1,0 +1,14 @@
+$kind: http-request
+method: POST
+url: '{{base_url}}/v1/agents/events'
+order: 7000
+headers:
+  - key: Content-Type
+    value: application/json
+  - key: Authorization
+    value: 'Bearer {{agent_token}}'
+body:
+  type: json
+  content: |-
+    {"id":"event-1","ts":"2026-10-24T12:30:00.000Z","kind":"session.start"}
+examples: './.resources/ingest-event.resources/examples'

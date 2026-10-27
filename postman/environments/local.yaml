@@ -1,0 +1,50 @@
+name: Agent Office Local
+values:
+  - key: manager_password
+    value: ''
+    enabled: false
+    type: default
+  - key: base_url
+    value: 'http://127.0.0.1:8080'
+    enabled: true
+    type: default
+  - key: generation
+    value: ''
+    enabled: true
+    type: default
+  - key: csrf_token
+    value: ''
+    enabled: true
+    type: default
+  - key: agent_token
+    value: ''
+    enabled: true
+    type: default
+  - key: enrollment_token
+    value: ''
+    enabled: true
+    type: default
+  - key: enrollment_nonce
+    value: ''
+    enabled: true
+    type: default
+  - key: credential_id
+    value: ''
+    enabled: true
+    type: default
+  - key: connector_token
+    value: ''
+    enabled: true
+    type: default
+  - key: seat_id
+    value: ''
+    enabled: true
+    type: default
+  - key: agent_id
+    value: ''
+    enabled: true
+    type: default
+  - key: task_id
+    value: ''
+    enabled: true
+    type: default

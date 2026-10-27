@@ -1,0 +1,56 @@
+{
+  "name": "agent-office-control-room",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.11.1 <25"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server/index.ts",
+    "dev:client": "vite",
+    "build": "tsc -p tsconfig.json && vite build && tsx scripts/build-connector.ts",
+    "build:server": "tsc -p tsconfig.json",
+    "build:client": "vite build",
+    "start": "node dist/src/server/index.js",
+    "setup": "tsx scripts/setup-local.ts",
+    "reset": "tsx scripts/reset-local.ts",
+    "reset:built": "node dist/scripts/reset-local.js",
+    "wipe": "tsx scripts/wipe-local.ts",
+    "backup": "tsx scripts/backup-local.ts",
+    "restore": "tsx scripts/restore-local.ts",
+    "hook": "node dist/scripts/claude-hook.js",
+    "drain": "tsx scripts/drain-spool.ts",
+    "install-hooks": "node dist/scripts/install-claude-hooks.js",
+    "connect": "tsx scripts/connect-local.ts",
+    "mcp": "node dist/src/server/mcp-stdio.js",
+    "lint": "eslint src tests scripts",
+    "test": "node --import tsx --test tests/unit/*.test.ts tests/integration/*.test.ts",
+    "format": "prettier --write .",
+    "build:connector": "tsx scripts/build-connector.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.5",
+    "@modelcontextprotocol/server": "2.4.0",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.0",
+    "hono": "4.13.13",
+    "js-yaml": "4.3.2",
+    "phaser": "3.90.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "vite": "8.0.0",
+    "ws": "8.18.3",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "4.0.9",
+    "@types/node": "24.10.1",
+    "@types/ws": "8.18.1",
+    "eslint": "9.39.1",
+    "prettier": "3.6.2",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.46.2"
+  }
+}

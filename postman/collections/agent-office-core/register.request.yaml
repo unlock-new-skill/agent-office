@@ -1,0 +1,14 @@
+$kind: http-request
+method: POST
+url: '{{base_url}}/v1/agents/register'
+order: 6000
+headers:
+  - key: Content-Type
+    value: application/json
+  - key: Authorization
+    value: 'Bearer {{enrollment_token}}'
+body:
+  type: json
+  content: |-
+    {"nonce":"{{enrollment_nonce}}"}
+examples: './.resources/register.resources/examples'

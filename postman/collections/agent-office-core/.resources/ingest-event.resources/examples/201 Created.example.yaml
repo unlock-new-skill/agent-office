@@ -1,0 +1,12 @@
+$kind: http-example
+name: 201 Created
+request:
+  url: '{{base_url}}/v1/agents/events'
+  method: POST
+response:
+  statusCode: 201
+  statusText: Created
+  headers: []
+  body:
+    type: json
+    content: '{"id":"event-1","kind":"session.start","source":"claude","seq":1}'

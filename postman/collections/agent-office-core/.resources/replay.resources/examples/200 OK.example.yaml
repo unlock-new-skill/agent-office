@@ -1,0 +1,12 @@
+$kind: http-example
+name: 200 OK
+request:
+  url: '{{base_url}}/v1/events?generation={{generation}}&after=0'
+  method: GET
+response:
+  statusCode: 200
+  statusText: OK
+  headers: []
+  body:
+    type: json
+    content: '{"deltas":[]}'

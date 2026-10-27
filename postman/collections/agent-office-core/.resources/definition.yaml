@@ -1,0 +1,12 @@
+$kind: collection
+name: Agent Office Core API
+description: Phase 1 local daemon contract. Manager login uses cookie plus CSRF token; agent event ingest uses scoped bearer token.
+variables:
+  - key: base_url
+    value: 'http://127.0.0.1:8080'
+  - key: generation
+    value: ''
+  - key: csrf_token
+    value: ''
+  - key: agent_token
+    value: ''

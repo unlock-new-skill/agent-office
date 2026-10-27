@@ -1,0 +1,15 @@
+$kind: http-request
+method: POST
+url: '{{base_url}}/v1/channels/dev/messages'
+order: 11800
+headers:
+  - key: Content-Type
+    value: 'application/json'
+  - key: Origin
+    value: '{{base_url}}'
+  - key: X-CSRF-Token
+    value: '{{csrf_token}}'
+body:
+  type: json
+  content: |-
+    {"body":"@dev-be please pick up the login API"}
