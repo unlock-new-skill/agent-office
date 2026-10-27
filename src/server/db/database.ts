@@ -12,7 +12,9 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
+
+const THREAD_INDEX = 'CREATE INDEX messages_thread ON messages(channel_id, thread_seq);';
 
 /** v4 additions: seat handoff notes and remotely answerable permission prompts. */
 const V4_TABLES = `CREATE TABLE seat_handoffs(
@@ -78,7 +80,7 @@ export class Database {
   private migrate(): void {
     const version = this.raw.prepare('PRAGMA user_version').get() as { user_version: number };
     if (version.user_version === SCHEMA_VERSION) return;
-    // Additive upgrades run in place: v3 message edit/delete markers, v4 handoff notes + permission requests, v5 install codes, v6 deputies + task requesters.
+    // Additive upgrades run in place: v3 message edit/delete markers, v4 handoff notes + permission requests, v5 install codes, v6 deputies + task requesters, v7 message threads.
     const from = version.user_version;
     if (from >= 2 && from < SCHEMA_VERSION) {
       this.transaction(() => {
@@ -87,6 +89,8 @@ export class Database {
         if (from < 5) this.raw.exec(V5_TABLES);
         // v6: department deputy (backup for the leader) and the leader a cross-department task was requested by.
         if (from < 6) this.raw.exec('ALTER TABLE departments ADD COLUMN deputy_seat_id TEXT REFERENCES seats(id) ON DELETE SET NULL; ALTER TABLE tasks ADD COLUMN requester_seat_id TEXT REFERENCES seats(id) ON DELETE SET NULL;');
+        // v7: thread replies point at the seq of their root message in the same channel.
+        if (from < 7) this.raw.exec(`ALTER TABLE messages ADD COLUMN thread_seq INTEGER; ${THREAD_INDEX}`);
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
       return;
@@ -155,9 +159,10 @@ export class Database {
         id TEXT PRIMARY KEY, channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, seq INTEGER NOT NULL,
         sender_kind TEXT NOT NULL CHECK(sender_kind IN ('seat','manager','system')), sender_id TEXT NOT NULL,
         body TEXT NOT NULL CHECK(length(body) <= 16384), mentions_json TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL,
-        edited_at INTEGER, deleted_at INTEGER,
+        edited_at INTEGER, deleted_at INTEGER, thread_seq INTEGER,
         UNIQUE(channel_id, seq)
       ) STRICT;
+      ${THREAD_INDEX}
       CREATE TABLE seat_reads(
         seat_id TEXT NOT NULL REFERENCES seats(id) ON DELETE CASCADE, channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
         last_read_seq INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(seat_id, channel_id)

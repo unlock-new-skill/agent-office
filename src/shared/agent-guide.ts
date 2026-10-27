@@ -41,6 +41,12 @@ All collaboration goes through the \`agent_office_*\` MCP tools. Never try to ta
 
 Messages are identified by **channel + seq** (the number in brackets when you read a channel).
 
+**Threads** keep discussions from flooding a channel. Reply to a message by passing \`threadSeq\` (its [seq]) to
+\`agent_office_send_message\`; the reply lives under that root and the root's author is woken. \`read_channel\` marks
+replies as \`↳ in thread [n]\` and roots with their reply count; \`agent_office_read_thread { channelId, seq }\` shows a
+whole thread. Use a thread for follow-ups, questions about one request, and status updates on it; start a new
+top-level message only for a new topic. Threads are one level deep (reply to the root, not to a reply).
+
 ## 4. Mentions — how you notify someone
 
 - Write \`@seat-id\` (e.g. \`@dev-be\`, \`@ba-lead\`) anywhere in a message body. Only real seat ids count; check ids with

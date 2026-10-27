@@ -10,6 +10,8 @@ export type OfficeState = {
   connected: boolean;
   /** Permission prompts waiting for the manager (remote approval). */
   permissions: PermissionRequest[];
+  /** Open threads by `${channelId}:${rootSeq}`; channel `messages` hold top-level messages only. */
+  threads: Record<string, { root: ChatMessage; replies: ChatMessage[] }>;
 };
 
 export type OfficeAction =
@@ -20,11 +22,13 @@ export type OfficeAction =
   | { type: 'history'; channelId: string; messages: ChatMessage[]; mode: 'replace' | 'prepend' }
   | { type: 'tasks'; tasks: Task[] }
   | { type: 'permissions'; pending: PermissionRequest[] }
+  | { type: 'thread'; channelId: string; root: ChatMessage; replies: ChatMessage[] }
   | { type: 'read'; channelId: string; seq: number }
   | { type: 'connection'; connected: boolean }
   | { type: 'reset' };
 
-export const initialOfficeState: OfficeState = { org: null, agents: [], messages: {}, tasks: {}, readSeq: {}, connected: false, permissions: [] };
+export const initialOfficeState: OfficeState = { org: null, agents: [], messages: {}, tasks: {}, readSeq: {}, connected: false, permissions: [], threads: {} };
+export const threadKey = (channelId: string, seq: number): string => `${channelId}:${seq}`;
 
 const mergeMessages = (current: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] => {
   const byId = new Map(current.map(message => [message.id, message]));
@@ -40,6 +44,7 @@ export const officeReducer = (state: OfficeState, action: OfficeAction): OfficeS
     case 'tasks': return { ...state, tasks: Object.fromEntries(action.tasks.map(task => [task.id, task])) };
     case 'read': return { ...state, readSeq: { ...state.readSeq, [action.channelId]: Math.max(state.readSeq[action.channelId] ?? 0, action.seq) } };
     case 'permissions': return { ...state, permissions: action.pending };
+    case 'thread': return { ...state, threads: { ...state.threads, [threadKey(action.channelId, action.root.seq)]: { root: action.root, replies: mergeMessages([], action.replies) } } };
     case 'connection': return { ...state, connected: action.connected };
     case 'reset': return { ...state, messages: {} };
     case 'history': {
@@ -53,8 +58,17 @@ export const officeReducer = (state: OfficeState, action: OfficeAction): OfficeS
       if (event.kind === 'permission') return { ...state, permissions: event.pending };
       const { message } = event;
       const org = state.org && { ...state.org, channels: state.org.channels.map(channel => channel.id === message.channelId ? { ...channel, lastSeq: Math.max(channel.lastSeq, message.seq) } : channel) };
-      const loaded = state.messages[message.channelId];
-      return { ...state, org, messages: loaded ? { ...state.messages, [message.channelId]: mergeMessages(loaded, [message]) } : state.messages };
+      if (message.threadSeq) {
+        // Replies live only in their thread; the root's new reply count arrives as its own update.
+        const key = threadKey(message.channelId, message.threadSeq); const thread = state.threads[key];
+        return { ...state, org, threads: thread ? { ...state.threads, [key]: { ...thread, replies: mergeMessages(thread.replies, [message]) } } : state.threads };
+      }
+      const loaded = state.messages[message.channelId]; const key = threadKey(message.channelId, message.seq); const thread = state.threads[key];
+      return {
+        ...state, org,
+        messages: loaded ? { ...state.messages, [message.channelId]: mergeMessages(loaded, [message]) } : state.messages,
+        threads: thread ? { ...state.threads, [key]: { ...thread, root: message } } : state.threads,
+      };
     }
   }
 };

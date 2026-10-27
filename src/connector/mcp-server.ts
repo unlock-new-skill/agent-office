@@ -34,6 +34,13 @@ const call = async (target: string, init: { method?: string; body?: unknown; tim
     throw new Error(`Agent Office request failed: ${message}${hint ? `\nHint: ${hint}` : ''}`);
   }
 };
+type ThreadedMessage = { seq: number; senderKind: string; senderId: string; body: string; createdAt: number; editedAt?: number | null; deletedAt?: number | null; threadSeq?: number | null; replyCount?: number };
+/** One line per message; thread replies are marked "↳ in thread [root]" and roots show their reply count. */
+const formatMessage = (channelId: string, message: ThreadedMessage): string => {
+  const where = message.threadSeq ? `#${channelId} [${message.seq}] ↳ in thread [${message.threadSeq}]` : `#${channelId} [${message.seq}]`;
+  const replies = message.replyCount ? ` (${message.replyCount} repl${message.replyCount === 1 ? 'y' : 'ies'} — agent_office_read_thread seq=${message.seq})` : '';
+  return `${where} ${message.senderKind === 'seat' ? `@${message.senderId}` : message.senderKind}: ${message.deletedAt ? '[deleted]' : `${message.body}${message.editedAt ? ' (edited)' : ''}`}${replies}`;
+};
 const text = (value: unknown): { content: Array<{ type: 'text'; text: string }> } => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] });
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const write = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -79,17 +86,25 @@ server.registerTool('agent_office_read_channel', {
   const channel = channels.find(candidate => candidate.id === channelId);
   if (!channel) throw new Error(`You are not a member of #${channelId}. Your channels: ${channels.map(candidate => `#${candidate.id}`).join(', ')}`);
   const query = after !== undefined ? `after=${after}&limit=${limit}` : channel.unread > 0 ? `after=${channel.lastReadSeq}&limit=${limit}` : 'limit=20';
-  const { messages } = await call(`/v1/channels/${encodeURIComponent(channelId)}/messages?${query}`) as { messages: Array<{ seq: number; senderKind: string; senderId: string; body: string; createdAt: number; editedAt?: number | null; deletedAt?: number | null }> };
+  const { messages } = await call(`/v1/channels/${encodeURIComponent(channelId)}/messages?${query}`) as { messages: ThreadedMessage[] };
   const last = messages.at(-1);
   if (last) await call(`/v1/channels/${encodeURIComponent(channelId)}/read`, { body: { seq: last.seq } });
   if (messages.length === 0) return text(`#${channelId}: no messages.`);
-  return text(messages.map(message => `#${channelId} [${message.seq}] ${message.senderKind === 'seat' ? `@${message.senderId}` : message.senderKind}: ${message.deletedAt ? '[deleted]' : `${message.body}${message.editedAt ? ' (edited)' : ''}`}`).join('\n'));
+  return text(messages.map(message => formatMessage(channelId, message)).join('\n'));
 });
 
 server.registerTool('agent_office_send_message', {
-  title: 'Send message', description: 'Post a message to a channel you belong to. Mention seats with @seat-id to notify them (mentions wake that seat).',
-  inputSchema: z.object({ channelId: id, body: z.string().min(1).max(16_384) }).strict(), annotations: write,
-}, async ({ channelId, body }) => text(await call(`/v1/channels/${encodeURIComponent(channelId)}/messages`, { body: { body } })));
+  title: 'Send message', description: 'Post a message to a channel you belong to. Mention seats with @seat-id to notify them (mentions wake that seat). To answer a specific message or continue a discussion, pass threadSeq = the [seq] of the thread root: the reply goes into that thread (the root author is woken) instead of the main channel.',
+  inputSchema: z.object({ channelId: id, body: z.string().min(1).max(16_384), threadSeq: z.number().int().min(1).optional() }).strict(), annotations: write,
+}, async ({ channelId, body, threadSeq }) => text(await call(`/v1/channels/${encodeURIComponent(channelId)}/messages`, { body: { body, ...(threadSeq ? { threadSeq } : {}) } })));
+
+server.registerTool('agent_office_read_thread', {
+  title: 'Read thread', description: 'Read a whole thread: the root message [seq] and all its replies, oldest first.',
+  inputSchema: z.object({ channelId: id, seq: z.number().int().min(1) }).strict(), annotations: readOnly,
+}, async ({ channelId, seq }) => {
+  const { root, replies } = await call(`/v1/channels/${encodeURIComponent(channelId)}/threads/${seq}`) as { root: ThreadedMessage; replies: ThreadedMessage[] };
+  return text([formatMessage(channelId, root), ...replies.map(reply => formatMessage(channelId, reply))].join('\n') + `\n(${replies.length} repl${replies.length === 1 ? 'y' : 'ies'}; answer with agent_office_send_message threadSeq=${seq})`);
+});
 
 server.registerTool('agent_office_edit_message', {
   title: 'Edit message', description: 'Edit one of your own messages, identified by channel and seq (shown as [seq] by read_channel). Mentions are re-parsed; seats that already received it are not woken again.',

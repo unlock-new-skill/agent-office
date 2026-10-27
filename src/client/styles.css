@@ -247,3 +247,19 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .map-3d canvas { display: block; touch-action: none; }
 .map-3d-loading { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; }
 @media (max-width: 560px) { .map-hint { display: none; } }
+
+/* Threads: reply link under a root, and a side panel that takes the details column (overlay on narrow screens). */
+.message.system { position: relative; }
+.message.in-thread { background: var(--accent-soft); }
+.thread-link { display: inline-flex; gap: 4px; margin-top: 4px; background: none; border: 1px solid transparent; border-radius: 6px; padding: 2px 6px; color: var(--accent); font-size: 12px; font-weight: 600; cursor: pointer; }
+.thread-link:hover, .thread-link.active { border-color: var(--line); background: var(--panel-2); }
+.thread-panel { grid-column: 3; grid-row: 1 / -1; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; border-left: 1px solid var(--line); background: var(--panel); }
+.thread-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.thread-panel .message { padding-left: 14px; padding-right: 14px; }
+.thread-panel .message.system { padding-left: 14px; }
+.detail-panel.behind-thread { display: none; }
+.chat-layout.with-thread { grid-template-columns: 250px minmax(0, 1fr) 400px; }
+@media (max-width: 1100px) {
+  .chat-layout.with-thread { grid-template-columns: 220px minmax(0, 1fr); }
+  .thread-panel { position: fixed; z-index: 20; top: 48px; right: 0; bottom: 0; width: min(420px, 100vw); box-shadow: var(--shadow); }
+}

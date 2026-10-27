@@ -42,7 +42,8 @@ export type ChannelKind = 'department' | 'leaders';
 export type Channel = { id: string; name: string; kind: ChannelKind; departmentId: string | null; memberSeatIds: string[]; lastSeq: number };
 export type OrgView = { departments: Department[]; seats: Seat[]; channels: Channel[] };
 export type SenderKind = 'seat' | 'manager' | 'system';
-export type ChatMessage = { id: string; channelId: string; seq: number; senderKind: SenderKind; senderId: string; body: string; mentions: string[]; createdAt: number; editedAt?: number | null; deletedAt?: number | null };
+/** threadSeq: seq of the root this message replies to (null on top-level messages); replyCount/lastReplyAt describe a root's thread. */
+export type ChatMessage = { id: string; channelId: string; seq: number; senderKind: SenderKind; senderId: string; body: string; mentions: string[]; createdAt: number; editedAt?: number | null; deletedAt?: number | null; threadSeq?: number | null; replyCount?: number; lastReplyAt?: number | null };
 export type TaskStatus = 'todo' | 'doing' | 'blocked' | 'done';
 export type SeatHandoff = { seatId: string; body: string; updatedAt: number; updatedBy: string };
 /** requesterSeatId: leader of another department this task was requested by; told when it is blocked or done. */

@@ -96,6 +96,8 @@ export class WakeService {
         if (message.deletedAt || (message.senderKind === 'seat' && message.senderId === seatId)) return false;
         if (message.mentions.includes(seatId) || message.senderKind === 'manager') return true;
         if (standIn && message.mentions.includes(standIn)) return true;
+        // A reply in a thread you started is addressed to you, like a mention.
+        if (message.threadSeq && message.senderKind !== 'system' && this.messages.threadRootSeat(channel.id, message.threadSeq) === seatId) return true;
         return seat.role === 'member' && channel.kind === 'department' && channel.departmentId === seat.departmentId && message.senderKind === 'seat' && message.senderId === leader?.id;
       });
       if (waking.length === 0) continue;
@@ -121,11 +123,12 @@ export class WakeService {
     const seat = this.org.seat(seatId); const department = this.org.department(seat.departmentId);
     const header = `[Agent Office] ${items.length} new item(s) for @${seat.id} (${seat.title}, ${seat.role} of ${department.name}):`
       + (standIn ? `\nYou are the deputy and @${standIn} (your leader) is unavailable: handle items addressed to @${standIn} as acting leader (reply in #leaders, create tasks with requestedBy for cross-department requests).` : '');
-    const footer = `${otherUnread > 0 ? `(+${otherUnread} other unread message(s) in these channels)\n` : ''}Next: use agent_office_read_channel for context, do the work, reply with agent_office_send_message (mention @seat-id), update tasks with agent_office_update_task, and keep your seat note current with agent_office_save_handoff.`;
+    const footer = `${otherUnread > 0 ? `(+${otherUnread} other unread message(s) in these channels)\n` : ''}Next: use agent_office_read_channel for context, do the work, reply with agent_office_send_message (mention @seat-id; pass threadSeq to answer inside a thread — the [n] shown — so replies do not flood the channel), update tasks with agent_office_update_task, and keep your seat note current with agent_office_save_handoff.`;
     const lines: string[] = []; let budget = MAX_REASON - header.length - footer.length - 64;
     for (const item of items) {
       const sender = item.senderKind === 'seat' ? `@${item.senderId}` : item.senderKind;
-      const body = item.body.replace(/\s+/g, ' ').trim(); const line = `- #${item.channelId} ${sender}: ${body.length > MAX_ITEM ? `${body.slice(0, MAX_ITEM)}…` : body}`;
+      const body = item.body.replace(/\s+/g, ' ').trim(); const where = item.threadSeq ? `#${item.channelId} thread [${item.threadSeq}]` : `#${item.channelId} [${item.seq}]`;
+      const line = `- ${where} ${sender}: ${body.length > MAX_ITEM ? `${body.slice(0, MAX_ITEM)}…` : body}`;
       if (line.length > budget) { lines.push(`- …and ${items.length - lines.length} more`); break; }
       lines.push(line); budget -= line.length + 1;
     }

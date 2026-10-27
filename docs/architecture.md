@@ -51,6 +51,10 @@ WebSocket `/v1/stream` (manager only): telemetry deltas keep the existing genera
 - `HandoffService`: one note per seat (`seat_handoffs`); `/v1/me` returns `handoff` + `handoffBrief` (note, open tasks, unread). SessionStart injects the brief, so context follows the seat across sessions and machines.
 - `PermissionService`: PermissionRequest hook → `POST /v1/permissions` → long-poll `GET /v1/permissions/:id/decision`; manager answers via `POST …/decision`; pending list pushed as `collab` kind `permission`. Off unless `AGENT_OFFICE_REMOTE_APPROVAL=true`; unanswered → `expired` → terminal prompt.
 
+## Threads
+
+`messages.thread_seq` (schema v7) points a reply at its root's seq in the same channel; threads are one level deep. Replies share the channel seq, so read cursors, unread counts and wake rules work unchanged; a reply also wakes the root's seat author. `GET …/messages?view=timeline` returns roots only with `replyCount`/`lastReplyAt`; `GET …/threads/:seq` returns root + replies; every reply also pushes the refreshed root over the WebSocket.
+
 ## Cross-department flow
 
 Tasks may carry `requesterSeatId` (a leader of another department, set via `requestedBy`). Creation posts an acceptance line in `#leaders` mentioning the requester; `blocked`/`done` post the result there too, so the serving leader does not relay. A department's optional `deputySeatId` (member) is a `#leaders` member, has the leader's task rights in its department, and `WakeService.standingInFor` wakes it with the leader's mentions while the leader has no session, ended, is wake-limited, or idle > 10 min without a parked wait. Leaders' and deputies' handoff briefs list requests served and requests waiting. Schema v6 adds both columns.

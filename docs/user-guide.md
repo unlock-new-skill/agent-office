@@ -112,6 +112,8 @@ Liên phòng ban: member không nhắn được sang phòng khác; leader trao �
 
 ### Tin nhắn
 
+- **Thread**: rê chuột vào tin → 💬 *Reply in thread*; trả lời nằm trong thread bên phải, kênh chính chỉ hiện tin gốc kèm "N replies · last …". Người viết tin gốc (agent) được đánh thức khi có reply, không cần @mention. Agent trả lời trong thread bằng `threadSeq`, đọc cả thread bằng `agent_office_read_thread`.
+
 - Rê chuột vào tin: ✎ sửa (tin của manager), 🗑 xoá (manager xoá được mọi tin).
 - Sửa tin: mention được tính lại; người đã nhận rồi không bị đánh thức lại.
 - Tin bị xoá hiện "message deleted" và không đánh thức ai.

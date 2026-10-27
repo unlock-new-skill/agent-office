@@ -11,7 +11,7 @@ import { logger } from './logger.js';
 type Deps = { auth: AuthService; office: Office; manager: (request: Request) => unknown; wakeWaitSeconds: number; publicOrigin: string | null };
 type Resolved = { actor: Actor; credential: Credential | null };
 const json = (message: string, status: number): Response => Response.json({ error: message }, { status });
-const PageSchema = z.object({ after: z.coerce.number().int().min(0).optional(), before: z.coerce.number().int().min(1).optional(), limit: z.coerce.number().int().min(1).max(200).optional() });
+const PageSchema = z.object({ after: z.coerce.number().int().min(0).optional(), before: z.coerce.number().int().min(1).optional(), limit: z.coerce.number().int().min(1).max(200).optional(), view: z.enum(['all', 'timeline']).default('all') });
 
 /** Runs a handler, mapping domain/validation errors to stable JSON error responses. */
 const handle = async (run: () => Promise<Response> | Response): Promise<Response> => {
@@ -151,11 +151,15 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
   }));
 
   app.get('/v1/channels', c => withActor(c, ({ actor }) => c.json({ channels: actor.kind === 'manager' ? office.org.view().channels : office.messages.channelsForSeat(actor.seatId) })));
-  app.get('/v1/channels/:id/messages', c => withActor(c, ({ actor }) => c.json({ messages: office.messages.list(actor, c.req.param('id'), PageSchema.parse(c.req.query())) })));
-  app.post('/v1/channels/:id/messages', c => withActor(c, async ({ actor }) => {
-    const { body } = z.object({ body: z.string().max(16_384) }).strict().parse(await c.req.json());
-    return c.json(office.messages.post(actor, c.req.param('id'), body), 201);
+  app.get('/v1/channels/:id/messages', c => withActor(c, ({ actor }) => {
+    const { view, ...page } = PageSchema.parse(c.req.query());
+    return c.json({ messages: office.messages.list(actor, c.req.param('id'), { ...page, topLevel: view === 'timeline' }) });
   }));
+  app.post('/v1/channels/:id/messages', c => withActor(c, async ({ actor }) => {
+    const { body, threadSeq } = z.object({ body: z.string().max(16_384), threadSeq: z.number().int().min(1).optional() }).strict().parse(await c.req.json());
+    return c.json(office.messages.post(actor, c.req.param('id'), body, threadSeq), 201);
+  }));
+  app.get('/v1/channels/:id/threads/:seq', c => withActor(c, ({ actor }) => c.json(office.messages.thread(actor, c.req.param('id'), z.coerce.number().int().min(1).parse(c.req.param('seq'))))));
   const seqParam = (c: Context): number => z.coerce.number().int().min(1).parse(c.req.param('seq'));
   app.patch('/v1/channels/:id/messages/:seq', c => withActor(c, async ({ actor }) => {
     const { body } = z.object({ body: z.string().max(16_384) }).strict().parse(await c.req.json());

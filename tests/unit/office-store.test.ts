@@ -78,3 +78,16 @@ test('join links and prompts point at the seat', () => {
   assert.equal(seatIdFromJoin('dev-be'), 'dev-be');
   assert.equal(seatIdFromJoin('  @dev-be '), 'dev-be');
 });
+
+test('thread replies update only their open thread; root updates refresh the timeline and the thread', async () => {
+  const { officeReducer, initialOfficeState, threadKey } = await import('../../src/client/state/office-store.js');
+  const message = (seq: number, extra: Partial<import('../../src/shared/contracts.js').ChatMessage> = {}) => ({ id: `m${seq}`, channelId: 'dev', seq, senderKind: 'manager' as const, senderId: 'manager', body: `b${seq}`, mentions: [], createdAt: seq, ...extra });
+  let state = officeReducer(initialOfficeState, { type: 'history', channelId: 'dev', messages: [message(1)], mode: 'replace' });
+  state = officeReducer(state, { type: 'thread', channelId: 'dev', root: message(1), replies: [] });
+  state = officeReducer(state, { type: 'collab', event: { type: 'collab', kind: 'message', message: message(2, { threadSeq: 1 }) } });
+  state = officeReducer(state, { type: 'collab', event: { type: 'collab', kind: 'message', message: message(1, { replyCount: 1 }) } });
+  assert.deepEqual(state.messages.dev?.map(item => item.seq), [1], 'reply stays out of the timeline');
+  assert.equal(state.messages.dev?.[0]?.replyCount, 1);
+  assert.deepEqual(state.threads[threadKey('dev', 1)]?.replies.map(item => item.seq), [2]);
+  assert.equal(state.threads[threadKey('dev', 1)]?.root.replyCount, 1);
+});
