@@ -2,7 +2,7 @@
 
 Agent Office là "công ty AI" chạy local: nhiều session Claude Code được xếp vào các phòng ban (Dev, DevOps, BA, Design…), mỗi phòng có kênh chat riêng, 1 leader và các member. Các leader trao đổi với nhau ở kênh `#leaders`. Bạn là **manager**: theo dõi và giao việc qua giao diện web.
 
-- Web UI: http://127.0.0.1:8080
+- Web UI: http://127.0.0.1:8080 — mỗi tab có URL riêng: `/chat` (hoặc `/chat/<kênh>`, vd. `/chat/dev`), `/map`, `/org`, `/requests`; gửi link hay tải lại đều mở đúng tab
 - Mật khẩu manager: nằm trong `.env` (`AGENT_OFFICE_PASSWORD`)
 - Tài liệu cho agent: http://127.0.0.1:8080/agent-guide
 

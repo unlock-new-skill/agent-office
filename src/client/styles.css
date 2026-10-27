@@ -60,9 +60,9 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .brand { font-weight: 700; display: flex; gap: 8px; align-items: center; }
 .brand-mark { color: var(--accent); }
 .view-tabs { display: flex; gap: 4px; margin-left: 12px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-.view-tabs button { flex: none; }
-.view-tabs button, .tabs button { background: none; border: 0; padding: 6px 12px; border-radius: 6px; color: var(--text-dim); cursor: pointer; }
-.view-tabs button.active, .tabs button.active { background: var(--panel-2); color: var(--text); }
+.view-tabs a, .view-tabs button { flex: none; text-decoration: none; }
+.view-tabs a, .view-tabs button, .tabs button { background: none; border: 0; padding: 6px 12px; border-radius: 6px; color: var(--text-dim); cursor: pointer; }
+.view-tabs a.active, .view-tabs button.active, .tabs button.active { background: var(--panel-2); color: var(--text); }
 .conn { font-size: 12px; padding: 2px 8px; border-radius: 99px; }
 .conn.on { color: var(--ok); background: #4ade8018; }
 .conn.off { color: var(--warn); background: #f59e0b18; }
@@ -234,7 +234,7 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
   .brand { font-size: 0; gap: 0; }
   .brand-mark { font-size: 16px; }
   .view-tabs { margin-left: 0; }
-  .view-tabs button { padding: 6px 8px; }
+  .view-tabs a, .view-tabs button { padding: 6px 8px; }
   .topbar .conn { display: none; }
 }
 

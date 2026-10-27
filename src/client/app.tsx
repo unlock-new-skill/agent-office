@@ -1,14 +1,19 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createApi, currentSession } from './api/http.js';
 import { AddMachinePanel } from './components/add-machine-panel.js';
 import { ApprovalsBar } from './components/approvals-bar.js';
 import { Toast } from './components/toast.js';
+import { routePath, useRoute, type View } from './router.js';
 import { useOffice } from './state/use-office.js';
-import { ChatView } from './views/chat-view.js';
 import { LoginView } from './views/login-view.js';
-import { MapView } from './views/map-view.js';
-import { OrgView } from './views/org-view.js';
-import { RequestsView } from './views/requests-view.js';
+
+// Each route is its own chunk, fetched the first time it is opened.
+const ChatView = lazy(() => import('./views/chat-view.js').then(module => ({ default: module.ChatView })));
+const MapView = lazy(() => import('./views/map-view.js').then(module => ({ default: module.MapView })));
+const OrgView = lazy(() => import('./views/org-view.js').then(module => ({ default: module.OrgView })));
+const RequestsView = lazy(() => import('./views/requests-view.js').then(module => ({ default: module.RequestsView })));
+const TABS: Array<{ view: View; label: string }> = [{ view: 'chat', label: 'Chat' }, { view: 'map', label: 'Map' }, { view: 'org', label: 'Org' }, { view: 'requests', label: 'Requests' }];
+const DEFAULT_CHANNEL = 'leaders';
 
 export function App(): ReactNode {
   const [csrfToken, setCsrfToken] = useState<string | null | undefined>(undefined);
@@ -21,9 +26,11 @@ export function App(): ReactNode {
 function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut: () => void }): ReactNode {
   const api = useMemo(() => createApi(csrfToken, onSignedOut), [csrfToken, onSignedOut]);
   const office = useOffice(api);
-  const [view, setView] = useState<'chat' | 'map' | 'org' | 'requests'>('chat');
+  const { route, navigate, link } = useRoute();
+  // Normalise "/" and unknown paths to their canonical URL without adding a history entry.
+  useEffect(() => { if (location.pathname !== routePath(route)) navigate(route, { replace: true }); }, [route, navigate]);
+  const channelId = route.channelId ?? DEFAULT_CHANNEL;
   const openRequests = Object.values(office.state.tasks).filter(task => task.requesterSeatId && task.status !== 'done').length;
-  const [channelId, setChannelId] = useState('leaders');
   const [toast, setToast] = useState<string | null>(null);
   const notify = useCallback((text: string) => setToast(text), []);
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(null), 5000); return () => clearTimeout(timer); }, [toast]);
@@ -34,10 +41,12 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
       <header className="topbar">
         <div className="brand"><span className="brand-mark" aria-hidden>◆</span>Agent Office</div>
         <nav className="view-tabs" aria-label="Views">
-          <button type="button" className={view === 'chat' ? 'active' : ''} aria-current={view === 'chat' ? 'page' : undefined} onClick={() => setView('chat')}>Chat</button>
-          <button type="button" className={view === 'map' ? 'active' : ''} aria-current={view === 'map' ? 'page' : undefined} onClick={() => setView('map')}>Map</button>
-          <button type="button" className={view === 'org' ? 'active' : ''} aria-current={view === 'org' ? 'page' : undefined} onClick={() => setView('org')}>Org</button>
-          <button type="button" className={view === 'requests' ? 'active' : ''} aria-current={view === 'requests' ? 'page' : undefined} onClick={() => setView('requests')}>Requests{openRequests > 0 ? ` (${openRequests})` : ''}</button>
+          {TABS.map(tab => (
+            <a key={tab.view} {...link(tab.view === 'chat' ? { view: 'chat', channelId: route.view === 'chat' ? route.channelId : null } : { view: tab.view, channelId: null })}
+              className={route.view === tab.view ? 'active' : ''} aria-current={route.view === tab.view ? 'page' : undefined}>
+              {tab.label}{tab.view === 'requests' && openRequests > 0 ? ` (${openRequests})` : ''}
+            </a>
+          ))}
         </nav>
         <span className="spacer" />
         <AddMachinePanel api={api} notify={notify} />
@@ -46,10 +55,12 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
         <button type="button" className="btn btn-small" onClick={() => void api.send('POST', '/v1/auth/logout').finally(onSignedOut)}>Sign out</button>
       </header>
       <ApprovalsBar pending={office.state.permissions} api={api} notify={notify} />
-      {view === 'chat' && <ChatView office={office} channelId={channelId} onSelectChannel={setChannelId} notify={notify} />}
-      {view === 'map' && <MapView state={office.state} notify={notify} />}
-      {view === 'org' && <OrgView state={office.state} api={api} notify={notify} />}
-      {view === 'requests' && <RequestsView state={office.state} />}
+      <Suspense fallback={<div className="loading">Loading…</div>}>
+        {route.view === 'chat' && <ChatView office={office} channelId={channelId} onSelectChannel={id => navigate({ view: 'chat', channelId: id })} notify={notify} />}
+        {route.view === 'map' && <MapView state={office.state} notify={notify} />}
+        {route.view === 'org' && <OrgView state={office.state} api={api} notify={notify} />}
+        {route.view === 'requests' && <RequestsView state={office.state} />}
+      </Suspense>
       <Toast text={toast} onClose={() => setToast(null)} />
     </div>
   );
