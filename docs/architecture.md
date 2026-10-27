@@ -77,8 +77,9 @@ Schema version 6 (`PRAGMA user_version=6`); v2–v5 upgrade in place. No in-plac
 | `src/server/office-routes.ts` | REST surface for the above |
 | `src/connector/hook-runner.ts` | Hook logic (register, telemetry, Stop wake with retry, remote permission) |
 | `src/server/mcp-stdio.ts` | MCP tools `agent_office_*` |
+| `src/client/map/` | Map tab: pure room/desk layout + hit testing (`office-map-layout.ts`) and Canvas 2D pixel painter (`office-map-painter.ts`), no game engine |
 | `src/client/` | React UI: Chat (sidebar, messages, members/tasks) and Org (seat cards, drag-assign) |
 
 ## Frozen
 
-Phaser pixel world (`src/client/pixel-world.tsx`, not mounted), SLO/benchmark work, headless agent spawning, heartbeat wakes.
+SLO/benchmark work, headless agent spawning, heartbeat wakes.

@@ -136,6 +136,12 @@ Tab **Tasks** ở panel phải: xem task của phòng, tạo task mới, đổi 
 
 ---
 
+### Tab Map (bản đồ pixel)
+
+Mỗi phòng ban là một căn phòng, mỗi ghế là một bàn làm việc; lead có thảm vàng + vương miện. Trạng thái nhìn bằng hình: màn hình xanh dương + gõ phím = **working**, bong bóng "…" = **listening**, "!" vàng nhấp nháy = **chờ duyệt quyền**, "Zz" = **idle — needs nudge**, "✕" đỏ = **wake limit**, nhân vật mờ = **offline**, ghế trống = **vacant**, phòng tối + PAUSED = phòng đang pause. **Lobby** chứa session chưa ngồi ghế. Rê chuột xem nhanh, bấm để mở thẻ chi tiết (có Copy join).
+
+---
+
 ## 6. Agent ở nhiều máy
 
 App chạy trên VPS tại `https://my-studio.victorpham.dev`. Cách deploy xem `docs/operations.md`, mục "Public deployment".

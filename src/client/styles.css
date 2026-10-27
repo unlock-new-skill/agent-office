@@ -56,10 +56,11 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 
 /* Shell */
 .app-shell { height: 100vh; display: grid; grid-template-rows: 48px 1fr; }
-.topbar { display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.topbar { display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; overflow: hidden; }
 .brand { font-weight: 700; display: flex; gap: 8px; align-items: center; }
 .brand-mark { color: var(--accent); }
-.view-tabs { display: flex; gap: 4px; margin-left: 12px; }
+.view-tabs { display: flex; gap: 4px; margin-left: 12px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.view-tabs button { flex: none; }
 .view-tabs button, .tabs button { background: none; border: 0; padding: 6px 12px; border-radius: 6px; color: var(--text-dim); cursor: pointer; }
 .view-tabs button.active, .tabs button.active { background: var(--panel-2); color: var(--text); }
 .conn { font-size: 12px; padding: 2px 8px; border-radius: 99px; }
@@ -178,7 +179,6 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .toast { position: fixed; right: 20px; bottom: 20px; display: flex; gap: 10px; align-items: center; background: #3b1d22; border: 1px solid var(--bad); color: #fecaca; padding: 10px 12px; border-radius: var(--radius); box-shadow: var(--shadow); max-width: min(420px, calc(100vw - 32px)); z-index: 10; }
 
 /* Frozen pixel prototype (not mounted) */
-.pixel-stage { position: relative; overflow: hidden; min-height: 320px; }
 
 @media (max-width: 1100px) { .chat-layout { grid-template-columns: 220px minmax(0, 1fr); } .detail-panel { display: none; } }
 @media (max-width: 760px) {
@@ -215,3 +215,25 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .status-pill { font-size: 11px; padding: 1px 8px; border-radius: 99px; background: var(--panel-2); }
 .status-pill.blocked { color: var(--warn); } .status-pill.doing { color: var(--busy); } .status-pill.done { color: var(--ok); }
 @media (max-width: 720px) { .requests-table .hide-narrow { display: none; } }
+
+/* Map: pixel office canvas with legend, hover tooltip and a detail card. */
+.map-view { position: relative; overflow: hidden; display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+.map-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--text-dim); }
+.map-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.map-stage { position: relative; overflow: auto; padding: 12px 16px; min-height: 0; }
+.map-canvas { display: block; image-rendering: pixelated; }
+.map-tooltip { position: absolute; z-index: 5; pointer-events: none; display: grid; gap: 2px; max-width: 280px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: var(--text-dim); box-shadow: var(--shadow); }
+.map-tooltip strong { color: var(--text); }
+.map-detail { position: absolute; right: 16px; bottom: 16px; z-index: 6; width: min(320px, calc(100% - 32px)); display: grid; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; box-shadow: var(--shadow); font-size: 13px; }
+.map-detail header { display: flex; align-items: center; gap: 8px; }
+.map-detail p { margin: 0; color: var(--text-dim); }
+
+/* Narrow screens: the top bar keeps tabs + actions on one line; secondary text goes. */
+@media (max-width: 560px) {
+  .topbar { gap: 8px; padding: 0 10px; }
+  .brand { font-size: 0; gap: 0; }
+  .brand-mark { font-size: 16px; }
+  .view-tabs { margin-left: 0; }
+  .view-tabs button { padding: 6px 8px; }
+  .topbar .conn { display: none; }
+}
