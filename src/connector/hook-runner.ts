@@ -14,6 +14,8 @@ const SHORT_TIMEOUT_MS = 1500;
 /** Wake states that mean "the daemon could not park us right now", as opposed to a real idle timeout or an intentional refusal. */
 const RETRYABLE_WAKE_STATES = new Set(['shutdown', 'busy', 'aborted']);
 const WAKE_BACKOFF_MS = [2000, 4000, 8000, 15_000, 30_000];
+/** Prompts that need an answer typed by the user, not Allow/Deny: always left to the terminal. */
+const TERMINAL_ONLY_TOOLS = new Set(['AskUserQuestion']);
 /** One long-poll request never outlives this: proxies such as Cloudflare cut idle responses after 100 s. */
 export const MAX_POLL_SECONDS = 90;
 
@@ -137,9 +139,10 @@ const waitForWake = async (sessionId: string, cwd: string | undefined, initial: 
 const askManager = async (input: Record<string, unknown>, session: SessionRecord, deps: HookDeps): Promise<HookOutput> => {
   const wait = deps.permissionWaitSeconds ?? 0;
   const tool = typeof input.tool_name === 'string' ? input.tool_name : 'unknown';
-  // Only short strings travel: the summary needs command/path/description, never whole file contents.
+  if (TERMINAL_ONLY_TOOLS.has(tool)) return {};
+  // Bounded values only: strings are cut, other values travel as short JSON so the manager still sees what will run.
   const toolInput = Object.fromEntries(Object.entries(input.tool_input && typeof input.tool_input === 'object' ? input.tool_input as Record<string, unknown> : {})
-    .filter(([, value]) => typeof value === 'string').map(([key, value]) => [key, (value as string).slice(0, 2000)]));
+    .map(([key, value]) => [key, typeof value === 'string' ? value.slice(0, 2000) : (JSON.stringify(value) ?? '').slice(0, 500)]));
   let id: string;
   try { id = (await daemonCall<{ id: string }>(deps.fetch, session.daemonUrl, session.token, '/v1/permissions', { body: { tool, input: toolInput }, timeoutMs: 3000 })).id; }
   catch { return {}; }

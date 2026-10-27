@@ -180,7 +180,7 @@ test('PermissionRequest hands the prompt to the manager and returns Allow/Deny; 
   });
   const allow = daemonWith({ status: 200, body: { status: 'allowed', message: '' } });
   assert.deepEqual(await runHook(prompt, { store, fetch: allow.fetchImpl, wakeWaitSeconds: 1, permissionWaitSeconds: 60 }), { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
-  assert.deepEqual(allow.calls.find(call => call.url === '/v1/permissions')?.body, { tool: 'Bash', input: { command: 'npm test' } });
+  assert.deepEqual(allow.calls.find(call => call.url === '/v1/permissions')?.body, { tool: 'Bash', input: { command: 'npm test', huge: '1' } });
   assert.ok(allow.calls.some(call => call.url === '/v1/permissions/perm-1/decision?wait=60'));
   const deny = daemonWith({ status: 200, body: { status: 'denied', message: 'not now' } });
   assert.deepEqual(await runHook(prompt, { store, fetch: deny.fetchImpl, wakeWaitSeconds: 1, permissionWaitSeconds: 60 }), { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'not now' } } });
@@ -232,4 +232,19 @@ test('a join link to this daemon in the prompt seats the session without the mod
   const missing = fakeDaemon({ 'POST /v1/agents/events': () => ({ status: 201, body: {} }), 'POST /v1/seats/nope/claim': () => ({ status: 404, body: { error: 'seat_not_found' } }), 'GET /v1/me': () => ({ status: 200, body: { agentId: 'cc-1', seat: null, department: null, channels: [] } }) });
   const refused = await runHook(prompt('https://office.example.com/join/nope'), { store, fetch: missing.fetchImpl, wakeWaitSeconds: 1 }) as { hookSpecificOutput: { additionalContext: string } };
   assert.match(refused.hookSpecificOutput.additionalContext, /no seat @nope/);
+});
+
+test('questions for the user stay in the terminal; non-string tool inputs still reach the manager', async () => {
+  const store = newStore(); store.saveSession('sess-1', { daemonUrl: 'http://127.0.0.1:8080', token: 'agent-token', agentId: 'cc-1' });
+  const daemon = fakeDaemon({
+    'POST /v1/agents/events': () => ({ status: 201, body: {} }),
+    'POST /v1/permissions': () => ({ status: 201, body: { id: 'perm-1' } }),
+    'GET /v1/permissions/perm-1/decision': () => ({ status: 200, body: { status: 'expired', message: '' } }),
+  });
+  const ask = { session_id: 'sess-1', hook_event_name: 'PermissionRequest', tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Which DB?' }] } };
+  assert.deepEqual(await runHook(ask, { store, fetch: daemon.fetchImpl, wakeWaitSeconds: 1, permissionWaitSeconds: 60 }), {});
+  assert.ok(!daemon.calls.some(call => call.url === '/v1/permissions'), 'not sent to the manager');
+  const mcp = { session_id: 'sess-1', hook_event_name: 'PermissionRequest', tool_name: 'mcp__db__query', tool_input: { sql: 'select 1', options: { limit: 5 } } };
+  await runHook(mcp, { store, fetch: daemon.fetchImpl, wakeWaitSeconds: 1, permissionWaitSeconds: 1 });
+  assert.deepEqual(daemon.calls.find(call => call.url === '/v1/permissions')?.body, { tool: 'mcp__db__query', input: { sql: 'select 1', options: '{"limit":5}' } });
 });
