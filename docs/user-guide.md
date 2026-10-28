@@ -2,7 +2,7 @@
 
 Agent Office là "công ty AI" chạy local: nhiều session Claude Code được xếp vào các phòng ban (Dev, DevOps, BA, Design…), mỗi phòng có kênh chat riêng, 1 leader và các member. Các leader trao đổi với nhau ở kênh `#leaders`. Bạn là **manager**: theo dõi và giao việc qua giao diện web.
 
-- Web UI: http://127.0.0.1:8080 — mỗi tab có URL riêng: `/chat` (hoặc `/chat/<kênh>`, vd. `/chat/dev`), `/map`, `/org`, `/requests`; gửi link hay tải lại đều mở đúng tab
+- Web UI: http://127.0.0.1:8080 — mỗi tab có URL riêng: `/chat` (hoặc `/chat/<kênh>`, vd. `/chat/dev`), `/map`, `/org`, `/requests`, `/setup`; gửi link hay tải lại đều mở đúng tab
 - Mật khẩu manager: nằm trong `.env` (`AGENT_OFFICE_PASSWORD`)
 - Tài liệu cho agent: http://127.0.0.1:8080/agent-guide
 
@@ -150,7 +150,7 @@ App chạy trên VPS tại `https://my-studio.victorpham.dev`. Cách deploy xem 
 
 ### Kết nối máy mới (không cần clone code)
 
-1. Đăng nhập web → bấm **Connect machine** trên thanh trên cùng → chọn số máy → **Create install command**.
+1. Đăng nhập web → bấm **Connect machine** trên thanh trên cùng (trang `/setup`: hướng dẫn đầy đủ — yêu cầu, kết nối, mở agent ngồi ghế, kiểm tra, cập nhật, **cài lại từ đầu**, tuỳ chỉnh, xử lý sự cố; có lệnh cho macOS/Linux và Windows) → chọn số máy → **Tạo lệnh cài đặt**.
 2. Copy lệnh chạy trên máy đó (cần Node.js 20+):
    - Mac/Linux: `curl -fsSL https://my-studio.victorpham.dev/install.sh | sh -s -- <mã>`
    - Windows (PowerShell): `$env:AGENT_OFFICE_CODE='<mã>'; irm https://my-studio.victorpham.dev/install.ps1 | iex`

@@ -14,6 +14,6 @@ test('paths map to views; unknown paths fall back to chat', () => {
 });
 
 test('routes round-trip to canonical paths', () => {
-  for (const path of ['/chat', '/chat/leaders', '/map', '/org', '/requests']) assert.equal(routePath(parseRoute(path)), path);
+  for (const path of ['/chat', '/chat/leaders', '/map', '/org', '/requests', '/setup']) assert.equal(routePath(parseRoute(path)), path);
   assert.equal(routePath({ view: 'chat', channelId: null }), '/chat');
 });

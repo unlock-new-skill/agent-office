@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createApi, currentSession } from './api/http.js';
-import { AddMachinePanel } from './components/add-machine-panel.js';
 import { ApprovalsBar } from './components/approvals-bar.js';
 import { Toast } from './components/toast.js';
 import { routePath, useRoute, type View } from './router.js';
@@ -12,6 +11,7 @@ const ChatView = lazy(() => import('./views/chat-view.js').then(module => ({ def
 const MapView = lazy(() => import('./views/map-view.js').then(module => ({ default: module.MapView })));
 const OrgView = lazy(() => import('./views/org-view.js').then(module => ({ default: module.OrgView })));
 const RequestsView = lazy(() => import('./views/requests-view.js').then(module => ({ default: module.RequestsView })));
+const SetupView = lazy(() => import('./views/setup-view.js').then(module => ({ default: module.SetupView })));
 const TABS: Array<{ view: View; label: string }> = [{ view: 'chat', label: 'Chat' }, { view: 'map', label: 'Map' }, { view: 'org', label: 'Org' }, { view: 'requests', label: 'Requests' }];
 const DEFAULT_CHANNEL = 'leaders';
 
@@ -49,7 +49,7 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
           ))}
         </nav>
         <span className="spacer" />
-        <AddMachinePanel api={api} notify={notify} />
+        <a {...link({ view: 'setup', channelId: null })} className={`btn btn-small btn-primary connect-link ${route.view === 'setup' ? 'active' : ''}`} aria-current={route.view === 'setup' ? 'page' : undefined}>Connect machine</a>
         <span className="muted">{seated}/{office.state.org?.seats.length ?? 0} seats filled</span>
         <span className={`conn ${office.state.connected ? 'on' : 'off'}`}>{office.state.connected ? 'live' : 'reconnecting…'}</span>
         <button type="button" className="btn btn-small" onClick={() => void api.send('POST', '/v1/auth/logout').finally(onSignedOut)}>Sign out</button>
@@ -60,6 +60,7 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
         {route.view === 'map' && <MapView state={office.state} notify={notify} />}
         {route.view === 'org' && <OrgView state={office.state} api={api} notify={notify} />}
         {route.view === 'requests' && <RequestsView state={office.state} />}
+        {route.view === 'setup' && <SetupView state={office.state} api={api} notify={notify} />}
       </Suspense>
       <Toast text={toast} onClose={() => setToast(null)} />
     </div>
