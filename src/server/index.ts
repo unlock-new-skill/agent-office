@@ -3,6 +3,8 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { createApp } from './app.js';
 import { createOffice } from './collaboration/office.js';
+import { describeProxy, TelegramClient } from './notify/telegram-client.js';
+import { TelegramNotifier } from './notify/telegram-notifier.js';
 import { readOfficeConfig } from './collaboration/seed.js';
 import { AuthService } from './auth/auth-service.js';
 import { loadConfig } from './config.js';
@@ -29,11 +31,16 @@ const hub = new WebSocketHub();
 const auth = new AuthService(db, config.sessionTtlSeconds, config.minPasswordLength);
 if (!auth.isSetupComplete()) { logger.error('manager setup required; run npm run setup before starting daemon'); db.close(); dataLock.release(); process.exit(1); }
 const events = new EventStore(db, delta => hub.publish(delta));
-const office = createOffice(db, { maxAutoWakes: config.maxAutoWakes, emit: event => hub.broadcast(event), remoteApproval: config.remoteApproval });
+let notifier: TelegramNotifier | null = null;
+const office = createOffice(db, { maxAutoWakes: config.maxAutoWakes, emit: event => { hub.broadcast(event); notifier?.onEvent(event); }, remoteApproval: config.remoteApproval });
+if (config.telegramBotToken) {
+  notifier = new TelegramNotifier({ client: new TelegramClient(config.telegramBotToken, config.telegramProxy), db, office, publicOrigin: config.publicOrigin, log: message => logger.error(message) });
+  notifier.start(); logger.info(`telegram notifications on (proxy: ${describeProxy(config.telegramProxy)})`);
+}
 const officeConfig = readOfficeConfig([path.join(process.cwd(), 'office.yaml'), path.join(process.cwd(), 'office.example.yaml')]);
 if (officeConfig && office.org.seedIfEmpty(officeConfig)) logger.info('seeded organization from office.yaml');
 const snapshot = (): ReturnType<typeof events.snapshot> => ({ ...events.snapshot(), org: office.org.view() });
-const app = createApp({ config, db, auth, events, office, revokeSession: id => hub.revokeSession(id) });
+const app = createApp({ config, db, auth, events, office, revokeSession: id => hub.revokeSession(id), notifier });
 
 const allowedHost = `${config.host}:${config.port}`; const { hosts: allowedHosts, origins: allowedOrigins } = allowedHostsAndOrigins(config); const staticHeaders = securityHeaders(config);
 
@@ -108,5 +115,5 @@ httpServer.on('upgrade', (request, socket, head) => {
 const sweep = setInterval(() => hub.sweep(sessionId => auth.isSessionActive(sessionId)), 1000); sweep.unref();
 const repair = setInterval(() => hub.repair((generation, afterSeq) => events.replayPage(generation, afterSeq), snapshot), 1000); repair.unref();
 httpServer.listen(config.port, config.host, () => logger.info(`agent-office listening on http://${config.host}:${config.port}`));
-const shutdown = (): void => { office.close(); clearInterval(sweep); clearInterval(repair); hub.close(); httpServer.close(); db.close(); dataLock.release(); };
+const shutdown = (): void => { notifier?.stop(); office.close(); clearInterval(sweep); clearInterval(repair); hub.close(); httpServer.close(); db.close(); dataLock.release(); };
 process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);

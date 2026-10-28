@@ -50,9 +50,10 @@ export class PermissionService {
     return this.db.raw.prepare(`SELECT ${COLUMNS} FROM permission_requests WHERE status='pending' ORDER BY created_at`).all() as PermissionRequest[];
   }
 
-  decide(id: string, behavior: PermissionBehavior, message: string): PermissionRequest {
+  /** `by` records where the manager answered (web UI or Telegram) for the audit trail. */
+  decide(id: string, behavior: PermissionBehavior, message: string, by: 'manager' | 'telegram' = 'manager'): PermissionRequest {
     const status: PermissionStatus = behavior === 'allow' ? 'allowed' : 'denied';
-    const changed = this.db.raw.prepare("UPDATE permission_requests SET status=?,message=?,decided_at=?,decided_by='manager' WHERE id=? AND status='pending'").run(status, message, Date.now(), id);
+    const changed = this.db.raw.prepare('UPDATE permission_requests SET status=?,message=?,decided_at=?,decided_by=? WHERE id=? AND status=\'pending\'').run(status, message, Date.now(), by, id);
     if (changed.changes === 0) { this.get(id); throw conflict('permission_already_resolved'); }
     this.wakeWaiters(id); this.publish();
     return this.get(id);

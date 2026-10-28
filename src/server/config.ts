@@ -21,6 +21,9 @@ export type AppConfig = {
   minPasswordLength: number;
   /** Lets agents' PermissionRequest hooks hand prompts to the manager UI. Enable only behind HTTPS + strong password. */
   remoteApproval: boolean;
+  /** Telegram bot for manager notifications (off when null) and the proxy all Telegram traffic must use. Never logged. */
+  telegramBotToken: string | null;
+  telegramProxy: string | null;
 };
 
 /** Normalizes AGENT_OFFICE_PUBLIC_ORIGIN to a bare origin; rejects paths and non-http(s) schemes so a typo fails fast. */
@@ -42,5 +45,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => (
   publicOrigin: parseOrigin(env.AGENT_OFFICE_PUBLIC_ORIGIN),
   trustProxy: env.AGENT_OFFICE_TRUST_PROXY === 'true',
   remoteApproval: env.AGENT_OFFICE_REMOTE_APPROVAL === 'true',
+  telegramBotToken: env.AGENT_OFFICE_TELEGRAM_BOT_TOKEN?.trim() || null,
+  telegramProxy: env.AGENT_OFFICE_TELEGRAM_PROXY?.trim() || null,
   minPasswordLength: Math.max(positiveInteger(env.AGENT_OFFICE_MIN_PASSWORD_LENGTH, 8), 8),
 });

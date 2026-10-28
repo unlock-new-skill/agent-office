@@ -24,6 +24,8 @@ services:
       # Upper bound for the wait agents may request; agents choose their own (default 290s).
       AGENT_OFFICE_WAKE_WAIT_SECONDS: 580
       AGENT_OFFICE_MAX_AUTO_WAKES: ${AGENT_OFFICE_MAX_AUTO_WAKES:-15}
+      AGENT_OFFICE_TELEGRAM_BOT_TOKEN: ${AGENT_OFFICE_TELEGRAM_BOT_TOKEN:-}
+      AGENT_OFFICE_TELEGRAM_PROXY: ${AGENT_OFFICE_TELEGRAM_PROXY:-}
     volumes:
       - agent-office-data:/app/data
     healthcheck:
