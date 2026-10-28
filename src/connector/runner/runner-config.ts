@@ -14,10 +14,12 @@ const PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
 const SeatConfigSchema = z.object({
   seatId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
   cwd: z.string().min(1).refine(value => path.isAbsolute(value), 'cwd must be an absolute path'),
-  permissionMode: z.enum(PERMISSION_MODES).default('acceptEdits'),
+  // Unattended seats skip permission prompts by default (`--dangerously-skip-permissions`); stricter modes per seat.
+  permissionMode: z.enum(PERMISSION_MODES).default('bypassPermissions'),
   model: z.string().max(80).regex(SHELL_SAFE).optional(),
   allowedTools: z.array(z.string().max(120).regex(SHELL_SAFE)).max(50).optional(),
   autoStart: z.boolean().default(true),
+  showWindow: z.boolean().default(true),
 }).strict();
 /**
  * Local file: optional seats (for machines not managed from the web) and `allowedRoots`, the directories web-managed

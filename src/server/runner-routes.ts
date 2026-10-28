@@ -18,8 +18,8 @@ const RunnerSeatSchema = z.object({
 /** Absolute Unix or Windows path without control characters; the runner still checks it against its allowed roots. */
 const absolutePath = z.string().min(1).max(500).regex(/^(\/|[A-Za-z]:[\\/])[^\u0000-\u001f]*$/, 'absolute path');
 const MachineSeatSchema = z.object({
-  seatId, cwd: absolutePath, permissionMode: z.enum(['default', 'acceptEdits', 'plan', 'bypassPermissions']).default('acceptEdits'),
-  sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).nullable().default(null), autoStart: z.boolean().default(true),
+  seatId, cwd: absolutePath, permissionMode: z.enum(['default', 'acceptEdits', 'plan', 'bypassPermissions']).default('bypassPermissions'),
+  sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).nullable().default(null), autoStart: z.boolean().default(true), showWindow: z.boolean().default(true),
 }).strict();
 const machineId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 const LogEntrySchema = z.object({ seatId, ts: z.number().int().min(0), kind: z.enum(['text', 'tool', 'result', 'error', 'state', 'prompt']), summary: z.string().max(500) }).strict();

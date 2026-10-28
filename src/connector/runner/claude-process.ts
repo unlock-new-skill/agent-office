@@ -20,7 +20,7 @@ const NESTED_SESSION_VARS = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_COD
 
 export const claudeArgs = (seat: SeatConfig, resume: string | null): string[] => [
   '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
-  '--permission-mode', seat.permissionMode,
+  ...(seat.permissionMode === 'bypassPermissions' ? ['--dangerously-skip-permissions'] : ['--permission-mode', seat.permissionMode]),
   ...(resume ? ['--resume', resume] : []),
   ...(seat.model ? ['--model', seat.model] : []),
   // The seat's own Agent Office tools never need a prompt: nobody is there to answer one.

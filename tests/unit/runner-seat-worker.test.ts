@@ -9,7 +9,7 @@ import { SeatWorker, type WorkerDeps } from '../../src/connector/runner/seat-wor
 import { SessionStore } from '../../src/connector/session-store.js';
 import type { RunnerLogEntry, RunnerSeat } from '../../src/shared/contracts.js';
 
-const seat: SeatConfig = { seatId: 'dev-be', cwd: '/repo', permissionMode: 'acceptEdits', autoStart: true };
+const seat: SeatConfig = { seatId: 'dev-be', cwd: '/repo', permissionMode: 'acceptEdits', autoStart: true, showWindow: false };
 
 /** A scripted stand-in for `claude -p`: records what the worker writes and lets the test emit stream-json events. */
 const harness = (listen: WorkerDeps['listen'] = async () => null, savedSession: string | null = null) => {
@@ -102,4 +102,21 @@ test('interrupt, prompt and stop commands', async () => {
   assert.ok(logs.some(entry => entry.kind === 'prompt' && entry.summary === 'please run the tests'));
   assert.deepEqual(await worker.stop(), { ok: true, message: 'stopped' });
   assert.equal(worker.snapshot().state, 'stopped');
+});
+
+test('bypassPermissions seats run with --dangerously-skip-permissions', () => {
+  assert.deepEqual(claudeArgs({ ...seat, permissionMode: 'bypassPermissions' }, null), ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--allowedTools', 'mcp__agent-office']);
+});
+
+test('the desktop live view renders prompts, wakes, replies, tools and results, and hides subagent chatter', async () => {
+  const { renderEntry } = await import('../../src/connector/runner/session-watch.js');
+  const plain = (lines: string[]): string => lines.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+  const at = '2026-10-28T10:00:00.000Z';
+  assert.match(plain(renderEntry(JSON.stringify({ type: 'user', timestamp: at, message: { content: 'run the tests' } }))), /› run the tests/);
+  assert.match(plain(renderEntry(JSON.stringify({ type: 'user', timestamp: at, message: { content: '[Agent Office] 1 new item(s) for @dev-be' } }))), /⚑ \[Agent Office\] 1 new item/);
+  assert.match(plain(renderEntry(JSON.stringify({ type: 'assistant', timestamp: at, message: { content: [{ type: 'text', text: 'On it.' }, { type: 'tool_use', name: 'Bash', input: { command: 'npm test' } }] } }))), /● On it\.\n.*⏺ Bash\(npm test\)/);
+  assert.match(plain(renderEntry(JSON.stringify({ type: 'user', timestamp: at, message: { content: [{ type: 'tool_result', content: 'a\nb\nc\nd\ne\nf' }] } }))), /⎿ a\n\s+b\n\s+c\n\s+d … \+2 lines/);
+  assert.deepEqual(renderEntry(JSON.stringify({ type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: 'sub' }] } })), []);
+  assert.deepEqual(renderEntry(JSON.stringify({ type: 'attachment' })), []);
+  assert.deepEqual(renderEntry('not json'), []);
 });

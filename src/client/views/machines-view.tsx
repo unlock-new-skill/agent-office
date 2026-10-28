@@ -8,8 +8,8 @@ type Props = { state: OfficeState; api: Api; notify: (text: string) => void };
 type Install = { code: string; expiresAt: number; commands: { unix: string; windows: string } };
 
 const MODES: Array<{ value: MachineSeat['permissionMode']; label: string }> = [
-  { value: 'acceptEdits', label: 'Tự sửa file, shell hỏi web' }, { value: 'default', label: 'Mọi thứ hỏi web' },
-  { value: 'plan', label: 'Chỉ lập kế hoạch' }, { value: 'bypassPermissions', label: 'Cho phép tất cả (rủi ro)' },
+  { value: 'bypassPermissions', label: 'Bỏ qua mọi quyền (mặc định)' }, { value: 'acceptEdits', label: 'Tự sửa file, shell hỏi web' },
+  { value: 'default', label: 'Mọi thứ hỏi web' }, { value: 'plan', label: 'Chỉ lập kế hoạch' },
 ];
 const STATE_LABEL: Record<string, string> = { starting: 'starting', running: 'working', idle: 'listening', stopped: 'stopped', failed: 'failed' };
 const shortPath = (value: string): string => value.split(/[\\/]/).filter(Boolean).slice(-2).join('/') || value;
@@ -58,7 +58,7 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
   const addSeat = (): void => {
     const free = orgSeats.find(seat => !seatsElsewhere.has(seat.id) && !draft.some(row => row.seatId === seat.id));
     if (!free) { notify('Không còn ghế trống để thêm.'); return; }
-    setDraft([...draft, { seatId: free.id, cwd: '', permissionMode: 'acceptEdits', sessionId: null, autoStart: true }]); setDirty(true);
+    setDraft([...draft, { seatId: free.id, cwd: '', permissionMode: 'bypassPermissions', sessionId: null, autoStart: true, showWindow: true }]); setDirty(true);
   };
   const save = (): void => {
     if (draft.some(seat => !seat.cwd.trim())) { notify('Điền thư mục repo cho mọi ghế.'); return; }
@@ -97,9 +97,9 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
       )}
 
       <table className="machine-seats">
-        <thead><tr><th>Ghế</th><th>Thư mục repo</th><th>Quyền</th><th>Session</th><th>Tự chạy</th><th>Trạng thái</th><th><span className="sr-only">Xoá</span></th></tr></thead>
+        <thead><tr><th>Ghế</th><th>Thư mục repo</th><th>Quyền</th><th>Session</th><th>Tự chạy</th><th title="Mở cửa sổ Terminal trên máy để xem session trực tiếp">Cửa sổ</th><th>Trạng thái</th><th><span className="sr-only">Xoá</span></th></tr></thead>
         <tbody>
-          {draft.length === 0 && <tr><td colSpan={7} className="muted">Chưa có ghế. Bấm "+ Thêm ghế".</td></tr>}
+          {draft.length === 0 && <tr><td colSpan={8} className="muted">Chưa có ghế. Bấm "+ Thêm ghế".</td></tr>}
           {draft.map((seat, index) => {
             const live = status(seat.seatId); const chosen = sessions.find(session => session.sessionId === seat.sessionId);
             return (
@@ -124,6 +124,7 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
                   {chosen && chosen.project !== seat.cwd && <button type="button" className="link-btn" onClick={() => edit(index, { cwd: chosen.project })}>Dùng thư mục của session</button>}
                 </td>
                 <td data-label="Tự chạy"><input type="checkbox" aria-label="Tự chạy khi runner khởi động" checked={seat.autoStart} onChange={event => edit(index, { autoStart: event.target.checked })} /></td>
+                <td data-label="Cửa sổ"><input type="checkbox" aria-label="Mở cửa sổ theo dõi session trên desktop của máy" checked={seat.showWindow !== false} onChange={event => edit(index, { showWindow: event.target.checked })} /></td>
                 <td data-label="Trạng thái" className={`runner-state state-${live?.state ?? 'stopped'}`}>{live ? STATE_LABEL[live.state] ?? live.state : '—'}{live?.state === 'failed' && live.detail ? <span className="machine-detail muted">{live.detail}</span> : null}</td>
                 <td><button type="button" className="icon-btn" aria-label={`Bỏ ghế ${seat.seatId} khỏi máy này`} onClick={() => { setDraft(draft.filter((_, at) => at !== index)); setDirty(true); }}>✕</button></td>
               </tr>

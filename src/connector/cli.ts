@@ -9,6 +9,8 @@ import { startMcpServer } from './mcp-server.js';
 import { loadRunnerConfig, runnerConfigFile, sampleConfig } from './runner/runner-config.js';
 import { installService, restartServiceIfInstalled, uninstallService } from './runner/runner-service-install.js';
 import { Runner } from './runner/runner.js';
+import { runWatch } from './runner/session-watch.js';
+import { closeWatchWindow, openWatchWindow } from './runner/watch-window.js';
 import { SessionStore } from './session-store.js';
 
 /**
@@ -118,13 +120,18 @@ const runner = async (): Promise<void> => {
     process.stdout.write(`Wrote ${file}. Seats are best managed on the web (Machines). allowedRoots lists the folders web-managed seats may use; for a machine not managed on the web add seats: [{"seatId": "dev-be", "cwd": "/absolute/path/to/repo"}].\n`);
     return;
   }
+  if (rest[0] === 'watch') {
+    const seatId = rest[1];
+    if (!seatId || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(seatId)) throw new Error('usage: agent-office.mjs runner watch <seat-id>');
+    await runWatch(store, seatId); return;
+  }
   if (rest[0] === 'uninstall-service') { process.stdout.write(`${uninstallService(self, store.home)}\n`); return; }
   if (!store.connector()) throw new Error('not installed: run the install command from the web UI (Connect machine) first.');
   if (rest[0] === 'install-service') {
     loadRunnerConfig(store);
     process.stdout.write(`${installService(self, store.home)}\n`); return;
   }
-  const active = new Runner({ store, fetch, config: loadRunnerConfig(store), out: line => process.stdout.write(`${new Date().toISOString()} ${line}\n`) });
+  const active = new Runner({ store, fetch, config: loadRunnerConfig(store), openWatch: seatId => openWatchWindow(store, seatId, self), closeWatch: seatId => closeWatchWindow(store, seatId), out: line => process.stdout.write(`${new Date().toISOString()} ${line}\n`) });
   const shutdown = (): void => { void active.close().finally(() => process.exit(0)); };
   process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
   await active.run();
@@ -147,4 +154,4 @@ else if (mode === 'update') await update().catch(error => { process.stderr.write
 else if (mode === 'sync-hooks') syncHooks();
 else if (mode === 'uninstall') uninstall();
 else if (mode === 'runner') await runner().catch(error => { process.stderr.write(`agent-office runner: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
-else { process.stderr.write('usage: agent-office.mjs hook | mcp | install --url <url> --code <code> | update | sync-hooks | uninstall | runner [init | install-service | uninstall-service]\n'); process.exitCode = 2; }
+else { process.stderr.write('usage: agent-office.mjs hook | mcp | install --url <url> --code <code> | update | sync-hooks | uninstall | runner [init | watch <seat> | install-service | uninstall-service]\n'); process.exitCode = 2; }

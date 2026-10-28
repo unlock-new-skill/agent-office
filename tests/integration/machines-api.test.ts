@@ -24,7 +24,7 @@ test('machines: install code binds the connector, config is validated and versio
   const sessions = await (await fixture.manager(`/v1/machines/${machine.id}/sessions`)).json() as { sessions: MachineSession[] };
   assert.deepEqual(sessions.sessions.map(session => [session.sessionId, session.project, session.ended]), [['sess-abc', '/Users/me/game', false]]);
 
-  const seat = { seatId: 'dev-be', cwd: '/Users/me/game', permissionMode: 'acceptEdits', sessionId: 'sess-abc', autoStart: true };
+  const seat = { seatId: 'dev-be', cwd: '/Users/me/game', permissionMode: 'acceptEdits', sessionId: 'sess-abc', autoStart: true, showWindow: false };
   assert.equal((await fixture.manager(`/v1/machines/${machine.id}/config`, { method: 'PUT', body: { seats: [{ ...seat, seatId: 'ghost' }] } })).status, 404);
   assert.equal((await fixture.manager(`/v1/machines/${machine.id}/config`, { method: 'PUT', body: { seats: [seat, seat] } })).status, 400);
   assert.equal((await fixture.manager(`/v1/machines/${machine.id}/config`, { method: 'PUT', body: { seats: [{ ...seat, cwd: 'relative/path' }] } })).status, 400);
@@ -69,8 +69,8 @@ test('runner applies the web config live: add, restart on change, refuse folders
   await until(() => fixture.office.runners.views().some(view => view.id === machine.id && view.online));
 
   fixture.office.runners.setConfig(machine.id, [
-    { seatId: 'dev-be', cwd: '/allowed/game', permissionMode: 'acceptEdits', sessionId: 'sess-from-terminal', autoStart: true },
-    { seatId: 'dev-fe', cwd: '/etc', permissionMode: 'acceptEdits', sessionId: null, autoStart: true },
+    { seatId: 'dev-be', cwd: '/allowed/game', permissionMode: 'acceptEdits', sessionId: 'sess-from-terminal', autoStart: true, showWindow: false },
+    { seatId: 'dev-fe', cwd: '/etc', permissionMode: 'acceptEdits', sessionId: null, autoStart: true, showWindow: false },
   ]);
   await until(() => spawned.some(record => record.seatId === 'dev-be'));
   assert.deepEqual(spawned.map(record => [record.seatId, record.cwd, record.resume]), [['dev-be', '/allowed/game', 'sess-from-terminal']]);
@@ -78,7 +78,7 @@ test('runner applies the web config live: add, restart on change, refuse folders
   await until(() => seats().find(seat => seat.seatId === 'dev-fe')?.state === 'failed');
   assert.match(seats().find(seat => seat.seatId === 'dev-fe')!.detail, /outside the folders/);
 
-  fixture.office.runners.setConfig(machine.id, [{ seatId: 'dev-be', cwd: '/allowed/game-v2', permissionMode: 'acceptEdits', sessionId: 'sess-from-terminal', autoStart: true }]);
+  fixture.office.runners.setConfig(machine.id, [{ seatId: 'dev-be', cwd: '/allowed/game-v2', permissionMode: 'acceptEdits', sessionId: 'sess-from-terminal', autoStart: true, showWindow: false }]);
   await until(() => spawned.length === 2);
   assert.equal(spawned[0]!.closed, true, 'the old process was stopped');
   assert.equal(spawned[1]!.cwd, '/allowed/game-v2');
@@ -92,7 +92,35 @@ test('runner applies the web config live: add, restart on change, refuse folders
 
 test('a local seat with a missing folder is reported as failed instead of stopping the runner', () => {
   const store = new SessionStore(mkdtempSync(path.join(tmpdir(), 'ao-badlocal-')));
-  const runner = new Runner({ store, fetch, out: () => undefined, config: { seats: [{ seatId: 'dev-be', cwd: '/Users/me/projects/game-server', permissionMode: 'acceptEdits', autoStart: true }] } });
+  const runner = new Runner({ store, fetch, out: () => undefined, config: { seats: [{ seatId: 'dev-be', cwd: '/Users/me/projects/game-server', permissionMode: 'acceptEdits', autoStart: true, showWindow: false }] } });
   const status = (runner as unknown as { statuses: Map<string, { state: string; detail: string }> }).statuses.get('dev-be')!;
   assert.equal(status.state, 'failed'); assert.match(status.detail, /folder not found/);
+});
+
+test('the runner opens the desktop live view when a seat starts and follows the web switch', async () => {
+  const fixture = createAppFixture();
+  const appFetch = ((input: string | URL | Request, init?: RequestInit) => Promise.resolve(fixture.app.request(String(input), init))) as typeof fetch;
+  const machine = fixture.office.runners.createMachine('Desk');
+  const store = new SessionStore(mkdtempSync(path.join(tmpdir(), 'ao-window-')));
+  store.saveConnector({ daemonUrl: `http://${HOST}`, token: fixture.auth.createConnectorCredential(machine.id).token });
+  const windows: string[] = [];
+  const runner = new Runner({
+    store, fetch: appFetch, out: () => undefined, config: { seats: [] }, sleep: () => new Promise(resolve => setTimeout(resolve, 5)), checkCwd: () => null,
+    openWatch: seatId => { windows.push(`open ${seatId}`); return null; }, closeWatch: seatId => { windows.push(`close ${seatId}`); },
+    spawn: (_seat, _resume, onEvent) => ({ send: () => undefined, interrupt: () => undefined, close: () => onEvent({ kind: 'exit', code: 0, stderr: '' }), kill: () => undefined }),
+  });
+  const running = runner.run();
+  const until = async (check: () => boolean): Promise<void> => { for (let i = 0; i < 400 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 5)); assert.ok(check(), JSON.stringify(windows)); };
+  try {
+    await until(() => fixture.office.runners.views().some(view => view.id === machine.id && view.online));
+    const seat = { seatId: 'dev-be', cwd: '/allowed/game', permissionMode: 'bypassPermissions' as const, sessionId: null, autoStart: true, showWindow: true };
+    fixture.office.runners.setConfig(machine.id, [seat]);
+    await until(() => windows.includes('open dev-be'));
+    fixture.office.runners.setConfig(machine.id, [{ ...seat, showWindow: false }]);
+    await until(() => windows.includes('close dev-be'));
+    fixture.office.runners.setConfig(machine.id, [{ ...seat, showWindow: true }]);
+    await until(() => windows.filter(entry => entry === 'open dev-be').length === 2);
+  } finally {
+    await runner.close(); fixture.office.runners.close(); await running; fixture.close();
+  }
 });

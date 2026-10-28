@@ -145,12 +145,12 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
         <ol>
           <li>Tạo file cấu hình mẫu: {cmd(connector(os, 'runner init'))}</li>
           <li>Sửa {cmd(os === 'windows' ? `notepad ${RUNNER_JSON.windows}` : `open -e ${RUNNER_JSON.unix}   # Linux: nano ${RUNNER_JSON.unix}`)}
-            liệt kê các ghế máy này chạy — <code>seatId</code> và đường dẫn tuyệt đối tới repo (<code>cwd</code>). Mặc định <code>"permissionMode": "acceptEdits"</code>: tự sửa file, lệnh shell chờ duyệt trên web/Telegram (hết giờ thì từ chối). Server không thể đổi danh sách hay đường dẫn này.</li>
+            liệt kê các ghế máy này chạy — <code>seatId</code> và đường dẫn tuyệt đối tới repo (<code>cwd</code>). Mặc định chạy với <code>--dangerously-skip-permissions</code> (không hỏi quyền); đặt <code>"permissionMode": "acceptEdits"</code> nếu muốn lệnh shell chờ duyệt trên web/Telegram.</li>
           <li>Chạy thử ở terminal (Ctrl+C để dừng): {cmd(connector(os, 'runner'))}</li>
           <li>Cài thành service tự chạy khi đăng nhập: {cmd(connector(os, 'runner install-service'))}
             <span className="muted">Gỡ: <code>runner uninstall-service</code>. Lệnh <code>update</code> tự khởi động lại service. Linux: chạy thêm <code>loginctl enable-linger $USER</code> để chạy cả khi đăng xuất.</span></li>
         </ol>
-        <p className="muted">Ghế chạy bằng runner không có terminal để gõ — điều khiển và duyệt quyền qua web hoặc Telegram. Một máy có thể vừa có ghế runner vừa có ghế mở tay (bước 3), miễn là không trùng ghế.</p>
+        <p className="muted">Mỗi ghế mở một cửa sổ Terminal trên desktop của máy để xem session trực tiếp (chỉ xem; tắt bằng cột <strong>Cửa sổ</strong> ở Machines, mở tay: <code>runner watch &lt;seat&gt;</code>). Muốn tự gõ vào session: Stop trên web → <code>claude --resume &lt;session-id&gt;</code> → thoát → Start. Ghế chạy bằng runner điều khiển qua web hoặc Telegram. Một máy có thể vừa có ghế runner vừa có ghế mở tay (bước 3), miễn là không trùng ghế.</p>
       </section>
 
       <section className="setup-step">

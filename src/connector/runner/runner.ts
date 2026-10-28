@@ -10,6 +10,8 @@ import { SeatWorker, type CommandResult, type Listen } from './seat-worker.js';
 export type RunnerDeps = {
   store: SessionStore; fetch: typeof fetch; config: RunnerConfig; out: (line: string) => void;
   spawn?: SpawnClaude; sleep?: (ms: number) => Promise<void>; machine?: string; checkCwd?: (cwd: string) => string | null;
+  /** Desktop live-view window for a seat (`runner watch`); returns why none was opened, or null. */
+  openWatch?: (seatId: string) => string | null; closeWatch?: (seatId: string) => void;
 };
 
 const POLL_SECONDS = 60; const FLUSH_MS = 1000; const MAX_QUEUED_LOGS = 500;
@@ -55,7 +57,7 @@ export class Runner {
 
   /** Starts auto-start seats, then keeps the command and report loops running until close(). */
   async run(): Promise<void> {
-    for (const seat of this.deps.config.seats) if (seat.autoStart) this.workers.get(seat.seatId)?.start();
+    for (const seat of this.deps.config.seats) { const worker = this.workers.get(seat.seatId); if (seat.autoStart && worker) this.startSeat(worker); }
     if (this.workers.size === 0) this.deps.out('no seats yet: add them for this machine on the web (Machines)');
     await Promise.all([this.commandLoop(), this.flushLoop()]);
   }
@@ -82,7 +84,15 @@ export class Runner {
         const before = this.applied.get(seat.seatId); this.applied.set(seat.seatId, seat);
         const worker = this.workers.get(seat.seatId);
         const changed = !before || before.cwd !== seat.cwd || before.permissionMode !== seat.permissionMode || before.sessionId !== seat.sessionId;
-        if (worker && !changed) continue;
+        if (worker && !changed) {
+          // Only the window switch changed: open or close the live view without touching the session.
+          if (before?.showWindow !== seat.showWindow) {
+            (worker.seat as { showWindow: boolean }).showWindow = seat.showWindow;
+            if (!seat.showWindow) this.deps.closeWatch?.(seat.seatId);
+            else if (!['stopped', 'failed'].includes(worker.snapshot().state)) this.openWatch(seat.seatId);
+          }
+          continue;
+        }
         const problem = (this.deps.checkCwd ?? cwdProblem)(seat.cwd);
         const wasRunning = worker ? !['stopped', 'failed'].includes(worker.snapshot().state) : false;
         if (worker) { await worker.stop(); this.workers.delete(seat.seatId); }
@@ -91,12 +101,24 @@ export class Runner {
           this.deps.out(`[${seat.seatId}] ${problem}`); continue;
         }
         if (seat.sessionId && seat.sessionId !== before?.sessionId) this.state.setSessionId(seat.seatId, seat.sessionId);
-        const added = this.addWorker({ seatId: seat.seatId, cwd: seat.cwd, permissionMode: seat.permissionMode, autoStart: seat.autoStart });
-        if (wasRunning || seat.autoStart) added.start();
+        const added = this.addWorker({ seatId: seat.seatId, cwd: seat.cwd, permissionMode: seat.permissionMode, autoStart: seat.autoStart, showWindow: seat.showWindow });
+        if (wasRunning || seat.autoStart) this.startSeat(added);
       }
       this.lastStatus = '';
     }).catch(error => this.deps.out(`could not apply the web config: ${error instanceof Error ? error.message : String(error)}`));
     return this.applying;
+  }
+
+  /** Starts a seat and, when its config asks for it, opens the desktop live view (once; it follows later restarts). */
+  private startSeat(worker: SeatWorker): CommandResult {
+    const result = worker.start();
+    if (result.ok && worker.seat.showWindow) this.openWatch(worker.seat.seatId);
+    return result;
+  }
+
+  private openWatch(seatId: string): void {
+    const why = this.deps.openWatch?.(seatId) ?? null;
+    if (why && why !== 'already open') this.deps.out(`[${seatId}] no live-view window: ${why}`);
   }
 
   private addWorker(seat: SeatConfig): SeatWorker {
@@ -115,9 +137,9 @@ export class Runner {
     const worker = this.workers.get(command.seatId);
     if (!worker) return { ok: false, message: this.statuses.get(command.seatId)?.detail ?? `seat ${command.seatId} is not configured on this machine` };
     switch (command.kind) {
-      case 'start': return worker.start();
+      case 'start': return this.startSeat(worker);
       case 'stop': return worker.stop();
-      case 'restart': return worker.restart();
+      case 'restart': { const result = await worker.restart(); if (result.ok && worker.seat.showWindow) this.openWatch(worker.seat.seatId); return result; }
       case 'interrupt': return worker.interrupt();
       case 'prompt': return command.text?.trim() ? worker.prompt(command.text) : { ok: false, message: 'empty prompt' };
       default: return { ok: false, message: 'unknown command' };
