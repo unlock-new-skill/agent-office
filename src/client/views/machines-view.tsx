@@ -112,14 +112,12 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
                   {MODES.map(mode => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
                 </select></td>
                 <td data-label="Session">
-                  <select aria-label="Session để tiếp tục" value={seat.sessionId ?? ''} onChange={event => {
-                    const picked = sessions.find(session => session.sessionId === event.target.value);
-                    edit(index, { sessionId: event.target.value || null, ...(picked && !seat.cwd ? { cwd: picked.project } : {}) });
-                  }}>
-                    <option value="">Tự quản lý (mới hoặc session runner đang dùng)</option>
-                    {seat.sessionId && !chosen && <option value={seat.sessionId}>{seat.sessionId.slice(0, 8)}</option>}
-                    {sessions.map(session => <option key={session.sessionId} value={session.sessionId}>{shortPath(session.project)} · {session.sessionId.slice(0, 8)}{session.seatId ? ` · @${session.seatId}` : ''}{session.ended ? ' · đã đóng' : ' · đang mở'}</option>)}
-                  </select>
+                  <input aria-label="Session để tiếp tục (chọn hoặc dán session id)" list={`sessions-${runner.id}`} value={seat.sessionId ?? ''} placeholder="Trống = tự quản lý · dán session id để tiếp tục"
+                    onChange={event => {
+                      const value = event.target.value.trim();
+                      const picked = sessions.find(session => session.sessionId === value);
+                      edit(index, { sessionId: value || null, ...(picked && !seat.cwd ? { cwd: picked.project } : {}) });
+                    }} />
                   {chosen && !chosen.ended && <span className="machine-warn">Session đang mở ở một terminal — khi lưu, hệ thống tự đóng Claude ở terminal đó (sau lượt đang chạy) rồi runner chạy tiếp session này.</span>}
                   {chosen && chosen.project !== seat.cwd && <button type="button" className="link-btn" onClick={() => edit(index, { cwd: chosen.project })}>Dùng thư mục của session</button>}
                 </td>
@@ -132,6 +130,7 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
           })}
         </tbody>
       </table>
+      <datalist id={`sessions-${runner.id}`}>{sessions.map(session => <option key={session.sessionId} value={session.sessionId}>{shortPath(session.project)}{session.seatId ? ` · @${session.seatId}` : ''}{session.ended ? ' · đã đóng' : ' · đang mở'}</option>)}</datalist>
       <datalist id={`cwd-${runner.id}`}>{[...new Set(sessions.map(session => session.project))].map(project => <option key={project} value={project} />)}</datalist>
       <div className="row-actions">
         <button type="button" className="btn btn-small" onClick={addSeat}>+ Thêm ghế</button>
