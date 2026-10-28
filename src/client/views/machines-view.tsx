@@ -120,7 +120,7 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
                     {seat.sessionId && !chosen && <option value={seat.sessionId}>{seat.sessionId.slice(0, 8)}</option>}
                     {sessions.map(session => <option key={session.sessionId} value={session.sessionId}>{shortPath(session.project)} · {session.sessionId.slice(0, 8)}{session.seatId ? ` · @${session.seatId}` : ''}{session.ended ? ' · đã đóng' : ' · đang mở'}</option>)}
                   </select>
-                  {chosen && !chosen.ended && <span className="machine-warn">Session đang mở ở một terminal — đóng terminal đó trước khi lưu.</span>}
+                  {chosen && !chosen.ended && <span className="machine-warn">Session đang mở ở một terminal — khi lưu, hệ thống tự đóng Claude ở terminal đó (sau lượt đang chạy) rồi runner chạy tiếp session này.</span>}
                   {chosen && chosen.project !== seat.cwd && <button type="button" className="link-btn" onClick={() => edit(index, { cwd: chosen.project })}>Dùng thư mục của session</button>}
                 </td>
                 <td data-label="Tự chạy"><input type="checkbox" aria-label="Tự chạy khi runner khởi động" checked={seat.autoStart} onChange={event => edit(index, { autoStart: event.target.checked })} /></td>

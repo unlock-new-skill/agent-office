@@ -39,6 +39,9 @@ export class Runner {
   private closed = false;
   private configVersion = 0;
   private applying: Promise<void> = Promise.resolve();
+  /** Bumped per seat on every start/stop so an older wait-for-free-seat loop gives up. */
+  private readonly launches = new Map<string, number>();
+  private localStarted = false;
 
   constructor(private readonly deps: RunnerDeps) {
     this.state = new RunnerState(deps.store);
@@ -57,7 +60,6 @@ export class Runner {
 
   /** Starts auto-start seats, then keeps the command and report loops running until close(). */
   async run(): Promise<void> {
-    for (const seat of this.deps.config.seats) { const worker = this.workers.get(seat.seatId); if (seat.autoStart && worker) this.startSeat(worker); }
     if (this.workers.size === 0) this.deps.out('no seats yet: add them for this machine on the web (Machines)');
     await Promise.all([this.commandLoop(), this.flushLoop()]);
   }
@@ -109,11 +111,35 @@ export class Runner {
     return this.applying;
   }
 
-  /** Starts a seat and, when its config asks for it, opens the desktop live view (once; it follows later restarts). */
+  /**
+   * Starts a seat once nothing blocks it: the session it resumes must not still run in a terminal (a takeover asks it
+   * to close) and no other live session may hold the seat. While blocked the seat shows why; when the daemon cannot be
+   * asked, the seat starts anyway. Opens the desktop live view when the seat's config asks for it.
+   */
   private startSeat(worker: SeatWorker): CommandResult {
+    const seatId = worker.seat.seatId; const launch = (this.launches.get(seatId) ?? 0) + 1;
+    this.launches.set(seatId, launch);
+    void this.launchWhenFree(worker, launch);
+    return { ok: true, message: 'starting' };
+  }
+
+  private async launchWhenFree(worker: SeatWorker, launch: number): Promise<void> {
+    const seatId = worker.seat.seatId;
+    const current = (): boolean => !this.closed && this.workers.get(seatId) === worker && this.launches.get(seatId) === launch;
+    while (current()) {
+      const sessionId = this.state.sessionId(seatId);
+      const check = await this.call<{ sessionLive: boolean; takeover: boolean; holder: string | null }>(`/v1/runners/me/seat-check?seatId=${seatId}${sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : ''}`).catch(() => null);
+      if (!check || (!check.sessionLive && !check.holder)) break;
+      const detail = check.sessionLive
+        ? check.takeover ? `closing the terminal that still runs session ${sessionId!.slice(0, 8)} (it finishes its current turn first)` : `session ${sessionId!.slice(0, 8)} is still open in a terminal: close it, or save the seat again on the web to take it over`
+        : `seat held by live session ${check.holder!.slice(0, 8)} in another terminal: close it, or pick it in the Session column to take it over`;
+      const status: RunnerSeat = { ...worker.snapshot(), state: 'starting', detail };
+      if (this.statuses.get(seatId)?.detail !== detail) { this.statuses.set(seatId, status); this.deps.out(`[${seatId}] waiting: ${detail}`); }
+      await this.sleep(5000);
+    }
+    if (!current()) return;
     const result = worker.start();
-    if (result.ok && worker.seat.showWindow) this.openWatch(worker.seat.seatId);
-    return result;
+    if (result.ok && worker.seat.showWindow) this.openWatch(seatId);
   }
 
   private openWatch(seatId: string): void {
@@ -138,8 +164,8 @@ export class Runner {
     if (!worker) return { ok: false, message: this.statuses.get(command.seatId)?.detail ?? `seat ${command.seatId} is not configured on this machine` };
     switch (command.kind) {
       case 'start': return this.startSeat(worker);
-      case 'stop': return worker.stop();
-      case 'restart': { const result = await worker.restart(); if (result.ok && worker.seat.showWindow) this.openWatch(worker.seat.seatId); return result; }
+      case 'stop': this.launches.set(command.seatId, (this.launches.get(command.seatId) ?? 0) + 1); return worker.stop();
+      case 'restart': await worker.stop(); return this.startSeat(worker);
       case 'interrupt': return worker.interrupt();
       case 'prompt': return command.text?.trim() ? worker.prompt(command.text) : { ok: false, message: 'empty prompt' };
       default: return { ok: false, message: 'unknown command' };
@@ -159,6 +185,11 @@ export class Runner {
       await this.workers.get(seatId)?.stop(); this.workers.delete(seatId); this.statuses.delete(seatId);
     }
     this.registered = true; this.lastStatus = JSON.stringify([...this.statuses.values()]);
+    // Local runner.json seats start after the first registration, so the daemon can say whether their seat is free.
+    if (!this.localStarted) {
+      this.localStarted = true;
+      for (const seat of this.deps.config.seats) { const worker = this.workers.get(seat.seatId); if (seat.autoStart && worker) this.startSeat(worker); }
+    }
     await this.applyConfig(config);
   }
 

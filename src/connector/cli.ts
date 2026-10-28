@@ -39,6 +39,17 @@ const parentAlive = (): (() => boolean) => {
   };
 };
 
+/**
+ * Ends the Claude Code process this hook belongs to (CLAUDE_PID, else the parent) so a runner can resume its session.
+ * SIGTERM lets Claude Code exit normally and run its SessionEnd hook.
+ */
+const closeClaude = (): void => {
+  const pid = Number(process.env.CLAUDE_PID ?? process.ppid);
+  if (!Number.isInteger(pid) || pid <= 1) return;
+  process.stderr.write('agent-office: a runner is taking over this session; closing Claude Code here.\n');
+  try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+};
+
 const readStdin = async (): Promise<string> => { let text = ''; for await (const chunk of process.stdin) text += String(chunk); return text; };
 
 const readSettings = (): ClaudeSettings => {
@@ -143,7 +154,7 @@ if (mode === 'hook') {
   const output = await runHook(raw, {
     store: new SessionStore(), fetch, wakeWaitSeconds: Math.min(numberEnv('AGENT_OFFICE_WAKE_WAIT_SECONDS', LISTEN_SECONDS) || LISTEN_SECONDS, LISTEN_SECONDS),
     requestedSeat: process.env.AGENT_OFFICE_SEAT || undefined, permissionWaitSeconds: Math.min(numberEnv('AGENT_OFFICE_PERMISSION_WAIT_SECONDS', 120), 580),
-    alive: parentAlive(), runnerManaged: process.env.AGENT_OFFICE_RUNNER === '1',
+    alive: parentAlive(), runnerManaged: process.env.AGENT_OFFICE_RUNNER === '1', onTakeover: closeClaude,
   });
   // A background Stop hook (asyncRewake) wakes Claude only through exit code 2, with the reason on stderr.
   if (output.decision === 'block' && typeof output.reason === 'string') { process.stderr.write(`${output.reason}\n`); process.exitCode = 2; }

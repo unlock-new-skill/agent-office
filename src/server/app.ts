@@ -119,6 +119,7 @@ export const createApp = (context: AppContext): Hono => {
       // A prompt written by Agent Office (runner wake) is not a human taking over: keep the auto-wake guard counting.
       if (body.kind === 'turn.start' && body.summary !== AUTO_TURN_SUMMARY) context.office.wake.resetGuardForAgent(credential.agentId);
       if (body.kind === 'turn.start' || body.kind === 'session.end') context.office.permissions.settleForAgent(credential.agentId);
+      if (body.kind === 'session.end') context.office.runners.clearTakeover(credential.agentId);
       return c.json(event, 201);
     } catch (error) {
       if (error instanceof z.ZodError || error instanceof SyntaxError) return jsonError('invalid_request', 400);

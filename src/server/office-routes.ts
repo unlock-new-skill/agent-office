@@ -115,12 +115,23 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
     });
   });
 
-  app.get('/v1/wake', c => withActor(c, async ({ actor }) => {
+  app.get('/v1/wake', c => {
+    // A live session is one that keeps asking; a session picked on the web for a runner is told to close first.
+    const credential = auth.authenticateBearer(c.req.raw);
+    if (credential) {
+      office.touchAgent(credential.agentId);
+      // Listeners that understand takeovers close Claude themselves; older ones get one short turn, after which the
+      // next Stop hook runs the current connector and closes it.
+      if (office.runners.isTakenOver(credential.agentId)) return c.json(c.req.query('takeover') === '1' ? { wake: false, state: 'taken_over' } : { wake: true, reason: '[Agent Office] A runner is taking over this session. End your turn now without doing anything else.' });
+    }
+    return wakeRoute(c);
+  });
+  const wakeRoute = (c: Context): Promise<Response> => withActor(c, async ({ actor }) => {
     if (actor.kind !== 'seat') return json('seat_only', 403);
     const { wait } = z.object({ wait: z.coerce.number().int().min(0).max(deps.wakeWaitSeconds).default(0) }).parse(c.req.query());
     const result = await office.wake.wait(actor.seatId, wait * 1000, c.req.raw.signal);
     return c.json(result.wake ? { wake: true, reason: result.reason, items: result.items } : result);
-  }));
+  });
 
   // Remote permission approval: the agent's hook files a prompt and long-polls; the manager answers from the UI.
   app.post('/v1/permissions', async c => {

@@ -124,3 +124,49 @@ test('the runner opens the desktop live view when a seat starts and follows the 
     await runner.close(); fixture.office.runners.close(); await running; fixture.close();
   }
 });
+
+test('takeover: a session still open in a terminal is told to close, then the runner resumes it; a seat held by another session waits', async () => {
+  const fixture = createAppFixture();
+  const appFetch = ((input: string | URL | Request, init?: RequestInit) => Promise.resolve(fixture.app.request(String(input), init))) as typeof fetch;
+  const machine = fixture.office.runners.createMachine('Desk');
+  const connectorToken = fixture.auth.createConnectorCredential(machine.id).token;
+  // An interactive session on this machine that currently holds @dev-be.
+  const terminal = fixture.auth.registerSession({ sessionId: 'sess-terminal', project: '/allowed/game' }, machine.id);
+  fixture.office.org.assignAgent('dev-be', terminal.agentId);
+  // Another live session holding @dev-fe.
+  const other = fixture.auth.registerSession({ sessionId: 'sess-other', project: '/allowed/web' }, machine.id);
+  fixture.office.org.assignAgent('dev-fe', other.agentId);
+
+  const store = new SessionStore(mkdtempSync(path.join(tmpdir(), 'ao-takeover-')));
+  store.saveConnector({ daemonUrl: `http://${HOST}`, token: connectorToken });
+  const spawned: Array<{ seatId: string; resume: string | null }> = []; const lines: string[] = [];
+  const runner = new Runner({
+    store, fetch: appFetch, out: line => lines.push(line), config: { seats: [] }, checkCwd: () => null, sleep: () => new Promise(resolve => setTimeout(resolve, 5)),
+    spawn: (seat, resume, onEvent) => { spawned.push({ seatId: seat.seatId, resume }); return { send: () => undefined, interrupt: () => undefined, close: () => onEvent({ kind: 'exit', code: 0, stderr: '' }), kill: () => undefined }; },
+  });
+  const running = runner.run();
+  const until = async (check: () => boolean): Promise<void> => { for (let i = 0; i < 600 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 5)); assert.ok(check(), lines.join('\n')); };
+  try {
+    await until(() => fixture.office.runners.views().some(view => view.id === machine.id && view.online));
+    fixture.office.runners.setConfig(machine.id, [
+      { seatId: 'dev-be', cwd: '/allowed/game', permissionMode: 'bypassPermissions', sessionId: 'sess-terminal', autoStart: true, showWindow: false },
+      { seatId: 'dev-fe', cwd: '/allowed/web', permissionMode: 'bypassPermissions', sessionId: null, autoStart: true, showWindow: false },
+    ]);
+    await until(() => lines.some(line => line.includes('[dev-be] waiting: closing the terminal')) && lines.some(line => line.includes('[dev-fe] waiting: seat held by live session sess-oth')));
+    assert.equal(spawned.length, 0, 'nothing starts while the seats are taken');
+
+    // The terminal session's Stop-hook listener asks for work and is told to close.
+    const wake = await (await fixture.agent(terminal.token, '/v1/wake?wait=0&takeover=1')).json() as { state: string };
+    assert.equal(wake.state, 'taken_over');
+    const older = await (await fixture.agent(terminal.token, '/v1/wake?wait=0')).json() as { wake: boolean; reason: string };
+    assert.equal(older.wake, true, 'an older listener gets one short turn so the current hook takes over');
+    assert.match(older.reason, /taking over this session/);
+    await fixture.agent(terminal.token, '/v1/agents/events', { body: { id: 'e-end', ts: new Date().toISOString(), kind: 'session.end' } });
+    await until(() => spawned.some(record => record.seatId === 'dev-be'));
+    assert.deepEqual(spawned.find(record => record.seatId === 'dev-be'), { seatId: 'dev-be', resume: 'sess-terminal' });
+    assert.equal(fixture.office.runners.isTakenOver(terminal.agentId), false, 'the takeover flag is cleared once the terminal session ended');
+    assert.ok(!spawned.some(record => record.seatId === 'dev-fe'), 'dev-fe still waits for its holder');
+  } finally {
+    await runner.close(); fixture.office.runners.close(); await running; fixture.close();
+  }
+});

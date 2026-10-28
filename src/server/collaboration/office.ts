@@ -11,7 +11,7 @@ import { WakeService } from './wake-service.js';
 export type OfficeOptions = { maxAutoWakes: number; emit: (event: CollabEvent) => void; remoteApproval?: boolean };
 /** handoff = the seat's raw note; handoffBrief = note + open tasks + unread, ready to inject into a session's context. */
 export type WhoAmI = { agentId: string; seat: Seat | null; department: Department | null; channels: ChannelSummary[]; handoff: SeatHandoff | null; handoffBrief: string | null };
-export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; close: () => void };
+export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; close: () => void };
 
 /** Wires the collaboration services around one database and one realtime emitter. */
 export const createOffice = (db: Database, options: OfficeOptions): Office => {
@@ -31,5 +31,6 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
     const self = { kind: 'seat', seatId: seat.id } as const;
     return { agentId, seat, department: org.department(seat.departmentId), channels: messages.channelsForSeat(seat.id), handoff: handoffs.get(self, seat.id), handoffBrief: handoffs.brief(seat.id, options) };
   };
-  return { org, messages, wake: wakeService, tasks, handoffs, permissions, runners, whoami, close: () => { clearInterval(sweep); wakeService.close(); permissions.close(); runners.close(); } };
+  const touchAgent = (agentId: string): void => { db.raw.prepare('UPDATE agents SET last_contact_at=? WHERE id=?').run(Date.now(), agentId); };
+  return { org, messages, wake: wakeService, tasks, handoffs, permissions, runners, whoami, touchAgent, close: () => { clearInterval(sweep); wakeService.close(); permissions.close(); runners.close(); } };
 };

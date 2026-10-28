@@ -7,9 +7,10 @@ import type { SessionRecord, SessionStore } from './session-store.js';
 /**
  * requestedSeat: seat id or join URL from AGENT_OFFICE_SEAT, claimed on SessionStart. wakeWaitSeconds: how long one Stop
  * hook listens before a keep-alive turn. alive: false once the Claude Code process that started the hook is gone.
- * runnerManaged: the session runs headless under the runner, which delivers wakes itself.
+ * runnerManaged: the session runs headless under the runner, which delivers wakes itself. onTakeover: closes this
+ * Claude Code process because a runner was told on the web to resume this session.
  */
-export type HookDeps = { store: SessionStore; fetch: typeof fetch; wakeWaitSeconds: number; requestedSeat?: string | undefined; permissionWaitSeconds?: number; sleep?: (ms: number) => Promise<void>; now?: () => number; alive?: () => boolean; runnerManaged?: boolean };
+export type HookDeps = { store: SessionStore; fetch: typeof fetch; wakeWaitSeconds: number; requestedSeat?: string | undefined; permissionWaitSeconds?: number; sleep?: (ms: number) => Promise<void>; now?: () => number; alive?: () => boolean; runnerManaged?: boolean; onTakeover?: () => void };
 export type HookOutput = Record<string, unknown>;
 export type WhoAmI = { agentId: string; seat: { id: string; title: string; role: string; description: string } | null; department: { name: string; deputySeatId?: string | null } | null; channels: Array<{ id: string }>; handoffBrief?: string | null };
 
@@ -130,10 +131,11 @@ export const listenForWake = async (sessionId: string, cwd: string | undefined, 
     const wait = Math.min(POLL_SECONDS, remaining); const started = now();
     let delay = POLL_SECONDS * 1000;
     try {
-      const result = await daemonCall<{ wake: boolean; reason?: string; state?: string }>(deps.fetch, session.daemonUrl, session.token, `/v1/wake?wait=${wait}`, { timeoutMs: (wait + 15) * 1000 });
+      const result = await daemonCall<{ wake: boolean; reason?: string; state?: string }>(deps.fetch, session.daemonUrl, session.token, `/v1/wake?wait=${wait}&takeover=1`, { timeoutMs: (wait + 15) * 1000 });
       failures = 0;
       if (result.wake && result.reason) return { decision: 'block', reason: result.reason.slice(0, 4000) };
       if (result.state === 'ended') return {};
+      if (result.state === 'taken_over') { deps.onTakeover?.(); return {}; }
       // A round that really waited ends in a plain timeout: start the next one right away.
       if (result.state === 'timeout' && now() - started >= wait * 500) continue;
     } catch (error) {

@@ -77,7 +77,7 @@ test('Stop long-polls the daemon and blocks with the wake reason when items arri
   });
   const output = await runHook({ session_id: 'sess-1', hook_event_name: 'Stop', prompt_id: 'p1', stop_hook_active: true }, { store, fetch: daemon.fetchImpl, wakeWaitSeconds: 7 });
   assert.deepEqual(output, { decision: 'block', reason: '[Agent Office] 1 new item for @dev-be' });
-  assert.ok(daemon.calls.some(call => call.url === '/v1/wake?wait=7'));
+  assert.ok(daemon.calls.some(call => call.url === '/v1/wake?wait=7&takeover=1'));
 });
 
 test('Stop keeps listening through quiet rounds, refusals and outages, then asks for one keep-alive turn at the end of the window', async () => {
@@ -222,7 +222,7 @@ test('listening rounds last at most 60 s and permission waits 90 s, so proxies w
   }) as typeof fetch;
   const stop = await runHook({ session_id: 'sess-1', hook_event_name: 'Stop' }, { store, fetch: fetchImpl, wakeWaitSeconds: 290, now: () => clock, sleep: async () => {} });
   assert.deepEqual(stop, { decision: 'block', reason: 'third poll' });
-  assert.deepEqual(waits, ['?wait=60', '?wait=60', '?wait=60']);
+  assert.deepEqual(waits, ['?wait=60&takeover=1', '?wait=60&takeover=1', '?wait=60&takeover=1']);
   waits.length = 0; clock = 0;
   const prompt = await runHook({ session_id: 'sess-1', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } }, { store, fetch: fetchImpl, wakeWaitSeconds: 1, permissionWaitSeconds: 120, now: () => clock });
   assert.deepEqual(prompt, {});
@@ -280,4 +280,12 @@ test('after compaction: SessionStart asks for the compact brief; PostCompact upl
   assert.deepEqual(await runHook({ session_id: 'sess-1', hook_event_name: 'PostCompact', trigger: 'auto', compact_summary: summary }, { store, fetch: daemon.fetchImpl, wakeWaitSeconds: 1 }), {});
   const upload = daemon.calls.find(call => call.url === '/v1/seats/me/compaction');
   assert.equal((upload?.body as { summary: string }).summary.length, 6000);
+});
+
+test('a session taken over by a runner closes its Claude Code process instead of listening', async () => {
+  const store = newStore(); store.saveSession('sess-1', { daemonUrl: 'http://127.0.0.1:8080', token: 'agent-token', agentId: 'cc-1' });
+  const daemon = fakeDaemon({ 'POST /v1/agents/events': () => ({ status: 201, body: {} }), 'GET /v1/wake': () => ({ status: 200, body: { wake: false, state: 'taken_over' } }) });
+  let closed = 0;
+  assert.deepEqual(await runHook({ session_id: 'sess-1', hook_event_name: 'Stop' }, { store, fetch: daemon.fetchImpl, wakeWaitSeconds: 600, sleep: async () => {}, onTakeover: () => { closed++; } }), {});
+  assert.equal(closed, 1);
 });

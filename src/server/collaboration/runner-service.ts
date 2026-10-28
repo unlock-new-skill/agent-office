@@ -8,9 +8,12 @@ import type { OrgService } from './org-service.js';
 const ONLINE_MS = 90_000;
 /** Commands nobody executed by then are dropped: a stale "restart" must not fire hours later. */
 const COMMAND_TTL_MS = 2 * 60_000;
+/** An agent that reached the daemon within this window (any hook or wake poll) still runs somewhere. */
+const LIVE_MS = 3 * 60_000;
 const LOG_RING = 300; const MAX_COMMANDS_PER_MINUTE = 30; const MAX_WAITERS = 64;
 const COLUMNS = 'id,runner_id AS runnerId,seat_id AS seatId,kind,text,status,result,requested_by AS requestedBy,created_at AS createdAt,done_at AS doneAt';
 
+type AgentRow = { id: string; sessionId: string; endedAt: string | null; lastContactAt: number | null };
 type Row = { id: string; label: string | null; machine: string; seatsJson: string; lastSeenAt: number; configJson: string; configVersion: number };
 const ROW = 'id,label,machine,seats_json AS seatsJson,last_seen_at AS lastSeenAt,config_json AS configJson,config_version AS configVersion';
 
@@ -24,6 +27,8 @@ export class RunnerService {
   private readonly logs = new Map<string, RunnerLogEntry[]>();
   private readonly recent: number[] = [];
   private readonly online = new Set<string>();
+  /** Interactive sessions asked to close so a runner can resume them (their Stop-hook listener ends the process). */
+  private readonly takeovers = new Set<string>();
 
   constructor(private readonly db: Database, private readonly org: OrgService, private readonly emit: (event: CollabEvent) => void) {}
 
@@ -68,9 +73,33 @@ export class RunnerService {
       if (taken) throw conflict(`seat_on_other_machine:${taken.seatId}`);
     }
     this.db.raw.prepare('UPDATE runners SET config_json=?,config_version=? WHERE id=?').run(JSON.stringify({ seats }), row.configVersion + 1, id);
+    // A session picked for a seat that still runs in a terminal is asked to close; the runner resumes it afterwards.
+    const runByRunners = new Set(this.rows().flatMap(other => this.seatsOf(other)).filter(seat => seat.sessionId && !['stopped', 'failed'].includes(seat.state)).map(seat => seat.sessionId));
+    for (const seat of seats) {
+      const agent = seat.sessionId && !runByRunners.has(seat.sessionId) ? this.agentBySession(seat.sessionId) : null;
+      if (agent && this.isLive(agent)) this.takeovers.add(agent.id);
+    }
     for (const wake of [...this.waiters.get(id) ?? []]) wake();
     this.publish();
     return this.config(id);
+  }
+
+  isTakenOver(agentId: string): boolean { return this.takeovers.has(agentId); }
+  clearTakeover(agentId: string): void { this.takeovers.delete(agentId); }
+
+  /**
+   * What stops a runner from starting a seat now: the session it should resume still running elsewhere, or another
+   * live session holding the seat. Either blocker clears by itself once that session ends or goes quiet.
+   */
+  seatCheck(runnerId: string, seatId: string, sessionId: string | null): { sessionLive: boolean; takeover: boolean; holder: string | null } {
+    if (!this.offered(this.row(runnerId)).has(seatId)) throw notFound('seat');
+    const own = sessionId ? this.agentBySession(sessionId) : null;
+    const sessionLive = own ? this.isLive(own) : false;
+    if (own && !sessionLive) this.takeovers.delete(own.id);
+    const seat = this.db.raw.prepare('SELECT agent_id AS agentId FROM seats WHERE id=?').get(seatId) as { agentId: string | null } | undefined;
+    const holderAgent = seat?.agentId ? this.db.raw.prepare('SELECT id,session_id AS sessionId,ended_at AS endedAt,last_contact_at AS lastContactAt FROM agents WHERE id=?').get(seat.agentId) as AgentRow | undefined : undefined;
+    const holder = holderAgent && this.isLive(holderAgent) && holderAgent.sessionId !== sessionId ? holderAgent.sessionId : null;
+    return { sessionLive, takeover: own ? this.takeovers.has(own.id) : false, holder };
   }
 
   /** Claude sessions the machine's hooks registered, newest first: candidates for a seat's repo and session id. */
@@ -181,6 +210,10 @@ export class RunnerService {
 
   /** Seats a runner may report on and take commands for: those it registered plus those the web assigned to it. */
   private offered(row: Row): Set<string> { return new Set([...this.seatsOf(row).map(seat => seat.seatId), ...this.configSeats(row).map(seat => seat.seatId)]); }
+  private agentBySession(sessionId: string): AgentRow | null {
+    return (this.db.raw.prepare('SELECT id,session_id AS sessionId,ended_at AS endedAt,last_contact_at AS lastContactAt FROM agents WHERE session_id=? ORDER BY last_contact_at DESC LIMIT 1').get(sessionId) as AgentRow | undefined) ?? null;
+  }
+  private isLive(agent: AgentRow): boolean { return agent.endedAt === null && agent.lastContactAt !== null && Date.now() - agent.lastContactAt < LIVE_MS; }
   private rows(): Row[] { return this.db.raw.prepare(`SELECT ${ROW} FROM runners ORDER BY COALESCE(label,machine)`).all() as Row[]; }
   private configSeats(row: Row): MachineSeat[] { try { return (JSON.parse(row.configJson) as { seats: MachineSeat[] }).seats; } catch { return []; } }
   private isOnline(row: Row): boolean { return this.waiters.has(row.id) || Date.now() - row.lastSeenAt <= ONLINE_MS; }

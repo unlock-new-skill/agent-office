@@ -53,6 +53,10 @@ export const registerRunnerRoutes = (app: Hono, deps: Deps): void => {
     return c.json(await office.runners.poll(runnerId, wait * 1000, c.req.raw.signal, version));
   }));
   app.get('/v1/runners/me/config', c => asRunner(c, runnerId => c.json(office.runners.config(runnerId))));
+  app.get('/v1/runners/me/seat-check', c => asRunner(c, runnerId => {
+    const query = z.object({ seatId, sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).optional() }).parse(c.req.query());
+    return c.json(office.runners.seatCheck(runnerId, query.seatId, query.sessionId ?? null));
+  }));
   app.post('/v1/runners/me/commands/:id/result', c => asRunner(c, async runnerId => {
     const body = z.object({ ok: z.boolean(), message: z.string().max(2000) }).strict().parse(await c.req.json());
     return c.json(office.runners.complete(runnerId, c.req.param('id'), body.ok, body.message));
