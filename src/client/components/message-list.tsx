@@ -10,7 +10,6 @@ const day = (timestamp: number): string => new Date(timestamp).toLocaleDateStrin
 export function MessageList({ messages, org, onLoadOlder, onEdit, onDelete, onOpenThread, activeThreadSeq = null, emptyText = 'No messages yet. Say hi — mention a seat with @ to wake it.' }: Props): ReactNode {
   const [editing, setEditing] = useState<{ id: string; draft: string } | null>(null);
   const scroller = useRef<HTMLDivElement>(null); const stick = useRef(true); const [hasOlder, setHasOlder] = useState(true);
-  const seatIds = org.seats.map(seat => seat.id);
   const lastId = messages.at(-1)?.id;
 
   useLayoutEffect(() => { const node = scroller.current; if (node && stick.current) node.scrollTop = node.scrollHeight; }, [lastId]);
@@ -32,7 +31,8 @@ export function MessageList({ messages, org, onLoadOlder, onEdit, onDelete, onOp
         const previous = messages[index - 1]; const who = sender(message);
         const newDay = !previous || day(previous.createdAt) !== day(message.createdAt);
         const grouped = !newDay && previous && previous.senderKind === message.senderKind && previous.senderId === message.senderId && message.createdAt - previous.createdAt < 5 * 60_000 && message.senderKind !== 'system';
-        const body = splitMentions(message.body, seatIds).map((segment, key) => segment.mention ? <span key={key} className="mention">{segment.text}</span> : <span key={key}>{segment.text}</span>);
+        // Highlight exactly what the server counted as mentions (channel members only).
+        const body = splitMentions(message.body, message.mentions).map((segment, key) => segment.mention ? <span key={key} className="mention">{segment.text}</span> : <span key={key}>{segment.text}</span>);
         const replies = onOpenThread && (message.replyCount ?? 0) > 0
           ? <button type="button" className={`thread-link ${activeThreadSeq === message.seq ? 'active' : ''}`} onClick={() => onOpenThread(message)}>
               {message.replyCount} repl{message.replyCount === 1 ? 'y' : 'ies'}{message.lastReplyAt ? <span className="muted"> · last {time(message.lastReplyAt)}</span> : null}

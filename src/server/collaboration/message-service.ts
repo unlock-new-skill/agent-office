@@ -143,12 +143,13 @@ export class MessageService {
   }
 
   /**
-   * Seat ids mentioned in a body. `@all` / `@everyone` expands to every seat of the channel except the sender; only the
-   * manager, leaders and deputies may use it, so one member cannot wake a whole department (or loop agents).
+   * Seat ids mentioned in a body — only seats that are members of the channel count (a seat elsewhere could not read
+   * it). `@all` / `@everyone` expands to every member except the sender; only the manager, leaders and deputies may
+   * use it, so one member cannot wake a whole department (or loop agents).
    */
   private parseMentions(body: string, channelId: string, actor: Actor): string[] {
     const candidates = [...new Set([...body.matchAll(/(?<![\w@])@([a-z0-9][a-z0-9-]{0,63})/g)].map(match => match[1]!))];
-    const mentions = new Set(candidates.filter(id => this.db.raw.prepare('SELECT 1 FROM seats WHERE id=?').get(id)));
+    const mentions = new Set(candidates.filter(id => this.org.isMember(channelId, id)));
     if (candidates.some(id => ALL_MENTIONS.includes(id) && !mentions.has(id))) {
       if (actor.kind === 'seat' && !this.mayMentionAll(actor.seatId)) throw forbidden('mention_all_not_allowed');
       const members = this.db.raw.prepare('SELECT seat_id AS seatId FROM channel_members WHERE channel_id=?').all(channelId) as Array<{ seatId: string }>;

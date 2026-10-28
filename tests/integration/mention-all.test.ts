@@ -26,3 +26,13 @@ test('members may not use @all; the manager may (and includes everyone); edits r
   assert.equal((await fixture.agent(devBe, '/v1/channels/dev/messages', { body: { body: '@all deputy here' } })).status, 201, 'deputy may');
   fixture.close();
 });
+
+test('mentions only count channel members: @seat from another department is plain text', async () => {
+  const fixture = createAppFixture(); fixture.seatToken('design-lead');
+  const posted = await (await fixture.manager('/v1/channels/design/messages', { body: { body: 'hi @dev-lead @ba-lead and @all' } })).json() as ChatMessage;
+  assert.ok(!posted.mentions.includes('dev-lead') && !posted.mentions.includes('ba-lead'));
+  assert.ok(posted.mentions.every(seatId => seatId.startsWith('design-')), posted.mentions.join(','));
+  const leaders = await (await fixture.manager('/v1/channels/leaders/messages', { body: { body: '@dev-lead and @design-atom' } })).json() as ChatMessage;
+  assert.deepEqual(leaders.mentions, ['dev-lead'], 'members of #leaders only');
+  fixture.close();
+});

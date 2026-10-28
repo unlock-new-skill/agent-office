@@ -27,6 +27,8 @@ export function ChatView({ office, channelId, onSelectChannel, notify }: Props):
   if (!state.org) return <div className="loading">Loading office…</div>;
   if (!channel) return <div className="chat-layout"><Sidebar state={state} channelId={channelId} onSelect={onSelectChannel} /><main className="chat-main"><p className="empty">Channel not found.</p></main></div>;
   const label = `#${channel.id}`;
+  // Mentions only reach channel members, so suggestions are limited to them.
+  const members = state.org.seats.filter(seat => channel.memberSeatIds.includes(seat.id));
   const path = `/v1/channels/${encodeURIComponent(channelId)}`;
   const editMessage = async (message: ChatMessage, body: string): Promise<void> => { try { await api.send('PATCH', `${path}/messages/${message.seq}`, { body }); } catch (error) { notify(errorText(error)); throw error; } };
   const deleteMessage = (message: ChatMessage): void => { if (window.confirm('Delete this message?')) api.send('DELETE', `${path}/messages/${message.seq}`).catch(error => notify(errorText(error))); };
@@ -45,10 +47,10 @@ export function ChatView({ office, channelId, onSelectChannel, notify }: Props):
           <span className="muted">{subtitle} · {channel.memberSeatIds.length} seats</span>
         </header>
         <MessageList messages={messages ?? []} org={state.org} onLoadOlder={() => loadOlder(channelId)} onEdit={editMessage} onDelete={deleteMessage} onOpenThread={openThread} activeThreadSeq={threadSeq} />
-        <Composer channelLabel={label} seats={state.org.seats} onSend={body => send(body)} />
+        <Composer channelLabel={label} seats={members} onSend={body => send(body)} />
       </main>
       {threadSeq !== null && <ThreadPanel channelId={channelId} thread={state.threads[threadKey(channelId, threadSeq)]} org={state.org}
-        onSend={body => send(body, threadSeq)} onEdit={editMessage} onDelete={deleteMessage} onClose={() => setThreadSeq(null)} />}
+        seats={members} onSend={body => send(body, threadSeq)} onEdit={editMessage} onDelete={deleteMessage} onClose={() => setThreadSeq(null)} />}
       <aside className={`detail-panel ${threadSeq !== null ? 'behind-thread' : ''}`} aria-label="Channel details">
         <div className="tabs" role="tablist">
           <button type="button" role="tab" aria-selected={panel === 'members'} className={panel === 'members' ? 'active' : ''} onClick={() => setPanel('members')}>Members</button>
