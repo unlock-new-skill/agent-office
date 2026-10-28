@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../db/database.js';
 import type { ChannelKind, ChatMessage, CollabEvent, SenderKind } from '../../shared/contracts.js';
+import { ALL_MENTIONS } from '../../shared/join.js';
 import { conflict, forbidden, invalid, notFound } from './office-error.js';
 import type { OrgService } from './org-service.js';
 
@@ -26,7 +27,7 @@ export class MessageService {
   post(actor: Actor, channelId: string, body: string, threadSeq?: number): ChatMessage {
     this.assertAccess(actor, channelId);
     if (threadSeq !== undefined) this.threadRoot(channelId, threadSeq);
-    return this.insert(channelId, actor.kind === 'manager' ? 'manager' : 'seat', actor.kind === 'manager' ? 'manager' : actor.seatId, body, undefined, threadSeq);
+    return this.insert(channelId, actor.kind === 'manager' ? 'manager' : 'seat', actor.kind === 'manager' ? 'manager' : actor.seatId, body, this.parseMentions(body, channelId, actor), threadSeq);
   }
 
   /** Root message plus its replies, oldest first. */
@@ -51,7 +52,7 @@ export class MessageService {
     const message = this.find(actor, channelId, seq);
     if (!this.isAuthor(actor, message)) throw forbidden('not_message_author');
     if (body.trim().length === 0 || body.length > MAX_BODY) throw invalid('invalid_message_body');
-    const mentions = this.parseMentions(body); const editedAt = Date.now();
+    const mentions = this.parseMentions(body, channelId, actor); const editedAt = Date.now();
     this.db.raw.prepare('UPDATE messages SET body=?,mentions_json=?,edited_at=? WHERE id=?').run(body, JSON.stringify(mentions), editedAt, message.id);
     return this.publishChange({ ...message, body, mentions, editedAt });
   }
@@ -126,7 +127,7 @@ export class MessageService {
 
   private insert(channelId: string, senderKind: SenderKind, senderId: string, body: string, explicitMentions?: string[], threadSeq?: number): ChatMessage {
     if (body.trim().length === 0 || body.length > MAX_BODY) throw invalid('invalid_message_body');
-    const mentions = explicitMentions ?? this.parseMentions(body);
+    const mentions = explicitMentions ?? [];
     const message = this.db.transaction(() => {
       const seq = (this.db.raw.prepare('SELECT COALESCE(MAX(seq),0)+1 AS next FROM messages WHERE channel_id=?').get(channelId) as { next: number }).next;
       const created: ChatMessage = { id: randomUUID(), channelId, seq, senderKind, senderId, body, mentions, createdAt: Date.now(), threadSeq: threadSeq ?? null, replyCount: 0, lastReplyAt: null };
@@ -141,8 +142,23 @@ export class MessageService {
     return message;
   }
 
-  private parseMentions(body: string): string[] {
+  /**
+   * Seat ids mentioned in a body. `@all` / `@everyone` expands to every seat of the channel except the sender; only the
+   * manager, leaders and deputies may use it, so one member cannot wake a whole department (or loop agents).
+   */
+  private parseMentions(body: string, channelId: string, actor: Actor): string[] {
     const candidates = [...new Set([...body.matchAll(/(?<![\w@])@([a-z0-9][a-z0-9-]{0,63})/g)].map(match => match[1]!))];
-    return candidates.filter(id => this.db.raw.prepare('SELECT 1 FROM seats WHERE id=?').get(id));
+    const mentions = new Set(candidates.filter(id => this.db.raw.prepare('SELECT 1 FROM seats WHERE id=?').get(id)));
+    if (candidates.some(id => ALL_MENTIONS.includes(id) && !mentions.has(id))) {
+      if (actor.kind === 'seat' && !this.mayMentionAll(actor.seatId)) throw forbidden('mention_all_not_allowed');
+      const members = this.db.raw.prepare('SELECT seat_id AS seatId FROM channel_members WHERE channel_id=?').all(channelId) as Array<{ seatId: string }>;
+      for (const { seatId } of members) if (actor.kind === 'manager' || seatId !== actor.seatId) mentions.add(seatId);
+    }
+    return [...mentions];
+  }
+
+  private mayMentionAll(seatId: string): boolean {
+    const seat = this.org.seat(seatId);
+    return seat.role === 'leader' || this.org.department(seat.departmentId).deputySeatId === seatId;
   }
 }

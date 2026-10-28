@@ -7,7 +7,7 @@ const ERROR_TEXT: Record<string, string> = {
   department_has_leader: 'This department already has a leader.', department_has_seated_agents: 'Unassign sessions from this department first.',
   agent_already_seated: 'That session already sits in another seat.', duplicate_id_or_name: 'That id or name is already taken.',
   forbidden_channel: 'Not allowed in this channel.', invalid_message_body: 'Message is empty or too long.', leader_only: 'Only a leader can do that.',
-  assignee_outside_department: 'Assignee must be in the same department.', deputy_must_be_member_of_department: 'The deputy must be a member seat of this department.', invalid_request: 'Invalid input.', unauthorized: 'Session expired — sign in again.',
+  assignee_outside_department: 'Assignee must be in the same department.', deputy_must_be_member_of_department: 'The deputy must be a member seat of this department.', mention_all_not_allowed: '@all is for the manager, leaders and deputies.', invalid_request: 'Invalid input.', unauthorized: 'Session expired — sign in again.',
 };
 export const errorText = (error: unknown): string => error instanceof ApiError ? ERROR_TEXT[error.code] ?? error.code.replaceAll('_', ' ') : error instanceof Error ? error.message : 'Something went wrong.';
 

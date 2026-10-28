@@ -19,6 +19,7 @@ const HINTS: Record<string, string> = {
   not_message_author: 'You can only edit or delete your own messages.',
   message_deleted: 'That message was already deleted.',
   requester_must_be_other_department_leader: 'requestedBy must be the seat id of the leader of another department (the one who asked in #leaders).',
+  mention_all_not_allowed: '@all is reserved for the manager, leaders and deputies. Mention the specific seats you need, or ask your leader to address everyone.',
   seat_not_found: 'Unknown seat id. Use the seat id or join URL shown in the Agent Office Org view.',
 };
 

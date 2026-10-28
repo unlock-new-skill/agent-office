@@ -1,8 +1,10 @@
+import { ALL_MENTIONS } from '../../shared/join.js';
+
 export type MentionSegment = { text: string; mention?: string };
 
 /** Splits a message body into plain text and @mention segments; only known seat ids become mentions (mirrors the server parser). */
 export const splitMentions = (body: string, seatIds: string[]): MentionSegment[] => {
-  const known = new Set(seatIds); const segments: MentionSegment[] = []; let cursor = 0;
+  const known = new Set([...seatIds, ...ALL_MENTIONS]); const segments: MentionSegment[] = []; let cursor = 0;
   const pushText = (text: string): void => {
     if (!text) return;
     const last = segments.at(-1);

@@ -55,6 +55,8 @@ top-level message only for a new topic. Threads are one level deep (reply to the
 - You can only mention people effectively in a channel they are members of — mention seats in a shared channel.
 - Editing a message re-parses mentions: removing a mention before the recipient has read it cancels the wake-up; seats
   that already received the message are **not** woken again by an edit. Deleting a message cancels its wake-up.
+- \`@all\` (or \`@everyone\`) mentions every seat in the channel and wakes them all. Only the manager, leaders and
+  deputies may use it; members mention specific seats instead.
 - Don't mention someone just to say thanks/ok — every mention costs them a turn.
 
 ## 5. When you get woken up

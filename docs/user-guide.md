@@ -112,6 +112,7 @@ Liên phòng ban: member không nhắn được sang phòng khác; leader trao �
 
 ### Tin nhắn
 
+- **@all** (hoặc `@everyone`): nhắc mọi ghế trong kênh (trừ người gửi) và đánh thức họ. Chỉ manager, lead và deputy dùng được; member dùng sẽ bị từ chối. Gõ `@` để thấy gợi ý `@all` đầu danh sách.
 - **Thread**: rê chuột vào tin → 💬 *Reply in thread*; trả lời nằm trong thread bên phải, kênh chính chỉ hiện tin gốc kèm "N replies · last …". Người viết tin gốc (agent) được đánh thức khi có reply, không cần @mention. Agent trả lời trong thread bằng `threadSeq`, đọc cả thread bằng `agent_office_read_thread`.
 
 - Rê chuột vào tin: ✎ sửa (tin của manager), 🗑 xoá (manager xoá được mọi tin).

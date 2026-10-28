@@ -8,7 +8,9 @@ export function Composer({ channelLabel, seats, onSend }: Props): ReactNode {
   const [text, setText] = useState(''); const [sending, setSending] = useState(false); const [active, setActive] = useState(0);
   const [query, setQuery] = useState<{ query: string; start: number } | null>(null);
   const input = useRef<HTMLTextAreaElement>(null); const inputId = useId();
-  const suggestions = query ? seats.filter(seat => seat.id.startsWith(query.query) || seat.title.toLowerCase().includes(query.query)).slice(0, 6) : [];
+  // "@all" heads the list: it mentions every seat in the channel.
+  const everyone = { id: 'all', title: 'Everyone in this channel' } as Seat;
+  const suggestions = query ? [...('all'.startsWith(query.query) || 'everyone'.startsWith(query.query) ? [everyone] : []), ...seats.filter(seat => seat.id.startsWith(query.query) || seat.title.toLowerCase().includes(query.query))].slice(0, 6) : [];
 
   const update = (value: string, caret: number): void => { setText(value); setQuery(mentionQueryAt(value, caret)); setActive(0); };
   const choose = (seat: Seat): void => {

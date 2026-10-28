@@ -91,3 +91,8 @@ test('thread replies update only their open thread; root updates refresh the tim
   assert.deepEqual(state.threads[threadKey('dev', 1)]?.replies.map(item => item.seq), [2]);
   assert.equal(state.threads[threadKey('dev', 1)]?.root.replyCount, 1);
 });
+
+test('@all and @everyone are highlighted as mentions', async () => {
+  const { splitMentions } = await import('../../src/client/state/mentions.js');
+  assert.deepEqual(splitMentions('hi @all and @everyone', []).filter(segment => segment.mention).map(segment => segment.mention), ['all', 'everyone']);
+});

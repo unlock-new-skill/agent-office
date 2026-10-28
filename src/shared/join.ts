@@ -17,3 +17,6 @@ export const seatIdFromJoin = (value: string): string => {
   const fromUrl = /\/join\/([^/?#\s]+)/.exec(trimmed)?.[1];
   return decodeURIComponent(fromUrl ?? trimmed).replace(/^@/, '');
 };
+
+/** Mention tokens that address every seat of the channel (expanded server-side; manager, leaders and deputies only). */
+export const ALL_MENTIONS = ['all', 'everyone'];
