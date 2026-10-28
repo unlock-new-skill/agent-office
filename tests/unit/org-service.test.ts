@@ -82,7 +82,11 @@ test('claimSeat: vacant seat is claimed, live occupant rejects, ended occupant c
   db.raw.prepare("UPDATE agents SET ended_at='2026-01-01T00:00:00Z' WHERE id=?").run(second);
   const third = insertAgent(db, 'agent-c');
   assert.equal(office.org.claimSeat('dev-be', third).agentId, third, 'seat held by an exited session can be taken');
-  office.org.releaseAgent(third);
+  const fourth = insertAgent(db, 'agent-d');
+  assert.throws(() => office.org.claimSeat('dev-be', fourth), /seat_occupied/, 'a session that keeps in touch holds its seat');
+  db.raw.prepare('UPDATE agents SET last_contact_at=? WHERE id=?').run(Date.now() - 6 * 60_000, third);
+  assert.equal(office.org.claimSeat('dev-be', fourth).agentId, fourth, 'a session quiet for over 5 minutes (abandoned terminal) no longer holds its seat');
+  office.org.releaseAgent(fourth);
   assert.equal(office.org.seat('dev-be').agentId, null);
   close();
 });

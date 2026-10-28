@@ -7,6 +7,14 @@ type SeatRow = { id: string; departmentId: string; title: string; description: s
 const SEAT_COLUMNS = 'id,department_id AS departmentId,title,description,role,sort,agent_id AS agentId,consecutive_wakes AS consecutiveWakes';
 
 /** Departments, seats and channel membership. Membership is always derived: department channel = its seats, leaders channel = all leader seats. */
+/**
+ * A session counts as running while it has not ended and reached the daemon recently: live sessions always do, since
+ * their Stop-hook listener asks for work at least once a minute. A crashed or abandoned terminal stops holding its seat.
+ */
+export const LIVE_SESSION_MS = 5 * 60_000;
+export const isLiveSession = (agent: { endedAt: string | null; lastContactAt: number | null }, now = Date.now()): boolean =>
+  agent.endedAt === null && agent.lastContactAt !== null && now - agent.lastContactAt < LIVE_SESSION_MS;
+
 export class OrgService {
   /** Seats whose session is currently parked in a Stop-hook long-poll. */
   readonly listening = new Set<string>();
@@ -125,13 +133,13 @@ export class OrgService {
 
   /**
    * Self-service seat claim by a session: allowed when the seat is vacant, already held by this agent, or held by a
-   * session that has exited. A live occupant wins (seat_occupied). Claiming releases the agent's previous seat.
+   * session that exited or went quiet (see isLiveSession). A live occupant wins (seat_occupied). Claiming releases the agent's previous seat.
    */
   claimSeat(seatId: string, agentId: string): Seat {
     const seat = this.seat(seatId);
     if (seat.agentId && seat.agentId !== agentId) {
-      const occupant = this.db.raw.prepare('SELECT ended_at AS endedAt FROM agents WHERE id=?').get(seat.agentId) as { endedAt: string | null } | undefined;
-      if (occupant && occupant.endedAt === null) throw conflict('seat_occupied');
+      const occupant = this.db.raw.prepare('SELECT ended_at AS endedAt,last_contact_at AS lastContactAt FROM agents WHERE id=?').get(seat.agentId) as { endedAt: string | null; lastContactAt: number | null } | undefined;
+      if (occupant && isLiveSession(occupant)) throw conflict('seat_occupied');
     }
     if (seat.agentId === agentId) return seat;
     const previous = this.seatForAgent(agentId);

@@ -2,14 +2,12 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import type { Database } from '../db/database.js';
 import type { CollabEvent, MachineConfig, MachineSeat, MachineSession, RunnerCommand, RunnerCommandKind, RunnerLogEntry, RunnerSeat, RunnerView } from '../../shared/contracts.js';
 import { conflict, invalid, notFound } from './office-error.js';
-import type { OrgService } from './org-service.js';
+import { isLiveSession, type OrgService } from './org-service.js';
 
 /** A runner that polled within this window counts as online (its poll is the only presence signal). */
 const ONLINE_MS = 90_000;
 /** Commands nobody executed by then are dropped: a stale "restart" must not fire hours later. */
 const COMMAND_TTL_MS = 2 * 60_000;
-/** An agent that reached the daemon within this window (any hook or wake poll) still runs somewhere. */
-const LIVE_MS = 3 * 60_000;
 const LOG_RING = 300; const MAX_COMMANDS_PER_MINUTE = 30; const MAX_WAITERS = 64;
 const COLUMNS = 'id,runner_id AS runnerId,seat_id AS seatId,kind,text,status,result,requested_by AS requestedBy,created_at AS createdAt,done_at AS doneAt';
 
@@ -213,7 +211,7 @@ export class RunnerService {
   private agentBySession(sessionId: string): AgentRow | null {
     return (this.db.raw.prepare('SELECT id,session_id AS sessionId,ended_at AS endedAt,last_contact_at AS lastContactAt FROM agents WHERE session_id=? ORDER BY last_contact_at DESC LIMIT 1').get(sessionId) as AgentRow | undefined) ?? null;
   }
-  private isLive(agent: AgentRow): boolean { return agent.endedAt === null && agent.lastContactAt !== null && Date.now() - agent.lastContactAt < LIVE_MS; }
+  private isLive(agent: AgentRow): boolean { return isLiveSession(agent); }
   private rows(): Row[] { return this.db.raw.prepare(`SELECT ${ROW} FROM runners ORDER BY COALESCE(label,machine)`).all() as Row[]; }
   private configSeats(row: Row): MachineSeat[] { try { return (JSON.parse(row.configJson) as { seats: MachineSeat[] }).seats; } catch { return []; } }
   private isOnline(row: Row): boolean { return this.waiters.has(row.id) || Date.now() - row.lastSeenAt <= ONLINE_MS; }
