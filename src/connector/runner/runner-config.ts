@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import type { SessionStore } from '../session-store.js';
@@ -18,11 +19,16 @@ const SeatConfigSchema = z.object({
   allowedTools: z.array(z.string().max(120).regex(SHELL_SAFE)).max(50).optional(),
   autoStart: z.boolean().default(true),
 }).strict();
-const RunnerConfigSchema = z.object({ seats: z.array(SeatConfigSchema).max(20) }).strict()
+/**
+ * Local file: optional seats (for machines not managed from the web) and `allowedRoots`, the directories web-managed
+ * seats may run in (default: the home directory). The web can never widen these roots.
+ */
+const RunnerConfigSchema = z.object({ seats: z.array(SeatConfigSchema).max(20).default([]), allowedRoots: z.array(z.string().refine(value => path.isAbsolute(value), 'absolute path')).max(20).optional() }).strict()
   .refine(config => new Set(config.seats.map(seat => seat.seatId)).size === config.seats.length, 'each seat may appear once');
 
 export type SeatConfig = z.infer<typeof SeatConfigSchema>;
 export type RunnerConfig = z.infer<typeof RunnerConfigSchema>;
+export { SeatConfigSchema };
 
 export const runnerConfigFile = (store: SessionStore): string => path.join(store.home, 'runner.json');
 const STATE_FILE = 'runner-state.json';
@@ -31,10 +37,10 @@ export const SAMPLE_CONFIG: RunnerConfig = {
   seats: [{ seatId: 'dev-be', cwd: process.platform === 'win32' ? 'C:\\Users\\me\\projects\\game-server' : '/Users/me/projects/game-server', permissionMode: 'acceptEdits', autoStart: true }],
 };
 
-/** Loads and validates runner.json; every seat's working directory must exist. Throws a readable error otherwise. */
+/** Loads and validates runner.json (absent = no local seats); local seats' working directories must exist. */
 export const loadRunnerConfig = (store: SessionStore): RunnerConfig => {
   const file = runnerConfigFile(store);
-  if (!existsSync(file)) throw new Error(`no runner config at ${file}: run "agent-office.mjs runner init" and edit it`);
+  if (!existsSync(file)) return { seats: [] };
   let raw: unknown;
   try { raw = JSON.parse(readFileSync(file, 'utf8')); } catch { throw new Error(`${file} is not valid JSON`); }
   const parsed = RunnerConfigSchema.safeParse(raw);
@@ -43,6 +49,20 @@ export const loadRunnerConfig = (store: SessionStore): RunnerConfig => {
     if (!existsSync(seat.cwd) || !statSync(seat.cwd).isDirectory()) throw new Error(`${file}: cwd of seat ${seat.seatId} does not exist: ${seat.cwd}`);
   }
   return parsed.data;
+};
+
+/** Why a web-managed working directory cannot be used on this machine, or null when it can. */
+export const cwdProblem = (cwd: string, roots: string[] = [homedir()]): string | null => {
+  if (!path.isAbsolute(cwd)) return 'path is not absolute';
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory()) return `folder not found on this machine: ${cwd}`;
+  const fold = (value: string): string => process.platform === 'win32' ? value.toLowerCase() : value;
+  const real = fold(realpathSync(cwd));
+  const inside = roots.some(root => {
+    if (!existsSync(root)) return false;
+    const relative = path.relative(fold(realpathSync(root)), real);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  });
+  return inside ? null : `outside the folders this machine allows (${roots.join(', ')}); add it to allowedRoots in runner.json on the machine`;
 };
 
 /** Per-seat Claude session ids, so a restarted runner resumes the same conversation. */

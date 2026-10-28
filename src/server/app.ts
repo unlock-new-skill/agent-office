@@ -80,7 +80,7 @@ export const createApp = (context: AppContext): Hono => {
   app.get('/v1/agents', c => context.auth.authenticateRequest(c.req.raw) ? c.json({ agents: context.events.snapshot().agents }) : jsonError('unauthorized', 401));
   registerOfficeRoutes(app, { auth: context.auth, office: context.office, manager, wakeWaitSeconds: context.config.wakeWaitSeconds, publicOrigin: context.config.publicOrigin });
   registerInstallRoutes(app, { auth: context.auth, manager, publicOrigin: context.config.publicOrigin });
-  registerRunnerRoutes(app, { auth: context.auth, office: context.office, manager });
+  registerRunnerRoutes(app, { auth: context.auth, office: context.office, manager, publicOrigin: context.config.publicOrigin });
   registerNotifyRoutes(app, { manager, notifier: context.notifier ?? null });
 
   app.post('/v1/agents/enrollment', async c => {

@@ -137,47 +137,56 @@ export class AuthService {
 
   /** Long-lived machine credential used only by the hook connector to self-register Claude Code sessions. */
   /** Code for the install script: valid for `uses` machines until it expires. Only its hash is stored. */
-  createInstallCode(uses: number, ttlMs: number): { code: string; expiresAt: number; uses: number } {
+  createInstallCode(uses: number, ttlMs: number, machineId: string | null = null): { code: string; expiresAt: number; uses: number } {
     const code = randomBytes(18).toString('base64url'); const expiresAt = now() + ttlMs;
-    this.db.raw.prepare('INSERT INTO install_codes(id,code_hash,uses_left,created_at,expires_at) VALUES (?,?,?,?,?)').run(randomBytes(12).toString('hex'), hashToken(code), uses, now(), expiresAt);
+    this.db.raw.prepare('INSERT INTO install_codes(id,code_hash,uses_left,created_at,expires_at,machine_id) VALUES (?,?,?,?,?,?)').run(randomBytes(12).toString('hex'), hashToken(code), uses, now(), expiresAt, machineId);
     return { code, expiresAt, uses };
   }
 
   /** Spends one use of an install code and mints a connector credential for that machine; null if invalid/expired/used up. */
-  redeemInstallCode(request: Request): { token: string; id: string } | null {
+  redeemInstallCode(request: Request): { token: string; id: string; machineId: string | null } | null {
     const header = request.headers.get('authorization');
     if (!header?.startsWith('Bearer ')) return null;
     return this.db.transaction(() => {
-      const spent = this.db.raw.prepare('UPDATE install_codes SET uses_left=uses_left-1 WHERE code_hash=? AND uses_left>0 AND expires_at>?').run(hashToken(header.slice(7)), now());
-      return spent.changes === 1 ? this.createConnectorCredential() : null;
+      const row = this.db.raw.prepare('UPDATE install_codes SET uses_left=uses_left-1 WHERE code_hash=? AND uses_left>0 AND expires_at>? RETURNING machine_id AS machineId').get(hashToken(header.slice(7)), now()) as { machineId: string | null } | undefined;
+      return row ? { ...this.createConnectorCredential(row.machineId), machineId: row.machineId } : null;
     });
   }
 
-  createConnectorCredential(): { token: string; id: string } {
+  /** A connector minted from a machine's install code carries that machine id: its runner and sessions belong to it. */
+  createConnectorCredential(machineId: string | null = null): { token: string; id: string } {
     const token = randomBytes(32).toString('base64url'); const id = randomBytes(16).toString('hex');
-    this.db.raw.prepare('INSERT INTO credentials(id,token_hash,kind,binding_json,expires_at) VALUES (?,?,?,?,?)').run(id, hashToken(token), 'connector', '{}', now() + CONNECTOR_TTL_MS);
+    this.db.raw.prepare('INSERT INTO credentials(id,token_hash,kind,binding_json,expires_at) VALUES (?,?,?,?,?)').run(id, hashToken(token), 'connector', JSON.stringify(machineId ? { machineId } : {}), now() + CONNECTOR_TTL_MS);
     return { token, id };
   }
 
-  authenticateConnector(request: Request): { id: string } | null {
+  /** `machine` is the machine this connector speaks for: its bound machine id, or the credential id for older installs. */
+  authenticateConnector(request: Request): { id: string; machine: string } | null {
     const header = request.headers.get('authorization');
     if (!header?.startsWith('Bearer ')) return null;
-    const row = this.db.raw.prepare("SELECT id,expires_at,revoked_at FROM credentials WHERE token_hash=? AND kind='connector'").get(hashToken(header.slice(7))) as { id: string; expires_at: number; revoked_at: number | null } | undefined;
-    return !row || row.revoked_at || row.expires_at <= now() ? null : { id: row.id };
+    const row = this.db.raw.prepare("SELECT id,binding_json,expires_at,revoked_at FROM credentials WHERE token_hash=? AND kind='connector'").get(hashToken(header.slice(7))) as { id: string; binding_json: string; expires_at: number; revoked_at: number | null } | undefined;
+    if (!row || row.revoked_at || row.expires_at <= now()) return null;
+    const machineId = (JSON.parse(row.binding_json) as { machineId?: string }).machineId;
+    return { id: row.id, machine: machineId ?? row.id };
+  }
+
+  /** Revokes every connector bound to a machine (the machine was deleted on the web). */
+  revokeMachine(machineId: string): void {
+    this.db.raw.prepare("UPDATE credentials SET revoked_at=? WHERE kind='connector' AND revoked_at IS NULL AND json_extract(binding_json,'$.machineId')=?").run(now(), machineId);
   }
 
   /**
    * Registers (or re-registers on resume) a Claude Code session. The agent id is derived from the session id so a
    * resumed session keeps its seat; any older token for the same agent is revoked.
    */
-  registerSession(input: { sessionId: string; project: string }): { agentId: string; token: string; credentialId: string } {
+  registerSession(input: { sessionId: string; project: string }, machine: string | null = null): { agentId: string; token: string; credentialId: string } {
     const agentId = `cc-${createHash('sha256').update(input.sessionId).digest('hex').slice(0, 12)}`;
     const token = randomBytes(32).toString('base64url'); const credentialId = randomBytes(16).toString('hex'); const timestamp = now();
     const binding = { agentId, project: input.project, sessionId: input.sessionId, incarnation: input.sessionId };
     this.db.transaction(() => {
       const existing = this.db.raw.prepare('SELECT 1 FROM agents WHERE id=?').get(agentId);
-      if (existing) this.db.raw.prepare("UPDATE agents SET project=?,ended_at=NULL,activity='online',last_contact_at=? WHERE id=?").run(input.project, timestamp, agentId);
-      else this.db.raw.prepare("INSERT INTO agents(id,source,project,session_id,incarnation,last_contact_at,activity) VALUES (?,'claude',?,?,?,?,'online')").run(agentId, input.project, input.sessionId, input.sessionId, timestamp);
+      if (existing) this.db.raw.prepare("UPDATE agents SET project=?,ended_at=NULL,activity='online',last_contact_at=?,machine_id=COALESCE(?,machine_id) WHERE id=?").run(input.project, timestamp, machine, agentId);
+      else this.db.raw.prepare("INSERT INTO agents(id,source,project,session_id,incarnation,last_contact_at,activity,machine_id) VALUES (?,'claude',?,?,?,?,'online',?)").run(agentId, input.project, input.sessionId, input.sessionId, timestamp, machine);
       this.db.raw.prepare("UPDATE credentials SET revoked_at=? WHERE kind='agent' AND revoked_at IS NULL AND json_extract(binding_json,'$.agentId')=?").run(timestamp, agentId);
       this.db.raw.prepare('INSERT INTO credentials(id,token_hash,kind,binding_json,expires_at) VALUES (?,?,?,?,?)').run(credentialId, hashToken(token), 'agent', JSON.stringify(binding), timestamp + SESSION_CREDENTIAL_TTL_MS);
     });

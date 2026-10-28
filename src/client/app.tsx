@@ -10,9 +10,10 @@ import { LoginView } from './views/login-view.js';
 const ChatView = lazy(() => import('./views/chat-view.js').then(module => ({ default: module.ChatView })));
 const MapView = lazy(() => import('./views/map-view.js').then(module => ({ default: module.MapView })));
 const OrgView = lazy(() => import('./views/org-view.js').then(module => ({ default: module.OrgView })));
+const MachinesView = lazy(() => import('./views/machines-view.js').then(module => ({ default: module.MachinesView })));
 const RequestsView = lazy(() => import('./views/requests-view.js').then(module => ({ default: module.RequestsView })));
 const SetupView = lazy(() => import('./views/setup-view.js').then(module => ({ default: module.SetupView })));
-const TABS: Array<{ view: View; label: string }> = [{ view: 'chat', label: 'Chat' }, { view: 'map', label: 'Map' }, { view: 'org', label: 'Org' }, { view: 'requests', label: 'Requests' }];
+const TABS: Array<{ view: View; label: string }> = [{ view: 'chat', label: 'Chat' }, { view: 'map', label: 'Map' }, { view: 'org', label: 'Org' }, { view: 'machines', label: 'Machines' }, { view: 'requests', label: 'Requests' }];
 const DEFAULT_CHANNEL = 'leaders';
 
 export function App(): ReactNode {
@@ -59,6 +60,7 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
         {route.view === 'chat' && <ChatView office={office} channelId={channelId} onSelectChannel={id => navigate({ view: 'chat', channelId: id })} notify={notify} />}
         {route.view === 'map' && <MapView state={office.state} notify={notify} />}
         {route.view === 'org' && <OrgView state={office.state} api={api} notify={notify} />}
+        {route.view === 'machines' && <MachinesView state={office.state} api={api} notify={notify} />}
         {route.view === 'requests' && <RequestsView state={office.state} />}
         {route.view === 'setup' && <SetupView state={office.state} api={api} notify={notify} />}
       </Suspense>

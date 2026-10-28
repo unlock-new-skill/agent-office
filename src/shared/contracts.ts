@@ -61,7 +61,13 @@ export const AUTO_TURN_SUMMARY = 'agent-office:auto';
 /** Headless seats run by a per-machine runner (connector mode `runner`). */
 export type RunnerSeatState = 'starting' | 'running' | 'idle' | 'stopped' | 'failed';
 export type RunnerSeat = { seatId: string; state: RunnerSeatState; sessionId: string | null; restarts: number; permissionMode: string; detail: string };
-export type RunnerView = { id: string; machine: string; online: boolean; lastSeenAt: number; seats: RunnerSeat[] };
+/** A seat a machine should run, managed on the web. `sessionId` resumes an existing Claude session on that machine. */
+export type MachineSeat = { seatId: string; cwd: string; permissionMode: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'; sessionId: string | null; autoStart: boolean };
+export type MachineConfig = { version: number; seats: MachineSeat[] };
+/** A Claude session the machine's hooks registered: candidates for a seat's working directory and session id. */
+export type MachineSession = { agentId: string; sessionId: string; project: string; ended: boolean; seatId: string | null; lastContactAt: number | null };
+/** label: name given on the web; machine: the hostname the runner reports. config is the web-managed seat list. */
+export type RunnerView = { id: string; label: string | null; machine: string; online: boolean; lastSeenAt: number; seats: RunnerSeat[]; config: MachineConfig };
 export const RUNNER_COMMAND_KINDS = ['start', 'stop', 'restart', 'interrupt', 'prompt'] as const;
 export type RunnerCommandKind = typeof RUNNER_COMMAND_KINDS[number];
 export type RunnerCommandStatus = 'queued' | 'sent' | 'done' | 'failed' | 'expired';

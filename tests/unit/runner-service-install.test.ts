@@ -34,3 +34,14 @@ test('Windows: hidden logon task running a launcher that appends to the runner l
   assert.match(plan.extraFiles![0]!.content, /Wscript\.Shell"\)\.Run """.*runner\.cmd""", 0, False/);
   assert.equal(plan.activate[0]![0], 'schtasks'); assert.ok(plan.activate[0]!.includes('ONLOGON'));
 });
+
+test('web-managed folders must exist and lie inside the allowed roots', async () => {
+  const { cwdProblem } = await import('../../src/connector/runner/runner-config.js');
+  const { mkdtempSync, mkdirSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const path = await import('node:path');
+  const root = mkdtempSync(path.join(tmpdir(), 'ao-roots-')); mkdirSync(path.join(root, 'game'));
+  assert.equal(cwdProblem(path.join(root, 'game'), [root]), null);
+  assert.equal(cwdProblem(root, [root]), null);
+  assert.match(cwdProblem(path.join(root, 'missing'), [root])!, /folder not found/);
+  assert.match(cwdProblem(tmpdir(), [path.join(root, 'game')])!, /outside the folders/);
+  assert.match(cwdProblem(path.join(root, 'game', '..', '..'), [root])!, /outside the folders/);
+});

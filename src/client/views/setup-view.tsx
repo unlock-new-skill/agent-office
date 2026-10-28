@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { errorText, type Api } from '../api/http.js';
 import { joinUrl } from '../../shared/join.js';
+import { CommandRow } from '../components/command-row.js';
 import type { OfficeState } from '../state/office-store.js';
 
 type Props = { state: OfficeState; api: Api; notify: (text: string) => void };
@@ -54,10 +55,6 @@ function TelegramSetup({ api, notify, cmd }: { api: Api; notify: (text: string) 
   );
 }
 
-function Command({ text, notify }: { text: string; notify: (text: string) => void }): ReactNode {
-  const copy = (): void => { navigator.clipboard.writeText(text).then(() => notify('Copied.')).catch(() => window.prompt('Copy this command:', text)); };
-  return <span className="command-row"><code>{text}</code><button type="button" className="btn btn-small" onClick={copy}>Copy</button></span>;
-}
 
 /**
  * Complete machine setup guide: prerequisites, connecting (install code minted here), starting seated sessions,
@@ -73,7 +70,7 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
     event.preventDefault();
     api.send<Created>('POST', '/v1/install-codes', { uses, hours: 24 }).then(setCreated).catch(error => notify(errorText(error)));
   };
-  const cmd = (text: string): ReactNode => <Command text={text} notify={notify} />;
+  const cmd = (text: string): ReactNode => <CommandRow text={text} notify={notify} />;
   const seatCommand = seat ? (os === 'windows' ? `$env:AGENT_OFFICE_SEAT="${seat.id}"; claude` : `AGENT_OFFICE_SEAT=${seat.id} claude`) : '';
 
   return (
@@ -143,6 +140,8 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
       <section className="setup-step">
         <h2><span>6</span>Chạy agent không cần terminal (runner)</h2>
         <p>Runner là một service trên máy agent: chạy các ghế ở chế độ headless, tự mở lại session khi chết (giữ nguyên context), nhận mention, và cho bạn <strong>Start / Stop / Restart / Interrupt / gửi prompt / xem log</strong> ngay trên thẻ ghế ở Org — không cần ngồi máy.</p>
+        <p><strong>Cách nhanh nhất:</strong> tab <strong>Machines</strong> → Thêm máy → chọn ghế, thư mục repo, quyền, session muốn tiếp tục → <strong>Lệnh cài</strong> → chạy lệnh đó trên máy. Xong — sửa trên web là máy áp dụng ngay.</p>
+        <p className="muted">Cách thủ công (máy không quản lý trên web):</p>
         <ol>
           <li>Tạo file cấu hình mẫu: {cmd(connector(os, 'runner init'))}</li>
           <li>Sửa {cmd(os === 'windows' ? `notepad ${RUNNER_JSON.windows}` : `open -e ${RUNNER_JSON.unix}   # Linux: nano ${RUNNER_JSON.unix}`)}

@@ -59,8 +59,8 @@ test('pairing, permission prompt with buttons, approve from Telegram, message ed
   const edit = calls.find(call => call.method === 'editMessageText')!;
   assert.match(String(edit.body.text), /→ ✅ Allowed \(Telegram\)/);
 
-  notifier.onEvent({ type: 'collab', kind: 'runners', runners: [{ id: 'r1', machine: 'mac', online: true, lastSeenAt: 0, seats: [{ seatId: 'dev-be', state: 'idle', sessionId: null, restarts: 0, permissionMode: 'acceptEdits', detail: '' }] }] });
-  notifier.onEvent({ type: 'collab', kind: 'runners', runners: [{ id: 'r1', machine: 'mac', online: true, lastSeenAt: 0, seats: [{ seatId: 'dev-be', state: 'failed', sessionId: null, restarts: 5, permissionMode: 'acceptEdits', detail: 'crashed 5×' }] }] });
+  notifier.onEvent({ type: 'collab', kind: 'runners', runners: [{ id: 'r1', label: null, config: { version: 0, seats: [] }, machine: 'mac', online: true, lastSeenAt: 0, seats: [{ seatId: 'dev-be', state: 'idle', sessionId: null, restarts: 0, permissionMode: 'acceptEdits', detail: '' }] }] });
+  notifier.onEvent({ type: 'collab', kind: 'runners', runners: [{ id: 'r1', label: null, config: { version: 0, seats: [] }, machine: 'mac', online: true, lastSeenAt: 0, seats: [{ seatId: 'dev-be', state: 'failed', sessionId: null, restarts: 5, permissionMode: 'acceptEdits', detail: 'crashed 5×' }] }] });
   await settle();
   assert.ok(calls.some(call => call.method === 'sendMessage' && /Runner seat @dev-be on mac failed: crashed 5×/.test(String(call.body.text))));
   notifier.stop(); office.close(); fixture.close();

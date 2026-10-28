@@ -61,7 +61,7 @@ const install = async (): Promise<void> => {
   const url = option('url')?.replace(/\/+$/, ''); const code = option('code');
   if (!url || !code) throw new Error('usage: agent-office.mjs install --url <https://office.example.com> --code <install code>');
   const response = await fetch(`${url}/v1/install/redeem`, { method: 'POST', headers: { authorization: `Bearer ${code}`, 'content-type': 'application/json' }, body: JSON.stringify({ machine: process.env.HOSTNAME ?? process.env.COMPUTERNAME ?? 'unknown' }), signal: AbortSignal.timeout(15_000) });
-  const body = await response.json().catch(() => ({})) as { daemonUrl?: string; token?: string; error?: string };
+  const body = await response.json().catch(() => ({})) as { daemonUrl?: string; token?: string; machineId?: string | null; error?: string };
   if (!response.ok || !body.token) throw new Error(`install code rejected (${body.error ?? response.status}). Ask the manager for a new one (Org → Add machine).`);
   const store = new SessionStore(); store.saveConnector({ daemonUrl: body.daemonUrl ?? url, token: body.token });
   const command = hookCommand(process.execPath, self);
@@ -76,6 +76,11 @@ const install = async (): Promise<void> => {
     'Start a seated session, e.g.:  AGENT_OFFICE_SEAT=design-atom claude   (PowerShell: $env:AGENT_OFFICE_SEAT="design-atom"; claude)',
     'Already-running Claude sessions must be restarted to pick up the hooks.',
   ].join('\n') + '\n');
+  // A machine created on the web: start its runner now and at every login; its seats come from the web.
+  if (body.machineId) {
+    try { process.stdout.write(`${installService(self, store.home)}\nThis machine's seats are managed on the web (Machines); changes apply within seconds.\n`); }
+    catch (error) { process.stdout.write(`Could not install the runner service (${error instanceof Error ? error.message : String(error)}). Run it by hand: node "${self}" runner install-service\n`); }
+  }
 };
 
 const update = async (): Promise<void> => {

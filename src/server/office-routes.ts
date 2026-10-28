@@ -107,10 +107,11 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
 
   app.post('/v1/connectors', c => managerOnly(c, () => c.json(auth.createConnectorCredential(), 201)));
   app.post('/v1/sessions/register', async c => {
-    if (!auth.authenticateConnector(c.req.raw)) return json('unauthorized', 401);
+    const connector = auth.authenticateConnector(c.req.raw);
+    if (!connector) return json('unauthorized', 401);
     return handle(async () => {
       const input = z.object({ sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/), project: z.string().min(1).max(512) }).strict().parse(await c.req.json());
-      return c.json(auth.registerSession(input), 201);
+      return c.json(auth.registerSession(input, connector.machine), 201);
     });
   });
 

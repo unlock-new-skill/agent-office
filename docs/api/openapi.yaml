@@ -116,6 +116,43 @@ paths:
       security: [{cookieAuth: []}]
       parameters: [{in: path, name: id, required: true, schema: {type: string}}]
       responses: {'200': {description: '{entries: RunnerLogEntry[]} (last 300, in memory)'}}
+  /v1/machines:
+    post:
+      security: [{cookieAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [label], properties: {label: {type: string, maxLength: 80}}}}}}
+      responses: {'201': {description: RunnerView of the new machine}}
+  /v1/machines/{id}:
+    patch:
+      security: [{cookieAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [label], properties: {label: {type: string, maxLength: 80}}}}}}
+      responses: {'200': {description: Renamed}}
+    delete:
+      description: Deletes the machine and revokes its connector credentials.
+      security: [{cookieAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: Deleted}}
+  /v1/machines/{id}/config:
+    put:
+      description: Replaces the seat list (live-synced to the runner). Seats must exist and run on one machine only.
+      security: [{cookieAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [seats], properties: {seats: {type: array, maxItems: 20, items: {type: object, required: [seatId, cwd], properties: {seatId: {type: string}, cwd: {type: string, description: absolute path}, permissionMode: {type: string, enum: [default, acceptEdits, plan, bypassPermissions]}, sessionId: {type: [string, 'null']}, autoStart: {type: boolean}}}}}}}}}
+      responses: {'200': {description: '{version, seats}'}, '400': {description: duplicate_seat | invalid path}, '404': {description: seat_not_found}, '409': {description: 'seat_on_other_machine:<seat>'}}
+  /v1/machines/{id}/sessions:
+    get:
+      security: [{cookieAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: '{sessions: MachineSession[]} registered by this machine, newest first'}}
+  /v1/machines/{id}/install-code:
+    post:
+      security: [{cookieAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'201': {description: '{code, expiresAt, uses, commands: {unix, windows}} — one use, 24 h, bound to the machine'}}
+  /v1/runners/me/config:
+    get:
+      security: [{bearerAuth: []}]
+      responses: {'200': {description: '{version, seats} for this machine'}}
   /v1/notify/telegram:
     get:
       security: [{cookieAuth: []}]

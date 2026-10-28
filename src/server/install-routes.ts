@@ -48,6 +48,6 @@ export const registerInstallRoutes = (app: Hono, deps: Deps): void => {
     // Guessing codes is the only attack surface here; 10 tries per client per minute is plenty for real installs.
     if (!limiter.allow(`redeem:${c.req.header('x-agent-office-peer') ?? 'local'}`, 10 / 60, 10)) return json('rate_limited', 429);
     const connector = deps.auth.redeemInstallCode(c.req.raw);
-    return connector ? c.json({ daemonUrl: originOf(c), token: connector.token }, 201) : json('invalid_install_code', 401);
+    return connector ? c.json({ daemonUrl: originOf(c), token: connector.token, machineId: connector.machineId }, 201) : json('invalid_install_code', 401);
   });
 };

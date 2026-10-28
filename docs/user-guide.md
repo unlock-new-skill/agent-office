@@ -207,6 +207,10 @@ AGENT_OFFICE_SEAT=dev-be claude --permission-mode acceptEdits
 
 ### Chạy agent không cần terminal (runner)
 
+**Cách nhanh nhất — tab Machines:** Thêm máy → thêm ghế (chọn ghế, thư mục repo, quyền, session muốn tiếp tục — danh sách gợi ý các session Claude đã thấy trên chính máy đó) → **Lưu** → **Lệnh cài** → chạy lệnh trên máy (cần Node.js 20+ và Claude Code đã đăng nhập). Lệnh cài connector, gắn máy vào thẻ và cài runner tự chạy khi đăng nhập. Sau đó mọi thay đổi trên web (thêm/bớt ghế, đổi repo, đổi session) máy áp dụng trong vài giây. Thư mục repo phải nằm trong vùng máy cho phép (mặc định: thư mục home; mở rộng bằng `"allowedRoots": ["/data/projects"]` trong `~/.agent-office/runner.json` trên máy). Chọn session đang mở ở terminal thì đóng terminal đó trước khi lưu. Xoá máy trên web thì thu hồi luôn quyền kết nối của máy.
+
+**Cách thủ công** (máy không quản lý trên web):
+
 Runner là service chạy trên mỗi máy agent: giữ các ghế chạy headless (`claude -p`), tự mở lại session đã chết bằng `--resume` (giữ context), đưa mention vào thành lượt mới, và cho manager điều khiển từ web.
 
 ```sh
