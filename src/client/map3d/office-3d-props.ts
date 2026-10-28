@@ -106,3 +106,61 @@ export const makePantry = (parent: THREE.Object3D, x: number, z: number): void =
     for (const side of [-1, 1]) cube(shared(0xf59e0b, { roughness: 0.7 }), [0.4, 0.06, 0.4], [tx + side * 0.75, 0.55, tz], parent);
   }
 };
+
+/** Lush meadow: mottled greens with short blade strokes, tiled across the ground plane. */
+export const grassTexture = (): THREE.CanvasTexture => {
+  const size = 256; const canvas = document.createElement('canvas'); canvas.width = size; canvas.height = size; const context = canvas.getContext('2d')!;
+  let seed = 4242; const random = (): number => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  context.fillStyle = '#4caf50'; context.fillRect(0, 0, size, size);
+  for (let i = 0; i < 1400; i++) { const g = 150 + Math.floor(random() * 70); context.fillStyle = `rgba(${40 + Math.floor(random() * 40)},${g},${50 + Math.floor(random() * 30)},0.35)`; context.fillRect(random() * size, random() * size, 6 + random() * 10, 6 + random() * 10); }
+  for (let i = 0; i < 2600; i++) {
+    const x = random() * size; const y = random() * size; const g = 140 + Math.floor(random() * 90);
+    context.strokeStyle = `rgba(${30 + Math.floor(random() * 50)},${g},${40 + Math.floor(random() * 30)},0.8)`; context.lineWidth = 1;
+    context.beginPath(); context.moveTo(x, y); context.lineTo(x + (random() - 0.5) * 3, y - 3 - random() * 4); context.stroke();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping; texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 8;
+  return texture;
+};
+
+/** Outdoor tree: trunk and stacked, slightly rotated foliage blocks; `scale` varies the size. */
+export const makeOutdoorTree = (parent: THREE.Object3D, x: number, z: number, scale: number, seed: number): void => {
+  const group = new THREE.Group(); group.position.set(x, 0, z); group.scale.setScalar(scale); group.rotation.y = seed * 0.9; parent.add(group);
+  cube(shared(0x5b3a1e), [0.35, 2.2, 0.35], [0, 1.1, 0], group);
+  const greens = [0x15803d, 0x166534, 0x22c55e, 0x16a34a];
+  const crowns: Array<[number, number, number, number]> = [[0, 2.6, 0, 2.2], [0.4, 3.4, 0.2, 1.6], [-0.35, 3.2, -0.3, 1.5], [0, 4.1, 0, 1.0]];
+  crowns.forEach(([cx, cy, cz, s], index) => { const mesh = cube(shared(greens[(seed + index) % greens.length]!, { roughness: 0.9 }), [s, s * 0.85, s], [cx, cy, cz], group); mesh.rotation.y = index * 0.6 + seed; });
+};
+
+export const makeBush = (parent: THREE.Object3D, x: number, z: number, seed: number): void => {
+  const green = shared([0x16a34a, 0x15803d, 0x22c55e][seed % 3]!, { roughness: 0.95 });
+  const a = cube(green, [1.1, 0.7, 1.0], [x, 0.35, z], parent); a.rotation.y = seed;
+  const b = cube(green, [0.7, 0.55, 0.7], [x + 0.45, 0.6, z - 0.2], parent); b.rotation.y = seed * 1.7;
+};
+
+/** A small patch of flowers (stem + coloured head) for the meadow. */
+export const makeFlowers = (parent: THREE.Object3D, x: number, z: number, seed: number): void => {
+  const colors = [0xfde047, 0xf472b6, 0xf8fafc, 0xa78bfa, 0xfb923c];
+  for (let i = 0; i < 4; i++) {
+    const fx = x + Math.sin(seed * 3 + i * 2.1) * 0.5; const fz = z + Math.cos(seed * 5 + i * 1.7) * 0.5;
+    cube(shared(0x15803d), [0.05, 0.3, 0.05], [fx, 0.15, fz], parent, false);
+    cube(shared(colors[(seed + i) % colors.length]!, { roughness: 0.6 }), [0.18, 0.12, 0.18], [fx, 0.33, fz], parent, false);
+  }
+};
+
+/** Moon with a soft halo sprite; returns the materials so night can fade it in. */
+export const makeMoon = (): { group: THREE.Group; materials: Array<THREE.MeshBasicMaterial | THREE.SpriteMaterial> } => {
+  const group = new THREE.Group();
+  const body = new THREE.MeshBasicMaterial({ color: 0xf5f3e7, transparent: true, fog: false });
+  const sphere = new THREE.Mesh(new THREE.SphereGeometry(2.4, 32, 16), body); group.add(sphere);
+  const crater = new THREE.MeshBasicMaterial({ color: 0xd9d4c0, transparent: true, fog: false });
+  for (const [cx, cy, s] of [[-0.7, 0.6, 0.5], [0.8, -0.3, 0.35], [0.1, -0.9, 0.4]] as const) { const spot = new THREE.Mesh(new THREE.SphereGeometry(s, 12, 8), crater); spot.position.set(cx, cy, 2.1); group.add(spot); }
+  const canvas = document.createElement('canvas'); canvas.width = 128; canvas.height = 128; const context = canvas.getContext('2d')!;
+  const gradient = context.createRadialGradient(64, 64, 10, 64, 64, 64);
+  gradient.addColorStop(0, 'rgba(255,250,220,0.55)'); gradient.addColorStop(0.45, 'rgba(200,215,255,0.18)'); gradient.addColorStop(1, 'rgba(200,215,255,0)');
+  context.fillStyle = gradient; context.fillRect(0, 0, 128, 128);
+  const map = new THREE.CanvasTexture(canvas); map.colorSpace = THREE.SRGBColorSpace;
+  const halo = new THREE.SpriteMaterial({ map, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
+  const sprite = new THREE.Sprite(halo); sprite.scale.set(16, 16, 1); group.add(sprite);
+  return { group, materials: [body, crater, halo] };
+};

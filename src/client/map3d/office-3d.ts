@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { SeatStatus } from '../state/office-store.js';
 import { CELL_H, CELL_W, TILE, seatHash, type MapLayout } from '../map/office-map-layout.js';
 import { currentHour, lightingAt } from './day-night.js';
-import { box, cube, floorTexture, makeCoffeeTable, makePantry, makePendantLamp, makePlant, makeSofa, shared, ZONE_FLOORS, type FloorKind } from './office-3d-props.js';
+import { box, cube, floorTexture, grassTexture, makeBush, makeCoffeeTable, makeFlowers, makeMoon, makeOutdoorTree, makePantry, makePendantLamp, makePlant, makeSofa, shared, ZONE_FLOORS, type FloorKind } from './office-3d-props.js';
 import type { SeatSprite } from '../map/office-map-painter.js';
 
 export type Target3D = { seatId: string } | { agentId: string };
@@ -74,7 +74,9 @@ export class Office3D {
   private model: Office3DModel | null = null;
   private readonly floors = new Map<FloorKind, THREE.CanvasTexture>();
   private readonly hemisphere = new THREE.HemisphereLight(0xdbe7ff, 0x2a2f38, 1.9);
-  private readonly ground = new THREE.MeshStandardMaterial({ color: 0x3b4048, roughness: 1 });
+  private readonly grass = grassTexture();
+  private readonly ground = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.grass, roughness: 1 });
+  private readonly moon = makeMoon();
   private glass: THREE.MeshStandardMaterial | null = null;
   private bulbs: THREE.MeshStandardMaterial[] = [];
   private lamps: THREE.PointLight[] = [];
@@ -94,6 +96,8 @@ export class Office3D {
     this.scene.add(this.hemisphere);
     this.sun.castShadow = true; this.sun.shadow.mapSize.set(2048, 2048); this.sun.shadow.bias = -0.0005; this.sun.shadow.normalBias = 0.02;
     this.scene.add(this.sun, this.sun.target, this.world);
+    this.grass.repeat.set(400 / 6, 400 / 6);
+    this.scene.add(this.moon.group);
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), this.ground);
     ground.rotation.x = -Math.PI / 2; ground.position.y = -0.06; ground.receiveShadow = true; this.scene.add(ground);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -135,7 +139,8 @@ export class Office3D {
     this.renderer.domElement.removeEventListener('pointerleave', this.onPointerLeave);
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.removeEventListener('click', this.onClick);
-    this.clearWorld(); for (const texture of this.floors.values()) texture.dispose(); this.ground.dispose(); this.renderer.dispose(); this.renderer.domElement.remove();
+    this.clearWorld(); for (const texture of this.floors.values()) texture.dispose(); this.ground.dispose(); this.grass.dispose();
+    this.moon.group.traverse(object => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); for (const material of this.moon.materials) { if ('map' in material) material.map?.dispose(); material.dispose(); } this.renderer.dispose(); this.renderer.domElement.remove();
   }
 
   private resize(): void {
@@ -177,6 +182,7 @@ export class Office3D {
     const contentDepth = Math.max(...layout.rooms.map(room => (room.y + room.h) * U), layout.lobby ? (layout.lobby.y + layout.lobby.h) * U : 0, 12.5);
     const x0 = -1; const z0 = -1; const x1 = layout.width * U + 8; const z1 = contentDepth + 1.5;
     this.buildShell(x0, z0, x1, z1);
+    this.buildGrounds(x0, z0, x1, z1);
     layout.rooms.forEach((room, index) => {
       const rx = room.x * U; const rz = room.y * U; const w = room.w * U; const d = room.h * U;
       const kind = ZONE_FLOORS[index % ZONE_FLOORS.length]!;
@@ -240,6 +246,30 @@ export class Office3D {
     for (const [px, pz] of [[x0, z0], [x1, z0], [x0, z1], [x1, z1]] as const) cube(shared(0xd6d3d1), [0.7, px === x0 || pz === z0 ? H : 0.6, 0.7], [px, (px === x0 || pz === z0 ? H : 0.6) / 2, pz], this.world);
   }
 
+  /**
+   * Meadow around the building: a stone walkway on the near sides, then trees, bushes and flowers scattered with a
+   * fixed seed. Nothing tall is placed close in front of the building, where it would block the isometric view.
+   */
+  private buildGrounds(x0: number, z0: number, x1: number, z1: number): void {
+    const walk = 1.6;
+    this.slab('concrete', 0xcbd5e1, x0 - 0.4, z1 + 0.4, x1 - x0 + walk + 0.4, walk, 0.0, 2);
+    this.slab('concrete', 0xcbd5e1, x1 + 0.4, z0 - 0.4, walk, z1 - z0 + 0.8, 0.0, 2);
+    this.slab('concrete', 0xcbd5e1, x0 + (x1 - x0) / 2 - 1, z1 + 0.4 + walk, 2, 10, 0.0, 2);
+    let seed = 7919; const random = (): number => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const margin = 26; const inBuilding = (x: number, z: number, pad: number): boolean => x > x0 - pad && x < x1 + walk + pad && z > z0 - pad && z < z1 + walk + pad;
+    const blocksView = (x: number, z: number): boolean => (z > z1 && z < z1 + 16 && x > x0 - 16) || (x > x1 && x < x1 + 16 && z > z0 - 16);
+    const spot = (pad: number, avoidView: boolean): [number, number] | null => {
+      for (let attempt = 0; attempt < 30; attempt++) {
+        const x = x0 - margin + random() * (x1 - x0 + margin * 2); const z = z0 - margin + random() * (z1 - z0 + margin * 2);
+        if (!inBuilding(x, z, pad) && !(avoidView && blocksView(x, z))) return [x, z];
+      }
+      return null;
+    };
+    for (let i = 0; i < 46; i++) { const at = spot(3, true); if (at) makeOutdoorTree(this.world, at[0], at[1], 0.8 + random() * 0.7, i); }
+    for (let i = 0; i < 34; i++) { const at = spot(2, true); if (at) makeBush(this.world, at[0], at[1], i); }
+    for (let i = 0; i < 70; i++) { const at = spot(1.5, false); if (at) makeFlowers(this.world, at[0], at[1], i); }
+  }
+
   private addLampLight(x: number, z: number, size: number): void {
     const light = new THREE.PointLight(0xffd9a0, 0, size * 1.6, 1.4); light.position.set(x, 3.6, z); this.world.add(light); this.lamps.push(light);
   }
@@ -252,10 +282,18 @@ export class Office3D {
     (this.scene.fog as THREE.Fog).color.copy(this.scene.background as THREE.Color);
     this.hemisphere.intensity = light.ambientIntensity; this.hemisphere.color.copy(sky).lerp(new THREE.Color(0xffffff), 0.6);
     this.sun.color.setHex(light.sunColor); this.sun.intensity = light.sunIntensity;
-    const distance = this.reach * 1.5 + 30;
+    const distance = this.reach * 1.5 + 30; const night = 1 - light.daylight;
     this.sun.position.set(this.center.x + Math.sin(light.sunAzimuth) * distance * Math.cos(light.sunElevation), Math.sin(light.sunElevation) * distance, this.center.z - Math.cos(light.sunAzimuth) * distance * Math.cos(light.sunElevation) * 0.6);
+    // At night the directional light becomes cool moonlight coming from the moon.
+    this.moon.group.visible = night > 0.02;
+    for (const material of this.moon.materials) material.opacity = Math.min(1, night * 1.2);
+    if (night > 0.5) {
+      const fromMoon = this.moon.group.position.clone().sub(this.center); fromMoon.y = Math.max(fromMoon.y, 8); fromMoon.normalize();
+      this.sun.position.copy(this.center).addScaledVector(fromMoon, distance);
+      this.sun.color.setHex(0xbfd4ff); this.sun.intensity = 0.3 + night * 0.55;
+    }
     this.sun.target.position.copy(this.center);
-    this.ground.color.setHex(0x3b4048).multiplyScalar(0.45 + light.daylight * 0.55);
+    this.ground.color.setHex(0xffffff).multiplyScalar(0.3 + light.daylight * 0.7).lerp(new THREE.Color(0x6f83bd), night * 0.35);
     if (this.glass) { this.glass.color.copy(sky); this.glass.emissive.copy(sky); this.glass.emissiveIntensity = 0.25 + light.daylight * 0.35; }
     for (const bulb of this.bulbs) bulb.emissiveIntensity = 0.3 + light.lampIntensity * 2.6;
     for (const lamp of this.lamps) lamp.intensity = light.lampIntensity * 18;
@@ -271,6 +309,12 @@ export class Office3D {
     const reach = this.reach;
     const shadow = this.sun.shadow.camera; shadow.left = -reach; shadow.right = reach; shadow.top = reach; shadow.bottom = -reach; shadow.near = 1; shadow.far = reach * 4 + 80; shadow.updateProjectionMatrix();
     this.resize(); this.controls.update();
+    // Put the moon high in the upper-right of the default view: walk down the view ray from that screen point.
+    this.camera.updateMatrixWorld();
+    const origin = new THREE.Vector3(0.62, 0.74, -1).unproject(this.camera); const direction = new THREE.Vector3(); this.camera.getWorldDirection(direction);
+    const height = 24; const along = (origin.y - height) / -direction.y;
+    this.moon.group.position.copy(origin).addScaledVector(direction, Math.max(along, 5));
+    this.lightingCheckedAt = -Infinity;
   }
 
   private addDesk(seatId: string, px: number, py: number, leader: boolean, model: Office3DModel): void {

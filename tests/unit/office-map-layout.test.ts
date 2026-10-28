@@ -44,3 +44,12 @@ test('narrow viewports get two desks per row so rooms fit', () => {
   assert.ok(phone.width <= 179, `width ${phone.width}`);
   assert.equal(phone.rooms[0]!.desks[2]!.y > phone.rooms[0]!.desks[0]!.y, true, 'third desk wraps');
 });
+
+test('a larger gap spreads rooms apart', () => {
+  const seats = [seat('a', 'x', 'leader'), seat('b', 'y', 'leader')];
+  const tight = layoutOffice([department('x'), department('y')], seats, [], 2000);
+  const wide = layoutOffice([department('x'), department('y')], seats, [], 2000, 48);
+  const spacing = (layout: ReturnType<typeof layoutOffice>): number => layout.rooms[1]!.x - (layout.rooms[0]!.x + layout.rooms[0]!.w);
+  assert.equal(spacing(tight), 16);
+  assert.equal(spacing(wide), 48);
+});

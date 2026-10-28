@@ -11,8 +11,8 @@ type Props = { state: OfficeState; notify: (text: string) => void };
 type Target = { seatId: string } | { agentId: string };
 const LEGEND: SeatStatus[] = ['working', 'listening', 'blocked', 'idle', 'wake_limited', 'offline', 'vacant'];
 const keyOf = (target: Target | null): string | null => target ? ('seatId' in target ? target.seatId : target.agentId) : null;
-/** 3D rooms are laid out on a fixed-width grid (about three rooms per row); the camera does the fitting. */
-const LAYOUT_WIDTH_3D = 620;
+/** 3D rooms are laid out on a fixed-width grid (about three rooms per row, three tiles apart); the camera does the fitting. */
+const LAYOUT_WIDTH_3D = 760; const ROOM_GAP_3D = 48;
 type Mode = '3d' | '2d';
 const MODE_KEY = 'agent-office.map-mode';
 const savedMode = (): Mode => { try { return localStorage.getItem(MODE_KEY) === '2d' ? '2d' : '3d'; } catch { return '3d'; } };
@@ -34,7 +34,7 @@ export function MapView({ state, notify }: Props): ReactNode {
 
   const seats = useMemo(() => state.org?.seats ?? [], [state.org]);
   const lobbyAgents = useMemo(() => unassignedAgents(state), [state]);
-  const layout = useMemo(() => layoutOffice(state.org?.departments ?? [], seats, lobbyAgents.map(agent => agent.id), mode === '3d' ? LAYOUT_WIDTH_3D : Math.max(width / scale, 120)), [state.org, seats, lobbyAgents, width, scale, mode]);
+  const layout = useMemo(() => layoutOffice(state.org?.departments ?? [], seats, lobbyAgents.map(agent => agent.id), mode === '3d' ? LAYOUT_WIDTH_3D : Math.max(width / scale, 120), mode === '3d' ? ROOM_GAP_3D : undefined), [state.org, seats, lobbyAgents, width, scale, mode]);
   const leaders = useMemo(() => new Set(seats.filter(seat => seat.role === 'leader').map(seat => seat.id)), [seats]);
   const sprites = useMemo(() => new Map<string, SeatSprite>(seats.map(seat => [seat.id, { title: seat.title, status: seatStatus(seat, state.agents) }])), [seats, state.agents]);
   const lobbyLabels = useMemo(() => new Map(lobbyAgents.map(agent => [agent.id, sessionLabel(agent)])), [lobbyAgents]);

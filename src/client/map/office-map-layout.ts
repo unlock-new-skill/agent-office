@@ -24,13 +24,14 @@ const roomSize = (seats: number, perRow: number): { w: number; h: number } => {
  * Places one room per department (leader desk first) in rows that wrap at `maxWidth`, plus a lobby for sessions
  * without a seat. Pure so it can be unit-tested and recomputed only when the org or the viewport changes.
  */
-export const layoutOffice = (departments: Department[], seats: Seat[], unseatedAgentIds: string[], maxWidth: number): MapLayout => {
+/** `gap`: space between rooms in layout pixels (the 3D office spreads departments further apart than the 2D map). */
+export const layoutOffice = (departments: Department[], seats: Seat[], unseatedAgentIds: string[], maxWidth: number, gap = GAP): MapLayout => {
   // Three desks per row, or two when even a three-desk room would not fit the viewport (phones).
-  const perRow = maxWidth >= PAD * 2 + 3 * CELL_W + GAP * 2 ? 3 : 2;
-  const rooms: Room[] = []; let x = GAP; let y = GAP; let rowHeight = 0; let width = 0;
+  const perRow = maxWidth >= PAD * 2 + 3 * CELL_W + gap * 2 ? 3 : 2;
+  const rooms: Room[] = []; let x = gap; let y = gap; let rowHeight = 0; let width = 0;
   const place = (w: number, h: number): { x: number; y: number } => {
-    if (x > GAP && x + w + GAP > maxWidth) { x = GAP; y += rowHeight + GAP; rowHeight = 0; }
-    const at = { x, y }; x += w + GAP; rowHeight = Math.max(rowHeight, h); width = Math.max(width, x);
+    if (x > gap && x + w + gap > maxWidth) { x = gap; y += rowHeight + gap; rowHeight = 0; }
+    const at = { x, y }; x += w + gap; rowHeight = Math.max(rowHeight, h); width = Math.max(width, x);
     return at;
   };
   for (const department of departments) {
@@ -50,7 +51,7 @@ export const layoutOffice = (departments: Department[], seats: Seat[], unseatedA
     const at = place(Math.max(w, PAD * 2 + 2 * LOBBY_SLOT_W), h);
     lobby = { ...at, w: Math.max(w, PAD * 2 + 2 * LOBBY_SLOT_W), h, spots: shown.map((agentId, index) => ({ agentId, x: at.x + PAD + (index % perRow) * LOBBY_SLOT_W, y: at.y + WALL + Math.floor(index / perRow) * CELL_H })) };
   }
-  return { rooms, lobby, width: Math.max(width, GAP * 2), height: y + rowHeight + GAP };
+  return { rooms, lobby, width: Math.max(width, gap * 2), height: y + rowHeight + gap };
 };
 
 /** Seat or lobby agent under a logical point, for hover and click. */
