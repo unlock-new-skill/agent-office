@@ -151,7 +151,11 @@ export class Runner {
     const worker = new SeatWorker(seat, {
       spawn: this.deps.spawn ?? spawnClaude, state: this.state, listen: this.listen,
       onStatus: status => { this.statuses.set(status.seatId, status); this.deps.out(`[${status.seatId}] ${status.state}: ${status.detail}`); },
-      onLog: entry => { this.logs.push(entry); if (this.logs.length > MAX_QUEUED_LOGS) this.logs = this.logs.slice(-MAX_QUEUED_LOGS); },
+      onLog: entry => {
+        // Errors also go to the machine's runner.log, so they can be read there without the web UI.
+        if (entry.kind === 'error') this.deps.out(`[${entry.seatId}] ${entry.summary}`);
+        this.logs.push(entry); if (this.logs.length > MAX_QUEUED_LOGS) this.logs = this.logs.slice(-MAX_QUEUED_LOGS);
+      },
       ...(this.deps.sleep ? { sleep: this.deps.sleep } : {}),
     });
     this.workers.set(seat.seatId, worker); this.statuses.set(seat.seatId, worker.snapshot());
