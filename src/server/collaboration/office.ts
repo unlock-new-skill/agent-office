@@ -11,7 +11,7 @@ import { WakeService } from './wake-service.js';
 export type OfficeOptions = { maxAutoWakes: number; emit: (event: CollabEvent) => void; remoteApproval?: boolean };
 /** handoff = the seat's raw note; handoffBrief = note + open tasks + unread, ready to inject into a session's context. */
 export type WhoAmI = { agentId: string; seat: Seat | null; department: Department | null; channels: ChannelSummary[]; handoff: SeatHandoff | null; handoffBrief: string | null };
-export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; close: () => void };
+export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; recordWork: (agentId: string, ms: number) => void; close: () => void };
 
 /** Wires the collaboration services around one database and one realtime emitter. */
 export const createOffice = (db: Database, options: OfficeOptions): Office => {
@@ -31,6 +31,13 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
     const self = { kind: 'seat', seatId: seat.id } as const;
     return { agentId, seat, department: org.department(seat.departmentId), channels: messages.channelsForSeat(seat.id), handoff: handoffs.get(self, seat.id), handoffBrief: handoffs.brief(seat.id, options) };
   };
+  /** Adds one finished turn to the working time of the seat the session sits in (bounded against clock skew). */
+  const recordWork = (agentId: string, ms: number): void => {
+    const seat = org.seatForAgent(agentId);
+    if (!seat || !Number.isFinite(ms) || ms <= 0) return;
+    db.raw.prepare('UPDATE seats SET work_ms=work_ms+? WHERE id=?').run(Math.min(Math.round(ms), 6 * 3_600_000), seat.id);
+    org.publish();
+  };
   const touchAgent = (agentId: string): void => { db.raw.prepare('UPDATE agents SET last_contact_at=? WHERE id=?').run(Date.now(), agentId); };
-  return { org, messages, wake: wakeService, tasks, handoffs, permissions, runners, whoami, touchAgent, close: () => { clearInterval(sweep); wakeService.close(); permissions.close(); runners.close(); } };
+  return { org, messages, wake: wakeService, tasks, handoffs, permissions, runners, whoami, touchAgent, recordWork, close: () => { clearInterval(sweep); wakeService.close(); permissions.close(); runners.close(); } };
 };

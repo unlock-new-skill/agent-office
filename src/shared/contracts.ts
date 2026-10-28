@@ -5,6 +5,8 @@ export const EventKindSchema = z.enum(['session.start', 'session.end', 'turn.sta
 export const TelemetrySchema = z.object({
   id, ts: z.string().datetime(), kind: EventKindSchema,
   turnId: id.optional(), invocationId: id.optional(), tool: z.string().min(1).max(128).optional(), summary: z.string().max(200).optional(),
+  /** Model the session last answered with (sent with turn.stop, read from the transcript). */
+  model: z.string().min(1).max(80).optional(),
 }).strict().superRefine((value, ctx) => {
   if (!value.kind.startsWith('session.') && !value.turnId) ctx.addIssue({ code: 'custom', message: 'turnId required', path: ['turnId'] });
   if (value.kind.startsWith('tool.') && !value.invocationId) ctx.addIssue({ code: 'custom', message: 'invocationId required', path: ['invocationId'] });
@@ -33,6 +35,8 @@ export type AgentSnapshot = {
   lastContactAt?: number | null;
   /** Hidden from the lobby by the manager until the session starts again. */
   dismissed?: boolean;
+  /** Model the session last answered with, when known. */
+  model?: string | null;
 };
 export type Snapshot = { generation: string; seq: number; agents: AgentSnapshot[]; org?: OrgView };
 export type Delta = { type: 'delta'; generation: string; seq: number; event: EventEnvelope };
@@ -41,7 +45,8 @@ export type SeatRole = 'leader' | 'member';
 export type WakeState = 'idle' | 'listening' | 'wake_limited';
 /** deputySeatId: member seat that stands in for the leader (joins #leaders, woken with the leader's items while the leader is unavailable). */
 export type Department = { id: string; name: string; color: string; sort: number; paused: boolean; deputySeatId: string | null };
-export type Seat = { id: string; departmentId: string; title: string; description: string; role: SeatRole; sort: number; agentId: string | null; consecutiveWakes: number; wakeState: WakeState };
+/** workMs: total time this seat's sessions spent in turns (working), across sessions and machines. */
+export type Seat = { id: string; departmentId: string; title: string; description: string; role: SeatRole; sort: number; agentId: string | null; consecutiveWakes: number; wakeState: WakeState; workMs: number };
 export type ChannelKind = 'department' | 'leaders';
 export type Channel = { id: string; name: string; kind: ChannelKind; departmentId: string | null; memberSeatIds: string[]; lastSeq: number };
 export type OrgView = { departments: Department[]; seats: Seat[]; channels: Channel[] };

@@ -3,8 +3,8 @@ import type { Channel, CollabEvent, Department, OfficeConfig, OrgView, Seat, Sea
 import { conflict, invalid, notFound, slugify } from './office-error.js';
 
 export const LEADERS_CHANNEL_ID = 'leaders';
-type SeatRow = { id: string; departmentId: string; title: string; description: string; role: SeatRole; sort: number; agentId: string | null; consecutiveWakes: number };
-const SEAT_COLUMNS = 'id,department_id AS departmentId,title,description,role,sort,agent_id AS agentId,consecutive_wakes AS consecutiveWakes';
+type SeatRow = Omit<Seat, 'wakeState'>;
+const SEAT_COLUMNS = 'id,department_id AS departmentId,title,description,role,sort,agent_id AS agentId,consecutive_wakes AS consecutiveWakes,work_ms AS workMs';
 
 /** Departments, seats and channel membership. Membership is always derived: department channel = its seats, leaders channel = all leader seats. */
 /**

@@ -24,6 +24,7 @@ export function PublicMapView({ onSignIn }: { onSignIn: () => void }): ReactNode
         <span className="muted public-badge">Office map · live</span>
         <span className="spacer" />
         {failed && <span className="muted">Reconnecting…</span>}
+        <a className="btn btn-small" href="/about">Giới thiệu</a>
         <button type="button" className="btn btn-small" onClick={onSignIn}>Sign in</button>
       </header>
       {data ? <MapView state={state} notify={() => undefined} publicView /> : <div className="loading">Loading map…</div>}

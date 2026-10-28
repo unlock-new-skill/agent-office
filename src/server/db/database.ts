@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -40,6 +40,8 @@ ALTER TABLE runners ADD COLUMN config_version INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE agents ADD COLUMN machine_id TEXT;`;
 /** v11: sessions the manager dismissed from the lobby (shown again when the session starts anew). */
 const V11_COLUMNS = 'ALTER TABLE agents ADD COLUMN dismissed_at INTEGER;';
+/** v12: total time each seat spent working (summed over its sessions' turns) and the model a session last answered with. */
+const V12_COLUMNS = 'ALTER TABLE seats ADD COLUMN work_ms INTEGER NOT NULL DEFAULT 0; ALTER TABLE agents ADD COLUMN model TEXT;';
 const THREAD_INDEX = 'CREATE INDEX messages_thread ON messages(channel_id, thread_seq);';
 
 /** v4 additions: seat handoff notes and remotely answerable permission prompts. */
@@ -106,7 +108,7 @@ export class Database {
   private migrate(): void {
     const version = this.raw.prepare('PRAGMA user_version').get() as { user_version: number };
     if (version.user_version === SCHEMA_VERSION) return;
-    // Additive upgrades run in place: v3 message edit/delete markers, v4 handoff notes + permission requests, v5 install codes, v6 deputies + task requesters, v7 message threads, v8 compaction summaries, v9 runners + app settings, v10 web-managed machines, v11 dismissed sessions.
+    // Additive upgrades run in place: v3 message edit/delete markers, v4 handoff notes + permission requests, v5 install codes, v6 deputies + task requesters, v7 message threads, v8 compaction summaries, v9 runners + app settings, v10 web-managed machines, v11 dismissed sessions, v12 seat work time + session model.
     const from = version.user_version;
     if (from >= 2 && from < SCHEMA_VERSION) {
       this.transaction(() => {
@@ -121,6 +123,7 @@ export class Database {
         if (from < 9) this.raw.exec(V9_TABLES);
         if (from < 10) this.raw.exec(V10_COLUMNS);
         if (from < 11) this.raw.exec(V11_COLUMNS);
+        if (from < 12) this.raw.exec(V12_COLUMNS);
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
       return;
@@ -211,6 +214,7 @@ export class Database {
       ${V9_TABLES}
       ${V10_COLUMNS}
       ${V11_COLUMNS}
+      ${V12_COLUMNS}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

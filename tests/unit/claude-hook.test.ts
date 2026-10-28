@@ -289,3 +289,18 @@ test('a session taken over by a runner closes its Claude Code process instead of
   assert.deepEqual(await runHook({ session_id: 'sess-1', hook_event_name: 'Stop' }, { store, fetch: daemon.fetchImpl, wakeWaitSeconds: 600, sleep: async () => {}, onTakeover: () => { closed++; } }), {});
   assert.equal(closed, 1);
 });
+
+test('the Stop hook reports the model of the latest real assistant reply in the transcript', async () => {
+  const { lastModel } = await import('../../src/connector/hook-runner.js');
+  const { writeFileSync, mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const path = await import('node:path');
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'ao-model-')), 't.jsonl');
+  writeFileSync(file, [
+    JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5' } }),
+    JSON.stringify({ type: 'assistant', isSidechain: true, message: { model: 'haiku-sub' } }),
+    JSON.stringify({ type: 'user', message: { content: 'hi' } }),
+    JSON.stringify({ type: 'assistant', message: { model: 'gpt-6-astra' } }),
+    JSON.stringify({ type: 'assistant', message: { model: '<synthetic>' } }),
+  ].join('\n'));
+  assert.equal(lastModel(file), 'gpt-6-astra');
+  assert.equal(lastModel(path.join(tmpdir(), 'missing.jsonl')), null);
+});

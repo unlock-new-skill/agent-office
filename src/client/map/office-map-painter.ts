@@ -1,7 +1,8 @@
 import type { SeatStatus } from '../state/office-store.js';
 import { CELL_H, CELL_W, TILE, seatHash, type DeskSpot, type Lobby, type MapLayout, type Room } from './office-map-layout.js';
 
-export type SeatSprite = { title: string; status: SeatStatus };
+/** detail: second label line under the desk (model in use, total working time). */
+export type SeatSprite = { title: string; status: SeatStatus; detail?: string };
 export type PaintInput = { layout: MapLayout; seats: Map<string, SeatSprite>; lobbyLabels: Map<string, string>; hovered: string | null; selected: string | null; time: number };
 
 const SKIN = ['#f1c27d', '#e0ac69', '#c68642', '#8d5524', '#ffdbac'];

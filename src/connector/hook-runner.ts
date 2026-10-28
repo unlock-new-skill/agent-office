@@ -1,3 +1,4 @@
+import { closeSync, openSync, readSync, statSync } from 'node:fs';
 import { z } from 'zod';
 import { normalizeClaudeHook } from '../adapters/claude/normalize-event.js';
 import { joinLinkSeat, seatIdFromJoin } from '../shared/join.js';
@@ -66,7 +67,8 @@ export const runHook = async (raw: unknown, deps: HookDeps): Promise<HookOutput>
     const input = HookInput.parse(raw);
     const session = await ensureSession(input.session_id, input.cwd, deps, input.hook_event_name === 'SessionStart');
     if (!session) return {};
-    await sendTelemetry(raw, input.session_id, session, deps);
+    const model = input.hook_event_name === 'Stop' && typeof input.transcript_path === 'string' ? lastModel(input.transcript_path) : null;
+    await sendTelemetry(raw, input.session_id, session, deps, model);
     if (input.hook_event_name === 'SessionStart') {
       const refused = deps.requestedSeat ? await claimSeat(session, seatIdFromJoin(deps.requestedSeat), deps) : '';
       // After a compaction the session keeps Claude's own summary; the server then leaves its stored one out.
@@ -194,9 +196,31 @@ export const ensureSession = async (sessionId: string, cwd: string | undefined, 
   return record;
 };
 
-const sendTelemetry = async (raw: unknown, sessionId: string, session: SessionRecord, deps: HookDeps): Promise<void> => {
-  const event = normalizeClaudeHook(raw, { producerId: session.agentId, agentId: session.agentId, project: 'session', sessionId, incarnation: sessionId });
-  if (!event) return;
+/**
+ * Model of the latest assistant message in a transcript (Claude Code records it on every reply), read from the file's
+ * tail only. Synthetic messages (errors, not logged in) are skipped; null when nothing is found.
+ */
+export const lastModel = (transcriptPath: string): string | null => {
+  try {
+    const size = statSync(transcriptPath).size; const length = Math.min(size, 256 * 1024);
+    const buffer = Buffer.alloc(length); const handle = openSync(transcriptPath, 'r');
+    try { readSync(handle, buffer, 0, length, size - length); } finally { closeSync(handle); }
+    for (const line of buffer.toString('utf8').split('\n').reverse()) {
+      if (!line.includes('"assistant"')) continue;
+      try {
+        const entry = JSON.parse(line) as { type?: string; isSidechain?: boolean; message?: { model?: unknown } };
+        const model = entry.message?.model;
+        if (entry.type === 'assistant' && !entry.isSidechain && typeof model === 'string' && model && !model.startsWith('<')) return model.slice(0, 80);
+      } catch { /* a line cut by the tail window */ }
+    }
+  } catch { /* transcript not readable */ }
+  return null;
+};
+
+const sendTelemetry = async (raw: unknown, sessionId: string, session: SessionRecord, deps: HookDeps, model: string | null = null): Promise<void> => {
+  const normalized = normalizeClaudeHook(raw, { producerId: session.agentId, agentId: session.agentId, project: 'session', sessionId, incarnation: sessionId });
+  if (!normalized) return;
+  const event = model ? { ...normalized, model } : normalized;
   const spool = new DurableSpool(deps.store.spoolDir(sessionId));
   const send = async (value: unknown): Promise<boolean> => {
     try { await daemonCall(deps.fetch, session.daemonUrl, session.token, '/v1/agents/events', { body: value }); return true; }
@@ -209,6 +233,6 @@ const sendTelemetry = async (raw: unknown, sessionId: string, session: SessionRe
 
 /** The daemon derives identity from the bearer credential and rejects unknown keys, so only telemetry fields are sent. */
 const stripBinding = (event: NonNullable<ReturnType<typeof normalizeClaudeHook>>): Record<string, unknown> => {
-  const { id, ts, kind, turnId, invocationId, tool, summary } = event;
-  return { id, ts, kind, ...(turnId ? { turnId } : {}), ...(invocationId ? { invocationId } : {}), ...(tool ? { tool } : {}), ...(summary ? { summary } : {}) };
+  const { id, ts, kind, turnId, invocationId, tool, summary, model } = event;
+  return { id, ts, kind, ...(turnId ? { turnId } : {}), ...(invocationId ? { invocationId } : {}), ...(tool ? { tool } : {}), ...(summary ? { summary } : {}), ...(model ? { model } : {}) };
 };

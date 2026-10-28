@@ -89,6 +89,10 @@ Schema v10. `POST /v1/machines` creates a runner row (`m-…`) before anything i
 
 `GET /v1/public/map` (no auth, cached 2 s) returns the org and live agents through `publicMap`: seat descriptions, channels, session ids and project paths are removed and agent ids are replaced by per-response aliases; the client renders it read-only at `/map` for anonymous visitors. The lobby shows unseated sessions that have not exited, were not dismissed (`agents.dismissed_at`, schema v11, cleared on the next registration) and reached the daemon within 5 minutes (`isLobbySession`). Machine seats may set `model`, passed to `claude --model`.
 
+## Model and working time
+
+On Stop the hook reads the transcript tail (`transcript_path`) and sends the model of the latest non-synthetic assistant reply as `model` on `turn.stop`; the daemon stores it in `agents.model`. A turn starts at `turn.start`, or at its first `tool.start` when a Stop-hook wake skipped UserPromptSubmit; when it ends (`turn.stop`/`session.end`) its duration (capped at 6 h) is added to `seats.work_ms` of the seat the session sits in (schema v12). Both appear on the 3D desk plates, map tooltips and the public map.
+
 ## Code map
 
 | Path | Role |

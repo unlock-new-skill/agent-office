@@ -8,8 +8,8 @@ import type { AgentSnapshot, ChatMessage, OrgView, Task } from '../../src/shared
 const org: OrgView = {
   departments: [{ id: 'dev', name: 'Dev', color: '#22c55e', sort: 0, paused: false, deputySeatId: null }],
   seats: [
-    { id: 'dev-lead', departmentId: 'dev', title: 'Dev Lead', description: '', role: 'leader', sort: 0, agentId: 'cc-1', consecutiveWakes: 0, wakeState: 'listening' },
-    { id: 'dev-be', departmentId: 'dev', title: 'Dev BE', description: '', role: 'member', sort: 1, agentId: null, consecutiveWakes: 0, wakeState: 'idle' },
+    { id: 'dev-lead', departmentId: 'dev', title: 'Dev Lead', description: '', role: 'leader', sort: 0, agentId: 'cc-1', consecutiveWakes: 0, wakeState: 'listening', workMs: 0 },
+    { id: 'dev-be', departmentId: 'dev', title: 'Dev BE', description: '', role: 'member', sort: 1, agentId: null, consecutiveWakes: 0, wakeState: 'idle', workMs: 0 },
   ],
   channels: [{ id: 'dev', name: 'dev', kind: 'department', departmentId: 'dev', memberSeatIds: ['dev-lead', 'dev-be'], lastSeq: 2 }],
 };

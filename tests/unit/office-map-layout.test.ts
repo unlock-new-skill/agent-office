@@ -4,7 +4,7 @@ import { CELL_H, CELL_W, hitTest, layoutOffice } from '../../src/client/map/offi
 import type { Department, Seat } from '../../src/shared/contracts.js';
 
 const department = (id: string): Department => ({ id, name: id, color: '#22c55e', sort: 0, paused: false, deputySeatId: null });
-const seat = (id: string, departmentId: string, role: 'leader' | 'member' = 'member', sort = 0): Seat => ({ id, departmentId, title: id, description: '', role, sort, agentId: null, consecutiveWakes: 0, wakeState: 'idle' });
+const seat = (id: string, departmentId: string, role: 'leader' | 'member' = 'member', sort = 0): Seat => ({ id, departmentId, title: id, description: '', role, sort, agentId: null, consecutiveWakes: 0, wakeState: 'idle', workMs: 0 });
 
 test('rooms wrap to the available width, leader desk first, desks inside their room', () => {
   const seats = [seat('dev-be', 'dev', 'member', 1), seat('dev-lead', 'dev', 'leader'), seat('dev-fe', 'dev', 'member', 2), seat('dev-x', 'dev', 'member', 3), seat('ba-lead', 'ba', 'leader')];

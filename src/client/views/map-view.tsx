@@ -5,7 +5,7 @@ import { sessionLabel } from '../components/seat-card.js';
 import { StatusDot } from '../components/status-dot.js';
 import { hitTest, layoutOffice } from '../map/office-map-layout.js';
 import { paintOffice, type PaintInput, type SeatSprite } from '../map/office-map-painter.js';
-import { SEAT_STATUS_LABEL, seatStatus, unassignedAgents, type OfficeState, type SeatStatus } from '../state/office-store.js';
+import { SEAT_STATUS_LABEL, seatStatus, unassignedAgents, workLabel, type OfficeState, type SeatStatus } from '../state/office-store.js';
 import type { TimeOfDay } from '../map3d/day-night.js';
 import { Map3DStage } from './map-3d-stage.js';
 
@@ -46,7 +46,11 @@ export function MapView({ state, notify, publicView = false, onDismiss }: Props)
   const lobbyAgents = useMemo(() => unassignedAgents(state), [state]);
   const layout = useMemo(() => layoutOffice(state.org?.departments ?? [], seats, lobbyAgents.map(agent => agent.id), mode === '3d' ? LAYOUT_WIDTH_3D : Math.max(width / scale, 120), mode === '3d' ? ROOM_GAP_3D : undefined), [state.org, seats, lobbyAgents, width, scale, mode]);
   const leaders = useMemo(() => new Set(seats.filter(seat => seat.role === 'leader').map(seat => seat.id)), [seats]);
-  const sprites = useMemo(() => new Map<string, SeatSprite>(seats.map(seat => [seat.id, { title: seat.title, status: seatStatus(seat, state.agents) }])), [seats, state.agents]);
+  const sprites = useMemo(() => new Map<string, SeatSprite>(seats.map(seat => {
+    const model = state.agents.find(agent => agent.id === seat.agentId)?.model;
+    const detail = [model, seat.workMs > 0 ? workLabel(seat.workMs) : null].filter(Boolean).join(' · ');
+    return [seat.id, { title: seat.title, status: seatStatus(seat, state.agents), ...(detail ? { detail } : {}) }];
+  })), [seats, state.agents]);
   const lobbyLabels = useMemo(() => new Map(lobbyAgents.map(agent => [agent.id, publicView ? 'Claude session' : sessionLabel(agent)])), [lobbyAgents, publicView]);
 
   // The animation loop reads the latest frame input from a ref so React renders never restart it.
@@ -92,7 +96,7 @@ export function MapView({ state, notify, publicView = false, onDismiss }: Props)
     const department = state.org?.departments.find(candidate => candidate.id === seat.departmentId);
     return {
       title: seat.title, status, seat,
-      lines: [`@${seat.id} · ${seat.role} of ${department?.name ?? seat.departmentId}`, `Status: ${SEAT_STATUS_LABEL[status]}`, agent ? (publicView ? `Agent active${agent.currentTool ? ` · running ${agent.currentTool}` : ''}` : `Session: ${sessionLabel(agent)}${agent.currentTool ? ` · running ${agent.currentTool}` : ''}`) : 'No session', ...(seat.description ? [seat.description] : [])],
+      lines: [`@${seat.id} · ${seat.role} of ${department?.name ?? seat.departmentId}`, `Status: ${SEAT_STATUS_LABEL[status]}`, ...(agent?.model ? [`Model: ${agent.model}`] : []), `Worked: ${seat.workMs > 0 ? workLabel(seat.workMs) : '—'}`, agent ? (publicView ? `Agent active${agent.currentTool ? ` · running ${agent.currentTool}` : ''}` : `Session: ${sessionLabel(agent)}${agent.currentTool ? ` · running ${agent.currentTool}` : ''}`) : 'No session', ...(seat.description ? [seat.description] : [])],
     };
   };
   const detail = selected ? describe(selected) : null; const tip = hover ? describe(hover.target) : null;

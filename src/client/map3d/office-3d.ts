@@ -44,6 +44,11 @@ const iconTexture = (status: SeatStatus): THREE.CanvasTexture | null => {
   if (!texture) { texture = textTexture([{ text: icon.text, font: 'bold 76px system-ui, sans-serif', color: icon.fg }], 128, 128, icon.bg, 40); iconTextures.set(status, texture); }
   return texture;
 };
+/** Desk name plate: seat title and, below it, the model in use and total working time. */
+const deskPlate = (title: string, detail: string | undefined): THREE.CanvasTexture => textTexture([
+  { text: title.length > 22 ? `${title.slice(0, 21)}…` : title, font: '600 34px system-ui, sans-serif', color: '#e2e8f0' },
+  ...(detail ? [{ text: detail.length > 30 ? `${detail.slice(0, 29)}…` : detail, font: '500 26px system-ui, sans-serif', color: '#93c5fd' }] : []),
+], 384, detail ? 104 : 64, 'rgba(15,23,42,0.72)', 26);
 const label = (text: string, color = '#e2e8f0'): THREE.Sprite => {
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: textTexture([{ text: text.length > 22 ? `${text.slice(0, 21)}…` : text, font: '600 34px system-ui, sans-serif', color }], 384, 64, 'rgba(15,23,42,0.72)', 26), depthWrite: false }));
   sprite.scale.set(2.4, 0.4, 1); return sprite;
@@ -68,6 +73,8 @@ export class Office3D {
   private readonly observer: ResizeObserver;
   private actors = new Map<string, Actor>();
   private hitBoxes: THREE.Mesh[] = [];
+  /** Desk plates by seat id; their text follows the model and working time without rebuilding the scene. */
+  private plates = new Map<string, THREE.Sprite>();
   private signs: Array<{ sprite: THREE.Sprite; roomId: string; name: string; color: string; paused: boolean }> = [];
   private structure = '';
   private span = 20;
@@ -128,6 +135,17 @@ export class Office3D {
       if (status !== actor.status) this.restyle(actor, status);
     }
     this.refreshSigns();
+    this.refreshPlates(model);
+  }
+
+  private refreshPlates(model: Office3DModel): void {
+    for (const [seatId, plate] of this.plates) {
+      const sprite = model.seats.get(seatId); const text = `${sprite?.title}|${sprite?.detail ?? ''}`;
+      if (plate.userData.text === text) continue;
+      plate.userData.text = text; plate.material.map?.dispose();
+      plate.material.map = deskPlate(sprite?.title ?? seatId, sprite?.detail); plate.material.needsUpdate = true;
+      plate.scale.set(2.7, sprite?.detail ? 0.73 : 0.45, 1);
+    }
   }
 
   /** Follow the clock, or pin the scene to day or night; relit on the next frame. */
@@ -167,7 +185,7 @@ export class Office3D {
     });
     // Icon textures are shared across rebuilds; sprites above only disposed their own label maps.
     for (const lamp of this.lamps) lamp.dispose();
-    this.world.clear(); this.actors.clear(); this.hitBoxes = []; this.signs = []; this.bulbs = []; this.lamps = []; this.patrons = []; this.glass = null;
+    this.world.clear(); this.actors.clear(); this.hitBoxes = []; this.signs = []; this.plates.clear(); this.bulbs = []; this.lamps = []; this.patrons = []; this.glass = null;
   }
 
   private floorFor(kind: FloorKind): THREE.CanvasTexture {
@@ -342,7 +360,10 @@ export class Office3D {
     cube(shared(0xd4d4d8), [0.7, 0.04, 0.22], [0, 0.86, -0.15], root);
     const chair = shared(0x374151);
     cube(chair, [0.7, 0.1, 0.65], [0, 0.48, 0.55], root); cube(chair, [0.7, 0.7, 0.1], [0, 0.85, 0.9], root); cube(metal, [0.08, 0.42, 0.08], [0, 0.24, 0.55], root);
-    const label3d = label(model.seats.get(seatId)?.title ?? seatId); label3d.position.set(0, 0.3, 1.5); label3d.scale.set(2.7, 0.45, 1); root.add(label3d);
+    const sprite = model.seats.get(seatId);
+    const label3d = new THREE.Sprite(new THREE.SpriteMaterial({ map: deskPlate(sprite?.title ?? seatId, sprite?.detail), depthWrite: false }));
+    label3d.userData.text = `${sprite?.title}|${sprite?.detail ?? ''}`; label3d.position.set(0, 0.3, 1.5); label3d.scale.set(2.7, sprite?.detail ? 0.73 : 0.45, 1); root.add(label3d);
+    this.plates.set(seatId, label3d);
     const person = this.makePerson(seatId, leader, false); person.group.position.set(0, 0.52, 0.55); root.add(person.group);
     this.registerActor(seatId, root, person, screen, false);
   }

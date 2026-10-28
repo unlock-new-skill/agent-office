@@ -51,3 +51,24 @@ test('machine seats carry a model for claude --model; shell characters are refus
   assert.equal((await fixture.manager(`/v1/machines/${machine.id}/config`, { method: 'PUT', body: { seats: [{ ...seat, model: 'opus" & calc' }] } })).status, 400);
   fixture.close();
 });
+
+test('seat working time adds up finished turns (also turns that start with a tool) and the session model is kept', async () => {
+  const fixture = createAppFixture();
+  const session = fixture.auth.registerSession({ sessionId: 'sess-work', project: '/p' });
+  fixture.office.org.assignAgent('dev-be', session.agentId);
+  const at = (seconds: number): string => new Date(Date.UTC(2026, 9, 29, 0, 0, seconds)).toISOString();
+  const send = (body: Record<string, unknown>) => fixture.agent(session.token, '/v1/agents/events', { body });
+  await send({ id: 'e1', ts: at(0), kind: 'turn.start', turnId: 't1' });
+  await send({ id: 'e2', ts: at(90), kind: 'turn.stop', turnId: 't1', model: 'gpt-6-astra' });
+  // A turn woken by the Stop hook: no turn.start, the first tool marks the start.
+  await send({ id: 'e3', ts: at(200), kind: 'tool.start', turnId: 't2', invocationId: 'i1', tool: 'Bash' });
+  await send({ id: 'e4', ts: at(230), kind: 'tool.done', turnId: 't2', invocationId: 'i1', tool: 'Bash' });
+  await send({ id: 'e5', ts: at(260), kind: 'turn.stop', turnId: 't2', model: 'claude-opus-5-5' });
+  assert.equal(fixture.office.org.seat('dev-be').workMs, 150_000);
+  const agents = ((await (await fixture.manager('/v1/agents')).json()) as { agents: AgentSnapshot[] }).agents;
+  assert.equal(agents.find(agent => agent.id === session.agentId)!.model, 'claude-opus-5-5');
+  const publicView = await (await fixture.app.request(`http://${HOST}/v1/public/map`, { headers: { host: HOST } })).json() as { org: OrgView; agents: AgentSnapshot[] };
+  assert.equal(publicView.org.seats.find(seat => seat.id === 'dev-be')!.workMs, 150_000);
+  assert.ok(publicView.agents.some(agent => agent.model === 'claude-opus-5-5'));
+  fixture.close();
+});

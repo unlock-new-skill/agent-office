@@ -18,7 +18,7 @@ export const publicMap = (org: OrgView, agents: AgentSnapshot[], now = Date.now(
     },
     agents: visible.map(agent => ({
       id: alias(agent.id), project: '', source: 'claude', sessionId: '', sessionIncarnation: '', state: agent.state, contactState: agent.contactState,
-      lastEventAt: null, currentTool: agent.currentTool, pendingInvocations: 0, pendingPermissions: agent.pendingPermissions > 0 ? 1 : 0, lastContactAt: agent.lastContactAt ?? null, dismissed: false,
+      lastEventAt: null, currentTool: agent.currentTool, pendingInvocations: 0, pendingPermissions: agent.pendingPermissions > 0 ? 1 : 0, lastContactAt: agent.lastContactAt ?? null, dismissed: false, model: agent.model ?? null,
     })),
   };
 };

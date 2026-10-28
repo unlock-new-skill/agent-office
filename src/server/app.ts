@@ -127,12 +127,15 @@ export const createApp = (context: AppContext): Hono => {
     if (!credential) return jsonError('unauthorized', 401);
     if (!eventLimiter.allow(`session:${credential.sessionId}`, 20, 200) || !eventLimiter.allow('global', 500, 2000)) { c.header('Retry-After', '1'); return jsonError('rate_limited', 429); }
     try {
-      const body = TelemetrySchema.parse(await c.req.json());
+      const { model, ...body } = TelemetrySchema.parse(await c.req.json());
+      const turnStartedAt = (context.db.raw.prepare('SELECT turn_started_at AS startedAt FROM agents WHERE id=?').get(credential.agentId) as { startedAt: string | null } | undefined)?.startedAt ?? null;
       const event = context.events.append({ ...body, source: 'claude', producerId: credential.id, producerIncarnation: credential.incarnation, agentId: credential.agentId, sessionId: credential.sessionId, incarnation: credential.incarnation, project: credential.project });
       // A prompt written by Agent Office (runner wake) is not a human taking over: keep the auto-wake guard counting.
       if (body.kind === 'turn.start' && body.summary !== AUTO_TURN_SUMMARY) context.office.wake.resetGuardForAgent(credential.agentId);
       if (body.kind === 'turn.start' || body.kind === 'session.end') context.office.permissions.settleForAgent(credential.agentId);
       if (body.kind === 'session.end') context.office.runners.clearTakeover(credential.agentId);
+      if (model) context.db.raw.prepare('UPDATE agents SET model=? WHERE id=?').run(model, credential.agentId);
+      if (turnStartedAt && (body.kind === 'turn.stop' || body.kind === 'session.end')) context.office.recordWork(credential.agentId, Date.parse(body.ts) - Date.parse(turnStartedAt));
       return c.json(event, 201);
     } catch (error) {
       if (error instanceof z.ZodError || error instanceof SyntaxError) return jsonError('invalid_request', 400);

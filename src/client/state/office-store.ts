@@ -119,6 +119,15 @@ export const seatStatus = (seat: Seat, agents: AgentSnapshot[]): SeatStatus => {
 };
 
 /** Live sessions not bound to any seat (shown in the Org view tray). */
+/** Compact working time: 45m, 3h 12m, 2d 4h. */
+export const workLabel = (ms: number): string => {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return '<1m';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours}h ${minutes % 60}m` : `${Math.floor(hours / 24)}d ${hours % 24}h`;
+};
+
 export const unassignedAgents = (state: OfficeState): AgentSnapshot[] => {
   const seated = new Set(state.org?.seats.map(seat => seat.agentId).filter(Boolean));
   const now = Date.now();
