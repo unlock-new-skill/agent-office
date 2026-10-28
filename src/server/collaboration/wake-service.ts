@@ -3,7 +3,7 @@ import type { ChatMessage } from '../../shared/contracts.js';
 import type { MessageService } from './message-service.js';
 import type { OrgService } from './org-service.js';
 
-export type WakeState = 'timeout' | 'aborted' | 'paused' | 'unseated' | 'wake_limit' | 'busy' | 'shutdown';
+export type WakeState = 'timeout' | 'aborted' | 'paused' | 'unseated' | 'ended' | 'wake_limit' | 'busy' | 'shutdown';
 export type WakeResult = { wake: true; reason: string; items: ChatMessage[] } | { wake: false; state: WakeState };
 type Waiter = { seatId: string; finish: (result: WakeResult) => void; recheck: () => void };
 
@@ -13,8 +13,9 @@ const LEADER_IDLE_MS = 10 * 60_000;
 
 /**
  * Decides when a seated Claude session should be woken (Stop hook / wait_for_message) and hands it the unread items.
- * Wake triggers for seat S: @mention of S, any manager message, or (members only) a leader message in S's department
- * channel. A seat is never woken by its own messages, while its department is paused, or past the auto-wake limit.
+ * Only an @mention of S wakes seat S (including @all and the system lines for task changes, which mention whoever must
+ * act): leaders coordinate who does what, so unmentioned traffic never pulls a second agent onto the same work. A seat
+ * is never woken by its own messages, while its department is paused, or past the auto-wake limit.
  * A department's deputy is also woken by items addressed to its leader while that leader is unavailable.
  */
 export class WakeService {
@@ -26,6 +27,7 @@ export class WakeService {
   check(seatId: string): WakeResult {
     const seat = this.org.seat(seatId);
     if (!seat.agentId) return { wake: false, state: 'unseated' };
+    if (this.agentEnded(seat.agentId)) return { wake: false, state: 'ended' };
     if (this.org.department(seat.departmentId).paused) return { wake: false, state: 'paused' };
     if (seat.consecutiveWakes >= this.maxAutoWakes) return { wake: false, state: 'wake_limit' };
     const pending = this.pending(seatId);
@@ -85,8 +87,6 @@ export class WakeService {
   close(): void { for (const waiter of [...this.waiters]) waiter.finish({ wake: false, state: 'shutdown' }); }
 
   private pending(seatId: string): { items: ChatMessage[]; channelHighWater: Map<string, number>; otherUnread: number } {
-    const seat = this.org.seat(seatId);
-    const leader = this.db.raw.prepare("SELECT id FROM seats WHERE department_id=? AND role='leader'").get(seat.departmentId) as { id: string } | undefined;
     const standIn = this.standingInFor(seatId);
     const items: ChatMessage[] = []; const channelHighWater = new Map<string, number>(); let unreadInWokenChannels = 0;
     for (const channel of this.messages.channelsForSeat(seatId)) {
@@ -94,16 +94,18 @@ export class WakeService {
       const unread = this.messages.list({ kind: 'seat', seatId }, channel.id, { after: channel.lastReadSeq, limit: MAX_SCAN });
       const waking = unread.filter(message => {
         if (message.deletedAt || (message.senderKind === 'seat' && message.senderId === seatId)) return false;
-        if (message.mentions.includes(seatId) || message.senderKind === 'manager') return true;
-        if (standIn && message.mentions.includes(standIn)) return true;
-        // A reply in a thread you started is addressed to you, like a mention.
-        if (message.threadSeq && message.senderKind !== 'system' && this.messages.threadRootSeat(channel.id, message.threadSeq) === seatId) return true;
-        return seat.role === 'member' && channel.kind === 'department' && channel.departmentId === seat.departmentId && message.senderKind === 'seat' && message.senderId === leader?.id;
+        return message.mentions.includes(seatId) || (standIn !== null && message.mentions.includes(standIn));
       });
       if (waking.length === 0) continue;
       items.push(...waking); channelHighWater.set(channel.id, channel.lastSeq); unreadInWokenChannels += channel.unread;
     }
     return { items, channelHighWater, otherUnread: Math.max(unreadInWokenChannels - items.length, 0) };
+  }
+
+  /** A session that ended (SessionEnd) must not consume mentions meant for whoever takes the seat next. */
+  private agentEnded(agentId: string): boolean {
+    const agent = this.db.raw.prepare('SELECT ended_at AS endedAt FROM agents WHERE id=?').get(agentId) as { endedAt: string | null } | undefined;
+    return !agent || agent.endedAt !== null;
   }
 
   /** Leader id when `seatId` is its department's deputy and the leader has no live, responsive session; else null. */

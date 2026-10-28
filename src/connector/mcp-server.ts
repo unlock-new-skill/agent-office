@@ -118,7 +118,7 @@ server.registerTool('agent_office_delete_message', {
 }, async ({ channelId, seq }) => text(await call(`/v1/channels/${encodeURIComponent(channelId)}/messages/${seq}`, { method: 'DELETE' })));
 
 server.registerTool('agent_office_wait_for_message', {
-  title: 'Wait for message', description: 'Block until something addressed to this seat arrives (mention, leader/manager message, task change) or the timeout passes. Returns the new items.',
+  title: 'Wait for message', description: 'Block until a mention of this seat arrives (including task changes that mention it) or the timeout passes. Returns the new items.',
   inputSchema: z.object({ timeoutSeconds: z.number().int().min(1).max(120).default(60) }).strict(), annotations: readOnly,
 }, async ({ timeoutSeconds }) => {
   const result = await call(`/v1/wake?wait=${timeoutSeconds}`, { timeoutMs: (timeoutSeconds + 10) * 1000 }) as { wake: boolean; reason?: string };

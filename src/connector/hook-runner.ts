@@ -4,16 +4,21 @@ import { joinLinkSeat, seatIdFromJoin } from '../shared/join.js';
 import { DurableSpool } from './spool.js';
 import type { SessionRecord, SessionStore } from './session-store.js';
 
-/** requestedSeat: seat id or join URL from AGENT_OFFICE_SEAT, claimed on SessionStart. */
-export type HookDeps = { store: SessionStore; fetch: typeof fetch; wakeWaitSeconds: number; requestedSeat?: string | undefined; permissionWaitSeconds?: number; sleep?: (ms: number) => Promise<void>; now?: () => number };
+/**
+ * requestedSeat: seat id or join URL from AGENT_OFFICE_SEAT, claimed on SessionStart. wakeWaitSeconds: how long one Stop
+ * hook listens before a keep-alive turn. alive: false once the Claude Code process that started the hook is gone.
+ */
+export type HookDeps = { store: SessionStore; fetch: typeof fetch; wakeWaitSeconds: number; requestedSeat?: string | undefined; permissionWaitSeconds?: number; sleep?: (ms: number) => Promise<void>; now?: () => number; alive?: () => boolean };
 export type HookOutput = Record<string, unknown>;
 export type WhoAmI = { agentId: string; seat: { id: string; title: string; role: string; description: string } | null; department: { name: string; deputySeatId?: string | null } | null; channels: Array<{ id: string }>; handoffBrief?: string | null };
 
 const HookInput = z.object({ session_id: z.string().min(1).max(128), hook_event_name: z.string(), cwd: z.string().optional() }).passthrough();
 const SHORT_TIMEOUT_MS = 1500;
-/** Wake states that mean "the daemon could not park us right now", as opposed to a real idle timeout or an intentional refusal. */
-const RETRYABLE_WAKE_STATES = new Set(['shutdown', 'busy', 'aborted']);
-const WAKE_BACKOFF_MS = [2000, 4000, 8000, 15_000, 30_000];
+const WAKE_BACKOFF_MS = [2000, 4000, 8000, 15_000, 30_000, 60_000];
+/** One listening round: the daemon is asked again at least once a minute. */
+export const POLL_SECONDS = 60;
+/** Sent when the listen window (just under the Stop hook timeout) runs out: one cheap turn re-arms the listener. */
+const KEEPALIVE_REASON = '[Agent Office] No new messages for you. Still listening: end your turn now without doing anything else.';
 /** Prompts that need an answer typed by the user, not Allow/Deny: always left to the terminal. */
 const TERMINAL_ONLY_TOOLS = new Set(['AskUserQuestion']);
 /** One long-poll request never outlives this: proxies such as Cloudflare cut idle responses after 100 s. */
@@ -81,7 +86,7 @@ export const runHook = async (raw: unknown, deps: HookDeps): Promise<HookOutput>
     }
     if (input.hook_event_name === 'PermissionRequest' && (deps.permissionWaitSeconds ?? 0) > 0) return await askManager(input, session, deps);
     if (input.hook_event_name === 'Stop') {
-      return await waitForWake(input.session_id, input.cwd, session, deps);
+      return await listenForWake(input.session_id, input.cwd, session, deps);
     }
     return {};
   } catch (error) {
@@ -102,40 +107,46 @@ const claimSeat = async (session: SessionRecord, seatId: string, deps: HookDeps)
 };
 
 /**
- * Parks the stopping session until something addressed to its seat arrives; blocking the stop feeds it the items.
- * Network errors, 5xx/429, daemon restarts and a full waiter pool are retried with backoff until the original wait
- * window ends, so a short outage does not leave the seat asleep. A revoked token is re-registered once. The window is
- * covered by consecutive polls of at most MAX_POLL_SECONDS so no single request trips a proxy's idle timeout.
+ * Keeps the seat listening after a turn ends. Installed as a background Stop hook (asyncRewake): the terminal stays
+ * free while this loop long-polls the daemon in rounds of POLL_SECONDS and re-polls forever. Network errors, daemon
+ * restarts and refusals (paused, wake limit, not seated yet) are retried, so a dropped connection resumes by itself;
+ * a revoked token re-registers. Only a wake (a mention for this seat) or the end of the listen window returns a block,
+ * which the CLI turns into exit code 2 to wake Claude. It stops quietly when the session ended, another listener for the
+ * same session took over, or Claude Code (the parent process) is gone, so no orphan can swallow mentions.
  */
-const waitForWake = async (sessionId: string, cwd: string | undefined, initial: SessionRecord, deps: HookDeps): Promise<HookOutput> => {
+const listenForWake = async (sessionId: string, cwd: string | undefined, initial: SessionRecord, deps: HookDeps): Promise<HookOutput> => {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const alive = deps.alive ?? (() => true);
   const deadline = now() + deps.wakeWaitSeconds * 1000;
-  let session = initial; let reRegistered = false;
-  for (let attempt = 0; ; attempt++) {
-    const wait = Math.min(MAX_POLL_SECONDS, Math.max(0, Math.floor((deadline - now()) / 1000))); const started = now();
+  const listener = deps.store.claimListener(sessionId);
+  const current = (): boolean => alive() && deps.store.listener(sessionId) === listener;
+  let session = initial; let failures = 0;
+  while (current()) {
+    const remaining = Math.ceil((deadline - now()) / 1000);
+    if (remaining <= 0) return { decision: 'block', reason: KEEPALIVE_REASON };
+    const wait = Math.min(POLL_SECONDS, remaining); const started = now();
+    let delay = POLL_SECONDS * 1000;
     try {
       const result = await daemonCall<{ wake: boolean; reason?: string; state?: string }>(deps.fetch, session.daemonUrl, session.token, `/v1/wake?wait=${wait}`, { timeoutMs: (wait + 15) * 1000 });
+      failures = 0;
       if (result.wake && result.reason) return { decision: 'block', reason: result.reason.slice(0, 4000) };
-      // Re-poll only after a poll that really waited; an instant timeout means the daemon will not park us.
-      if (result.state === 'timeout' && deadline - now() >= 1000 && now() - started >= wait * 500) { attempt = -1; continue; }
-      if (!result.state || !RETRYABLE_WAKE_STATES.has(result.state)) return {};
+      if (result.state === 'ended') return {};
+      // A round that really waited ends in a plain timeout: start the next one right away.
+      if (result.state === 'timeout' && now() - started >= wait * 500) continue;
     } catch (error) {
       const status = daemonStatus(error);
-      if (status === 401 && !reRegistered) {
-        reRegistered = true;
-        const fresh = await ensureSession(sessionId, cwd, deps, true);
-        if (!fresh) return {};
-        session = fresh; continue;
+      if (status === 401) {
+        const fresh = await ensureSession(sessionId, cwd, deps, true).catch(() => null);
+        if (fresh) { session = fresh; continue; }
       }
-      if (status !== null && status !== 429 && status < 500) return {};
+      // 403 not_seated is not an error: the manager may seat this session later. Everything else backs off.
+      if (status !== 403) delay = WAKE_BACKOFF_MS[Math.min(failures++, WAKE_BACKOFF_MS.length - 1)]!;
     }
-    const base = WAKE_BACKOFF_MS[Math.min(attempt, WAKE_BACKOFF_MS.length - 1)]!;
-    // Jitter spreads reconnects when a daemon restart drops every parked seat at once.
-    const delay = Math.round(base * (0.75 + Math.random() * 0.5));
-    if (now() + delay >= deadline) return {};
-    await sleep(delay);
+    // Jitter spreads reconnects when a daemon restart drops every listening seat at once.
+    await sleep(Math.min(Math.round(delay * (0.75 + Math.random() * 0.5)), Math.max(deadline - now(), 0)));
   }
+  return {};
 };
 
 /**

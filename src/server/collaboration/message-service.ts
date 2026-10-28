@@ -38,12 +38,6 @@ export class MessageService {
     return { root, replies };
   }
 
-  /** Author of a thread's root, used to wake them on replies (null for system/manager roots or unknown seqs). */
-  threadRootSeat(channelId: string, seq: number): string | null {
-    const row = this.db.raw.prepare("SELECT sender_id AS senderId FROM messages WHERE channel_id=? AND seq=? AND sender_kind='seat'").get(channelId, seq) as { senderId: string } | undefined;
-    return row?.senderId ?? null;
-  }
-
   /** System lines (task lifecycle). Mentions are explicit so they never wake the actor that caused them. */
   postSystem(channelId: string, body: string, mentions: string[]): ChatMessage { return this.insert(channelId, 'system', 'system', body, mentions); }
 

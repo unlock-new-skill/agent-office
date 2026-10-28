@@ -4,13 +4,13 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runHook } from './hook-runner.js';
-import { agentOfficeHooks, hookCommand, mergeAgentOfficeHooks, removeAgentOfficeHooks, type ClaudeSettings } from './installer.js';
+import { agentOfficeHooks, hookCommand, LISTEN_SECONDS, mergeAgentOfficeHooks, removeAgentOfficeHooks, type ClaudeSettings } from './installer.js';
 import { startMcpServer } from './mcp-server.js';
 import { SessionStore } from './session-store.js';
 
 /**
  * Single-file connector installed on agent machines (bundled to agent-office.mjs, served by the daemon):
- *   hook       Claude Code hook entry: JSON on stdin → decision on stdout, always exit 0
+ *   hook       Claude Code hook entry: JSON on stdin → decision on stdout (exit 0), or a wake on stderr (exit 2)
  *   mcp        agent_office_* MCP tools over stdio
  *   install    --url <daemon> --code <install code>: store a connector credential, merge hooks, register MCP
  *   update     replace this file with the daemon's current connector, then re-sync the hook list in settings
@@ -22,6 +22,15 @@ const option = (name: string): string | undefined => { const index = rest.indexO
 const settingsFile = path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(homedir(), '.claude'), 'settings.json');
 const self = fileURLToPath(import.meta.url);
 const numberEnv = (name: string, fallback: number): number => { const value = Number(process.env[name] ?? fallback); return Number.isFinite(value) && value >= 0 ? value : fallback; };
+
+/** Watches the process that started this hook (Claude Code): once it exits we are re-parented or it no longer exists. */
+const parentAlive = (): (() => boolean) => {
+  const parent = process.ppid;
+  return () => {
+    if (process.ppid !== parent) return false;
+    try { process.kill(parent, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+  };
+};
 
 const readStdin = async (): Promise<string> => { let text = ''; for await (const chunk of process.stdin) text += String(chunk); return text; };
 
@@ -92,10 +101,13 @@ if (mode === 'hook') {
   let raw: unknown = null;
   try { raw = JSON.parse(await readStdin()) as unknown; } catch { /* malformed input degrades to {} */ }
   const output = await runHook(raw, {
-    store: new SessionStore(), fetch, wakeWaitSeconds: numberEnv('AGENT_OFFICE_WAKE_WAIT_SECONDS', 290) || 290,
+    store: new SessionStore(), fetch, wakeWaitSeconds: Math.min(numberEnv('AGENT_OFFICE_WAKE_WAIT_SECONDS', LISTEN_SECONDS) || LISTEN_SECONDS, LISTEN_SECONDS),
     requestedSeat: process.env.AGENT_OFFICE_SEAT || undefined, permissionWaitSeconds: Math.min(numberEnv('AGENT_OFFICE_PERMISSION_WAIT_SECONDS', 120), 580),
+    alive: parentAlive(),
   });
-  process.stdout.write(`${JSON.stringify(output)}\n`);
+  // A background Stop hook (asyncRewake) wakes Claude only through exit code 2, with the reason on stderr.
+  if (output.decision === 'block' && typeof output.reason === 'string') { process.stderr.write(`${output.reason}\n`); process.exitCode = 2; }
+  else process.stdout.write(`${JSON.stringify(output)}\n`);
 } else if (mode === 'mcp') startMcpServer();
 else if (mode === 'install') await install().catch(error => { process.stderr.write(`agent-office install failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
 else if (mode === 'update') await update().catch(error => { process.stderr.write(`agent-office update failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });

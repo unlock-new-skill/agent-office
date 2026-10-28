@@ -80,15 +80,46 @@ test('Stop long-polls the daemon and blocks with the wake reason when items arri
   assert.ok(daemon.calls.some(call => call.url === '/v1/wake?wait=7'));
 });
 
-test('Stop allows stopping when nothing arrives, when unseated, or when the daemon is down', async () => {
+test('Stop keeps listening through quiet rounds, refusals and outages, then asks for one keep-alive turn at the end of the window', async () => {
   const store = newStore(); store.saveSession('sess-1', { daemonUrl: 'http://127.0.0.1:8080', token: 'agent-token', agentId: 'cc-1' });
-  const stop = { session_id: 'sess-1', hook_event_name: 'Stop', prompt_id: 'p1' };
-  const quiet = fakeDaemon({ 'POST /v1/agents/events': () => ({ status: 201, body: {} }), 'GET /v1/wake': () => ({ status: 200, body: { wake: false, state: 'timeout' } }) });
-  assert.deepEqual(await runHook(stop, { store, fetch: quiet.fetchImpl, wakeWaitSeconds: 1 }), {});
-  const unseated = fakeDaemon({ 'POST /v1/agents/events': () => ({ status: 201, body: {} }), 'GET /v1/wake': () => ({ status: 403, body: { error: 'not_seated' } }) });
-  assert.deepEqual(await runHook(stop, { store, fetch: unseated.fetchImpl, wakeWaitSeconds: 1 }), {});
-  const down = (async () => { throw new TypeError('fetch failed'); }) as typeof fetch;
-  assert.deepEqual(await runHook(stop, { store, fetch: down, wakeWaitSeconds: 1 }), {});
+  let clock = 0; let wait = 0; const states: string[] = [];
+  // A quiet round: the daemon holds the request for the whole wait, then reports a timeout.
+  const idle = (): Response => { clock += wait * 1000; return new Response(JSON.stringify({ wake: false, state: 'timeout' }), { status: 200 }); };
+  const replies: Array<() => Response> = [
+    () => idle(),
+    () => new Response(JSON.stringify({ error: 'not_seated' }), { status: 403 }),
+    () => new Response(JSON.stringify({ wake: false, state: 'wake_limit' }), { status: 200 }),
+    () => new Response(JSON.stringify({ wake: false, state: 'paused' }), { status: 200 }),
+    () => { throw new TypeError('fetch failed'); },
+  ];
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/v1/agents/events') return new Response('{}', { status: 201 });
+    states.push(url.search); wait = Number(url.searchParams.get('wait')); return (replies.shift() ?? idle)();
+  }) as typeof fetch;
+  const output = await runHook({ session_id: 'sess-1', hook_event_name: 'Stop' }, { store, fetch: fetchImpl, wakeWaitSeconds: 600, now: () => clock, sleep: async ms => { clock += ms; } }) as { decision: string; reason: string };
+  assert.equal(output.decision, 'block');
+  assert.match(output.reason, /Still listening/);
+  assert.ok(states.length >= 6, 'kept polling after every refusal and failure');
+  assert.ok(states.every(search => Number(new URLSearchParams(search).get('wait')) <= 60), 'one round never exceeds a minute');
+  assert.ok(clock <= 601_000, 'never runs past the window (the last round rounds up to a whole second)');
+});
+
+test('Stop ends quietly when the session ended, a newer listener took over, or Claude Code is gone', async () => {
+  const store = newStore(); store.saveSession('sess-1', { daemonUrl: 'http://127.0.0.1:8080', token: 'agent-token', agentId: 'cc-1' });
+  const stop = { session_id: 'sess-1', hook_event_name: 'Stop' };
+  const ended = fakeDaemon({ 'POST /v1/agents/events': () => ({ status: 201, body: {} }), 'GET /v1/wake': () => ({ status: 200, body: { wake: false, state: 'ended' } }) });
+  assert.deepEqual(await runHook(stop, { store, fetch: ended.fetchImpl, wakeWaitSeconds: 600, sleep: async () => {} }), {});
+  let polls = 0;
+  const quiet = (async (input: string | URL | Request) => {
+    if (new URL(String(input)).pathname === '/v1/wake') { polls++; if (polls === 2) store.claimListener('sess-1'); return new Response(JSON.stringify({ wake: false, state: 'paused' }), { status: 200 }); }
+    return new Response('{}', { status: 201 });
+  }) as typeof fetch;
+  assert.deepEqual(await runHook(stop, { store, fetch: quiet, wakeWaitSeconds: 600, sleep: async () => {} }), {});
+  assert.equal(polls, 2, 'the superseded listener stops after its current round');
+  polls = 0;
+  assert.deepEqual(await runHook(stop, { store, fetch: quiet, wakeWaitSeconds: 600, sleep: async () => {}, alive: () => false }), {});
+  assert.equal(polls, 0);
 });
 
 test('SessionStart with a requested seat claims it, or reports that it is occupied', async () => {
@@ -112,7 +143,7 @@ test('SessionStart with a requested seat claims it, or reports that it is occupi
   assert.match(refused.hookSpecificOutput.additionalContext, /dev-be is already taken/);
 });
 
-test('Stop retries network errors and daemon restarts within the wait window, then delivers the wake', async () => {
+test('Stop retries network errors and daemon restarts, then delivers the wake', async () => {
   const store = newStore(); store.saveSession('sess-1', { daemonUrl: 'http://127.0.0.1:8080', token: 'agent-token', agentId: 'cc-1' });
   let clock = 0; const sleeps: number[] = []; let wakeCalls = 0;
   const responses: Array<() => Response> = [
@@ -131,21 +162,6 @@ test('Stop retries network errors and daemon restarts within the wait window, th
   assert.equal(wakeCalls, 4);
   assert.equal(sleeps.length, 3);
   assert.ok(sleeps[1]! > sleeps[0]!, 'backoff grows');
-});
-
-test('Stop gives up at the wait deadline and does not retry a real idle timeout or a refusal', async () => {
-  const store = newStore(); store.saveSession('sess-1', { daemonUrl: 'http://127.0.0.1:8080', token: 'agent-token', agentId: 'cc-1' });
-  let clock = 0; let wakeCalls = 0;
-  const down = (async (input: string | URL | Request) => { if (new URL(String(input)).pathname === '/v1/wake') wakeCalls++; throw new TypeError('fetch failed'); }) as typeof fetch;
-  assert.deepEqual(await runHook({ session_id: 'sess-1', hook_event_name: 'Stop' }, { store, fetch: down, wakeWaitSeconds: 60, now: () => clock, sleep: async ms => { clock += ms; } }), {});
-  assert.ok(clock <= 60_000, 'never sleeps past the deadline');
-  assert.ok(wakeCalls >= 3);
-  for (const state of ['timeout', 'paused', 'wake_limit']) {
-    let calls = 0;
-    const daemon = (async (input: string | URL | Request) => { if (new URL(String(input)).pathname === '/v1/wake') calls++; return new Response(JSON.stringify({ wake: false, state }), { status: 200 }); }) as typeof fetch;
-    assert.deepEqual(await runHook({ session_id: 'sess-1', hook_event_name: 'Stop' }, { store, fetch: daemon, wakeWaitSeconds: 60, now: () => clock, sleep: async ms => { clock += ms; } }), {});
-    assert.equal(calls, 1, `${state} is not retried`);
-  }
 });
 
 test('Stop re-registers once when the session token was revoked', async () => {
@@ -193,7 +209,7 @@ test('PermissionRequest hands the prompt to the manager and returns Allow/Deny; 
   assert.ok(!off.calls.some(call => call.url === '/v1/permissions'));
 });
 
-test('long waits are split into polls of at most 90 s so proxies with idle timeouts do not cut them', async () => {
+test('listening rounds last at most 60 s and permission waits 90 s, so proxies with idle timeouts do not cut them', async () => {
   const store = newStore(); store.saveSession('sess-1', { daemonUrl: 'http://127.0.0.1:8080', token: 'agent-token', agentId: 'cc-1' });
   let clock = 0; const waits: string[] = [];
   const fetchImpl = (async (input: string | URL | Request) => {
@@ -206,7 +222,7 @@ test('long waits are split into polls of at most 90 s so proxies with idle timeo
   }) as typeof fetch;
   const stop = await runHook({ session_id: 'sess-1', hook_event_name: 'Stop' }, { store, fetch: fetchImpl, wakeWaitSeconds: 290, now: () => clock, sleep: async () => {} });
   assert.deepEqual(stop, { decision: 'block', reason: 'third poll' });
-  assert.deepEqual(waits, ['?wait=90', '?wait=90', '?wait=90']);
+  assert.deepEqual(waits, ['?wait=60', '?wait=60', '?wait=60']);
   waits.length = 0; clock = 0;
   const prompt = await runHook({ session_id: 'sess-1', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } }, { store, fetch: fetchImpl, wakeWaitSeconds: 1, permissionWaitSeconds: 120, now: () => clock });
   assert.deepEqual(prompt, {});

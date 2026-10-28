@@ -77,7 +77,7 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
         <h2><span>4</span>Kiểm tra</h2>
         <ul>
           <li>Session hiện trong <strong>Org</strong> (Unassigned hoặc đúng ghế) và trong <strong>Map</strong>.</li>
-          <li>Sau khi agent trả lời xong 1 lượt, chấm ghế chuyển <strong>xanh lá — listening</strong> (đang chờ việc).</li>
+          <li>Sau khi agent trả lời xong 1 lượt, chấm ghế chuyển <strong>xanh lá — listening</strong> và giữ nguyên suốt lúc session mở (terminal vẫn gõ được).</li>
           <li>Credential trỏ đúng server: {cmd(os === 'windows' ? 'Get-Content "$env:USERPROFILE\\.agent-office\\connector.json"' : 'cat ~/.agent-office/connector.json')}</li>
           <li>MCP đã đăng ký: {cmd('claude mcp list')}</li>
         </ul>
@@ -87,7 +87,7 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
         <h2><span>5</span>Cập nhật</h2>
         <p>Khi có bản mới: tải connector mới và đồng bộ hook, rồi <strong>mở lại các session Claude</strong>.</p>
         {cmd(connector(os, 'update'))}
-        <p className="muted">Connector cài trước 28/10 cần chạy thêm một lần:</p>
+        <p className="muted">Bản lắng nghe liên tục cần Claude Code mới: chạy <code>claude update</code>. Connector cài trước 28/10 cần chạy thêm một lần:</p>
         {cmd(connector(os, 'sync-hooks'))}
       </section>
 
@@ -123,7 +123,8 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
             <tr><td>Session không hiện trong Org/Map</td><td>Kiểm tra bước 4; session mở trước khi cài phải mở lại; vẫn không được thì cài lại (bước 6).</td></tr>
             <tr><td>Agent báo <code>not_seated</code></td><td>Chưa có ghế: dán link join hoặc gán trong Org.</td></tr>
             <tr><td><code>seat_occupied</code></td><td>Ghế có session khác đang sống — chọn ghế khác hoặc Unassign.</td></tr>
-            <tr><td>Chấm viền xanh "idle — needs nudge"</td><td>Chờ quá lâu nên ngừng nghe: gõ "tiếp tục" trong terminal, hoặc dùng <code>/remote-control</code>.</td></tr>
+            <tr><td>Chấm viền xanh "idle — needs nudge"</td><td>Session không lắng nghe: chạy cập nhật (bước 5), <code>claude update</code>, rồi mở lại session. Session đã chết thì Unassign trong Org.</td></tr>
+            <tr><td>Nhắn mà agent không dậy</td><td>Chỉ <code>@mention</code> mới đánh thức agent — tin không mention (kể cả của lead/manager) không đánh thức ai.</td></tr>
             <tr><td>Chấm đỏ "wake limit"</td><td>Tự dậy liên tiếp quá nhiều: nhắn vào kênh của ghế (manager) hoặc gõ trong terminal.</td></tr>
             <tr><td>Chấm vàng "waiting permission"</td><td>Bấm Allow/Deny ở khung nổi trên web, hoặc duyệt trong terminal.</td></tr>
             <tr><td>Sau compact agent "quên" Agent Office</td><td>Hook tự bơm lại vai trò, task và cuộc trò chuyện gần đây — cần connector mới (bước 5) và session mở lại.</td></tr>

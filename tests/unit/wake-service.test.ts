@@ -6,7 +6,7 @@ const seat = (seatId: string) => ({ kind: 'seat' as const, seatId });
 const manager = { kind: 'manager' as const };
 const seatAll = (fixture: Fixture, seatIds: string[]): void => { for (const seatId of seatIds) fixture.office.org.assignAgent(seatId, insertAgent(fixture.db, `agent-${seatId}`)); };
 
-test('wake rules: mentions, manager and leader messages wake; member chatter and own messages do not', () => {
+test('wake rules: only a mention wakes; chatter, unmentioned leader/manager messages and own messages do not', () => {
   const fixture = createSeededOffice(); const { messages, wake } = fixture.office;
   seatAll(fixture, ['dev-lead', 'dev-be', 'dev-fe']);
   messages.post(seat('dev-fe'), 'dev', 'just thinking out loud');
@@ -17,20 +17,34 @@ test('wake rules: mentions, manager and leader messages wake; member chatter and
   const leader = wake.check('dev-lead');
   assert.equal(leader.wake, true); assert.match(leader.wake ? leader.reason : '', /can you review/);
   messages.post(seat('dev-lead'), 'dev', 'Team: please pull main');
-  assert.equal(wake.check('dev-be').wake, true, 'leader message in own department wakes members');
-  assert.equal(wake.check('dev-lead').wake, false, 'leader is not woken by own message');
+  assert.equal(wake.check('dev-be').wake, false, 'an unmentioned leader message does not wake members');
   messages.post(manager, 'dev', 'Manager here');
-  assert.equal(wake.check('dev-fe').wake, true, 'manager message wakes');
+  assert.equal(wake.check('dev-fe').wake, false, 'an unmentioned manager message does not wake');
+  messages.post(manager, 'dev', '@dev-fe take the login screen');
+  const member = wake.check('dev-fe');
+  assert.equal(member.wake, true); assert.equal(member.wake ? member.items.length : 0, 1, 'only the mention is handed over');
+  assert.equal(wake.check('dev-be').wake, false, 'a mention of one member does not wake the others');
   fixture.close();
 });
 
 test('delivered items are not delivered twice and are marked read', () => {
   const fixture = createSeededOffice(); const { messages, wake } = fixture.office; seatAll(fixture, ['dev-be']);
-  messages.post(manager, 'dev', 'first'); messages.post(manager, 'dev', 'second');
+  messages.post(manager, 'dev', '@dev-be first'); messages.post(manager, 'dev', '@dev-be second');
   const result = wake.check('dev-be');
   assert.equal(result.wake, true); assert.equal(result.wake ? result.items.length : 0, 2);
   assert.equal(wake.check('dev-be').wake, false);
   assert.equal(messages.channelsForSeat('dev-be').find(channel => channel.id === 'dev')?.unread, 0);
+  fixture.close();
+});
+
+test('an ended session is never handed mentions, so the next session on the seat gets them', () => {
+  const fixture = createSeededOffice(); const { messages, wake } = fixture.office; seatAll(fixture, ['dev-be']);
+  const agentId = fixture.office.org.seat('dev-be').agentId!;
+  fixture.db.raw.prepare("UPDATE agents SET ended_at='2026-10-28T00:00:00Z' WHERE id=?").run(agentId);
+  messages.post(manager, 'dev', '@dev-be ping');
+  assert.deepEqual(wake.check('dev-be'), { wake: false, state: 'ended' });
+  fixture.db.raw.prepare('UPDATE agents SET ended_at=NULL WHERE id=?').run(agentId);
+  assert.equal(wake.check('dev-be').wake, true);
   fixture.close();
 });
 

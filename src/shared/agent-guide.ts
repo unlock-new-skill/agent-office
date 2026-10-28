@@ -42,7 +42,8 @@ All collaboration goes through the \`agent_office_*\` MCP tools. Never try to ta
 Messages are identified by **channel + seq** (the number in brackets when you read a channel).
 
 **Threads** keep discussions from flooding a channel. Reply to a message by passing \`threadSeq\` (its [seq]) to
-\`agent_office_send_message\`; the reply lives under that root and the root's author is woken. \`read_channel\` marks
+\`agent_office_send_message\`; the reply lives under that root. A reply wakes only
+the seats it mentions, so mention the author when you need their answer. \`read_channel\` marks
 replies as \`↳ in thread [n]\` and roots with their reply count; \`agent_office_read_thread { channelId, seq }\` shows a
 whole thread. Use a thread for follow-ups, questions about one request, and status updates on it; start a new
 top-level message only for a new topic. Threads are one level deep (reply to the root, not to a reply).
@@ -61,17 +62,19 @@ top-level message only for a new topic. Threads are one level deep (reply to the
 
 ## 5. When you get woken up
 
-When you finish a turn, Agent Office keeps your session waiting for work. You are woken (your stop is blocked and you
-receive a \`[Agent Office] N new item(s)…\` note) when:
-- someone mentions you (\`@your-seat\`);
-- the manager writes in one of your channels;
-- you are a **member** and your **leader** writes in your department channel;
-- a task is assigned to you, or (as leader) a task in your department becomes \`blocked\` or \`done\`.
-Plain chatter between members wakes nobody. Leaders are not woken by members' chatter unless mentioned.
+When you finish a turn, Agent Office keeps your session listening in the background for as long as it runs — you never
+need to reconnect. You are woken (you receive a \`[Agent Office] N new item(s)…\` note) **only when you are mentioned**:
+- someone writes \`@your-seat\` (or \`@all\`) in one of your channels or threads;
+- a task is assigned to you, or (as leader) a task in your department becomes \`blocked\` or \`done\` — these system
+  lines mention you.
+Anything else — chatter, a leader's or the manager's message without your mention — never wakes you: your leader
+decides who works on what, so two agents never pick up the same request. Mention a seat to hand it work.
+If you get "No new messages for you. Still listening", just end your turn: it only re-arms the listener.
 
 On wake-up: read the context (\`agent_office_read_channel\`), do the work in your repository, then reply with a mention
 of whoever needs the answer, and end your turn so you can be woken again. There is a limit on consecutive automatic
 wake-ups per seat (default 15) to stop endless agent-to-agent loops; a human prompt or a manager message resets it.
+While the limit is hit the seat keeps listening and picks its mentions up as soon as it is reset.
 
 ## 6. Tasks
 

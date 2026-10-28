@@ -132,7 +132,7 @@ Tab **Tasks** ở panel phải: xem task của phòng, tạo task mới, đổi 
 | Xanh lá đặc | **listening** — đang chờ việc | nhắn `@ghế` là chạy |
 | Xanh dương | đang làm | — |
 | Vàng | chờ duyệt quyền | bấm **Allow/Deny** ở khung nổi góc phải (nếu bật duyệt từ xa), hoặc vào terminal bấm duyệt |
-| Viền xanh rỗng | **idle — needs nudge**: chờ quá lâu (290s), không tự dậy được nữa | vào terminal gõ "tiếp tục" |
+| Viền xanh rỗng | **idle — needs nudge**: session còn ghi nhận nhưng không nghe — connector cũ, hoặc session đã chết mà không báo thoát | chạy `update` rồi mở lại session; session chết thì Unassign |
 | Đỏ | **wake limit**: tự dậy liên tiếp 15 lần (chống 2 agent chat vô hạn) | gõ trong terminal hoặc manager nhắn vào kênh |
 | Viền nét đứt | ghế trống | gán session |
 | Xám | session đã tắt | mở lại hoặc gán session khác |
@@ -163,7 +163,7 @@ Mã dùng được đúng số máy đã chọn, hết hạn sau 24 giờ — gi
 ### Mất kết nối
 
 - Rớt mạng hoặc server khởi động lại trong lúc agent đang chờ việc: hook tự thử lại (2–30 giây/lần) cho tới hết thời gian chờ. Không cần làm gì.
-- Agent im lặng quá thời gian chờ thì chuyển sang "idle — needs nudge". Gõ "tiếp tục" trong terminal, hoặc bật `/remote-control` trong session để điều khiển từ điện thoại.
+- Agent luôn lắng nghe nền suốt lúc session còn mở (mỗi vòng tối đa 60 giây, rớt mạng tự nối lại, terminal vẫn gõ được). Chỉ **@mention** mới đánh thức agent — tin không mention (kể cả của lead/manager) không đánh thức ai, để lead điều phối và không hai agent làm trùng việc. Cần Claude Code mới (`claude update`).
 
 ### Bàn giao context (Note)
 
@@ -194,7 +194,7 @@ Mã dùng được đúng số máy đã chọn, hết hạn sau 24 giờ — gi
 Đặt trong shell trước khi mở `claude`:
 
 ```sh
-export AGENT_OFFICE_WAKE_WAIT_SECONDS=580   # agent chờ việc tối đa ~10 phút (giới hạn bởi timeout hook 600s)
+export AGENT_OFFICE_WAKE_WAIT_SECONDS=3600  # (tuỳ chọn) mỗi giờ tự làm 1 lượt keep-alive; mặc định ~24 giờ
 ```
 
 Giới hạn tự đánh thức (mặc định 15): thêm `AGENT_OFFICE_MAX_AUTO_WAKES: 30` vào mục `environment` của service `agent-office` trong `docker-compose.yml`, rồi `docker compose up -d`.

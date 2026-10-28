@@ -33,7 +33,8 @@ test('manager → Dev Lead → task for Dev BE → done → Dev Lead reports to 
   await fixture.manager('/v1/channels/dev/messages', { body: { body: '@dev-lead we need a login API this sprint' } });
   const leadWake = await hook('s-dev-lead', 'Stop') as { decision?: string; reason?: string };
   assert.equal(leadWake.decision, 'block'); assert.match(leadWake.reason ?? '', /login API this sprint/);
-  assert.deepEqual(await hook('s-dev-fe-unregistered', 'Stop'), {}, 'unknown sessions never block');
+  const unseated = await hook('s-dev-fe-unregistered', 'Stop') as { reason?: string };
+  assert.match(unseated.reason ?? '', /Still listening/, 'an unseated session only gets the keep-alive, never items');
 
   // 2. Lead delegates a task; Dev BE is woken with it.
   const task = await as<Task>('s-dev-lead', '/v1/tasks', { body: { title: 'Login API', body: 'JWT + refresh', assigneeSeatId: 'dev-be' } });
@@ -51,7 +52,7 @@ test('manager → Dev Lead → task for Dev BE → done → Dev Lead reports to 
   const baWake = await hook('s-ba-lead', 'Stop') as { decision?: string; reason?: string };
   assert.match(baWake.reason ?? '', /update the spec/);
 
-  // Nothing left: further stops are allowed.
-  assert.deepEqual(await hook('s-ba-lead', 'Stop'), {});
+  // Nothing left: the listener only re-arms itself with a keep-alive when its window ends.
+  assert.match(((await hook('s-ba-lead', 'Stop')) as { reason?: string }).reason ?? '', /Still listening/);
   fixture.close();
 });

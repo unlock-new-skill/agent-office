@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -16,8 +17,12 @@ export class SessionStore {
   saveConnector(record: ConnectorRecord): void { this.write(path.join(this.home, 'connector.json'), record); }
   session(sessionId: string): SessionRecord | null { return this.read<SessionRecord>(this.sessionFile(sessionId)); }
   saveSession(sessionId: string, record: SessionRecord): void { this.write(this.sessionFile(sessionId), record); }
+  /** Marks a new Stop-hook listener as the session's only one; earlier listeners see the change and exit. */
+  claimListener(sessionId: string): string { const id = randomUUID(); this.write(this.listenerFile(sessionId), { id }); return id; }
+  listener(sessionId: string): string | null { return this.read<{ id: string }>(this.listenerFile(sessionId))?.id ?? null; }
   spoolDir(sessionId: string): string { this.assertSessionId(sessionId); return path.join(this.home, 'spool', sessionId); }
 
+  private listenerFile(sessionId: string): string { this.assertSessionId(sessionId); return path.join(this.home, 'listeners', `${sessionId}.json`); }
   private sessionFile(sessionId: string): string { this.assertSessionId(sessionId); return path.join(this.home, 'sessions', `${sessionId}.json`); }
   private assertSessionId(sessionId: string): void { if (!SESSION_ID.test(sessionId)) throw new Error('invalid_session_id'); }
 

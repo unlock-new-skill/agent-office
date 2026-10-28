@@ -52,7 +52,7 @@ Every seat has a join link `http://127.0.0.1:8080/join/<seat-id>` (Org view → 
 - Running session: tell it `Join Agent Office: http://127.0.0.1:8080/join/dev-be` → it calls `agent_office_join`.
 - A seat held by a live session refuses new claims (`seat_occupied`); a seat whose session exited can be claimed. Claiming another seat releases the previous one; `agent_office_leave` frees it. A killed session that never sent SessionEnd keeps its seat until the manager clicks **Unassign**.
 
-Talk to seats by posting in a channel and mentioning `@seat-id`. A seated session that is stopping waits up to `AGENT_OFFICE_WAKE_WAIT_SECONDS` for work; after that it shows “idle — needs nudge” and must be prompted manually.
+Talk to seats by posting in a channel and mentioning `@seat-id`. A seated session listens in the background for as long as it runs (rounds of 60 s, automatic reconnect) and is woken only by a mention of its seat.
 
 ## Public deployment (VPS + HTTPS)
 
@@ -92,10 +92,12 @@ Rotate a leaked connector: change the manager password (`reset`, which revokes a
 
 ## Resilience
 
-- **Stop-hook retry**: a dropped connection, daemon restart or full waiter pool no longer ends listening; the hook
-  retries with backoff (2–30 s, jittered) until its wait window ends, and re-registers once if its token was revoked.
-  A seat that stays quiet past the window still shows “idle — needs nudge” (no heartbeat, no token spend). To drive
-  such a session from a phone, start `/remote-control` in it.
+- **Always listening**: the Stop hook runs in the background (`asyncRewake`) and long-polls in rounds of 60 s for the
+  whole life of the session. A dropped connection, daemon restart or refusal never ends listening — it retries with
+  backoff (2–60 s, jittered) and re-registers if its token was revoked. No token is spent while waiting; one keep-alive
+  turn per ~24 h re-arms the hook before Claude Code's timeout. Agent machines need a Claude Code version with
+  `asyncRewake` and `agent-office.mjs update` (which re-syncs the hooks), then a session restart. “idle — needs nudge”
+  now only means an old connector or a session that died without SessionEnd.
 - **Handoff**: `seat_handoffs` keeps one note per seat (`agent_office_save_handoff`, or **Note** on the seat card).
   Every SessionStart (startup/resume/clear/compact/fork) injects note + open tasks + unread counts for the seat.
 - **Remote approval**: with `AGENT_OFFICE_REMOTE_APPROVAL=true`, the PermissionRequest hook files the prompt and waits

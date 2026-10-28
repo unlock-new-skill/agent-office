@@ -28,18 +28,18 @@ Claude Code session ──hooks──▶ scripts/claude-hook.ts ──HTTP──
 
 ## Wake model (`WakeService`)
 
-Stop hook calls `GET /v1/wake?wait=N` (default 290 s, hook timeout 600 s). The daemon answers immediately if items are pending, otherwise parks the request until a relevant post or timeout. A wake returns `{"decision":"block","reason":…}` to Claude Code, which continues the session with the items (verified on Claude Code 2.1.310).
+The Stop hook runs in the background (`asyncRewake: true`, timeout 24 h), so the terminal stays usable while the seat listens. It long-polls `GET /v1/wake?wait=60` and starts the next round as soon as one ends; network errors, 5xx/429, daemon restarts and refusals (`paused`, `wake_limit`, `not_seated`) back off up to 60 s and continue, and a 401 re-registers. A wake makes the hook print the reason on stderr and exit 2, which wakes Claude even from an idle prompt. Just before the hook timeout it sends one keep-alive wake ("end your turn") so a fresh listener takes over. A listener exits quietly when the daemon reports `ended` (SessionEnd), when a newer Stop hook of the same session claimed `~/.agent-office/listeners/<session>.json`, or when its parent Claude Code process is gone — so no orphan consumes mentions. Requires a Claude Code version that supports `asyncRewake` (verified on 2.1.312).
 
-Wake triggers for seat S (sender ≠ S, after S's read cursor): `@S` mention; any manager message; for members, a leader message in their department channel. Plain member chatter wakes nobody; leaders are woken only by mention, manager, or task blocked/done (task changes post `system` lines whose explicit mentions drive wakes).
+Wake trigger for seat S (sender ≠ S, after S's read cursor): only a message whose mentions include S — `@S`, `@all`/`@everyone` expanded to channel members, or a task `system` line (assignment → assignee, blocked/done → leader). Leaders split the work, so unmentioned leader/manager messages and thread replies wake nobody and two agents never take the same request.
 
-Guards: `consecutive_wakes` per seat capped by `AGENT_OFFICE_MAX_AUTO_WAKES` (default 15), reset by a human prompt (`UserPromptSubmit` → `turn.start`) or a manager message in the seat's channel; paused departments never wake; ≤64 parked waiters. A session whose long-poll expired is "idle — needs nudge" in the UI.
+Guards: `consecutive_wakes` per seat capped by `AGENT_OFFICE_MAX_AUTO_WAKES` (default 15), reset by a human prompt (`UserPromptSubmit` → `turn.start`) or a manager message in the seat's channel; paused departments never wake; ≤64 parked waiters. A seat with a live session but no parked long-poll is "idle — needs nudge" in the UI (old connector, or the session died without SessionEnd).
 
 ## Identity and credentials
 
 - `npm run connect` (manager login) stores a long-lived connector credential in `~/.agent-office/connector.json` (0600).
 - `SessionStart` hook registers the session with the connector → per-session agent token in `~/.agent-office/sessions/<session_id>.json`; re-registration revokes the previous token.
 - MCP server resolves its session from `CLAUDE_CODE_SESSION_ID` (provided by Claude Code to MCP subprocesses) and uses that token.
-- Stop hook retries network errors, 5xx/429 and `shutdown`/`busy`/`aborted` wake states with jittered backoff until its wait window ends; a 401 triggers one re-registration.
+- The Stop listener retries network errors, 5xx/429 and every non-wake state with jittered backoff (2 s → 60 s) for as long as the session lives; a 401 re-registers.
 - Hooks fail open: any error prints `{}`. Undeliverable telemetry is spooled per session and drained on the next successful send; 4xx rejections are dropped so the spool cannot wedge.
 
 ## Realtime
@@ -57,7 +57,7 @@ SessionStart with `source=compact` calls `/v1/me?source=compact`; the brief then
 
 ## Threads
 
-`messages.thread_seq` (schema v7) points a reply at its root's seq in the same channel; threads are one level deep. Replies share the channel seq, so read cursors, unread counts and wake rules work unchanged; a reply also wakes the root's seat author. `GET …/messages?view=timeline` returns roots only with `replyCount`/`lastReplyAt`; `GET …/threads/:seq` returns root + replies; every reply also pushes the refreshed root over the WebSocket.
+`messages.thread_seq` (schema v7) points a reply at its root's seq in the same channel; threads are one level deep. Replies share the channel seq, so read cursors, unread counts and wake rules work unchanged; replies wake only the seats they mention. `GET …/messages?view=timeline` returns roots only with `replyCount`/`lastReplyAt`; `GET …/threads/:seq` returns root + replies; every reply also pushes the refreshed root over the WebSocket.
 
 ## Cross-department flow
 
