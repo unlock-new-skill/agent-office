@@ -95,7 +95,7 @@ export class Runner {
           }
           continue;
         }
-        const problem = (this.deps.checkCwd ?? cwdProblem)(seat.cwd);
+        const problem = this.deps.checkCwd ? this.deps.checkCwd(seat.cwd) : cwdProblem(seat.cwd, this.deps.config.allowedRoots);
         const wasRunning = worker ? !['stopped', 'failed'].includes(worker.snapshot().state) : false;
         if (worker) { await worker.stop(); this.workers.delete(seat.seatId); }
         if (problem) {

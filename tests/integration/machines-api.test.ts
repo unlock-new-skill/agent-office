@@ -170,3 +170,27 @@ test('takeover: a session still open in a terminal is told to close, then the ru
     await runner.close(); fixture.office.runners.close(); await running; fixture.close();
   }
 });
+
+test('web seats may use folders listed in allowedRoots of the local runner.json, not only the home directory', async () => {
+  const fixture = createAppFixture();
+  const appFetch = ((input: string | URL | Request, init?: RequestInit) => Promise.resolve(fixture.app.request(String(input), init))) as typeof fetch;
+  const machine = fixture.office.runners.createMachine('NAS box');
+  const store = new SessionStore(mkdtempSync(path.join(tmpdir(), 'ao-roots-')));
+  store.saveConnector({ daemonUrl: `http://${HOST}`, token: fixture.auth.createConnectorCredential(machine.id).token });
+  const nas = mkdtempSync(path.join(tmpdir(), 'ao-nas-')); const repo = path.join(nas, 'game');
+  (await import('node:fs')).mkdirSync(repo);
+  const spawned: string[] = [];
+  const runner = new Runner({
+    store, fetch: appFetch, out: () => undefined, config: { seats: [], allowedRoots: [nas] }, sleep: () => new Promise(resolve => setTimeout(resolve, 5)),
+    spawn: (seat, _resume, onEvent) => { spawned.push(seat.cwd); return { send: () => undefined, interrupt: () => undefined, close: () => onEvent({ kind: 'exit', code: 0, stderr: '' }), kill: () => undefined }; },
+  });
+  const running = runner.run();
+  const until = async (check: () => boolean): Promise<void> => { for (let i = 0; i < 400 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 5)); assert.ok(check()); };
+  try {
+    await until(() => fixture.office.runners.views().some(view => view.id === machine.id && view.online));
+    fixture.office.runners.setConfig(machine.id, [{ seatId: 'dev-be', cwd: repo, permissionMode: 'bypassPermissions', sessionId: null, autoStart: true, showWindow: false, model: null }]);
+    await until(() => spawned.includes(repo));
+  } finally {
+    await runner.close(); fixture.office.runners.close(); await running; fixture.close();
+  }
+});
