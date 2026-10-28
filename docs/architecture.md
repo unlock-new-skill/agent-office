@@ -51,6 +51,10 @@ WebSocket `/v1/stream` (manager only): telemetry deltas keep the existing genera
 - `HandoffService`: one note per seat (`seat_handoffs`); `/v1/me` returns `handoff` + `handoffBrief` (note, open tasks, unread). SessionStart injects the brief, so context follows the seat across sessions and machines.
 - `PermissionService`: PermissionRequest hook → `POST /v1/permissions` → long-poll `GET /v1/permissions/:id/decision`; manager answers via `POST …/decision`; pending list pushed as `collab` kind `permission`. Off unless `AGENT_OFFICE_REMOTE_APPROVAL=true`; unanswered → `expired` → terminal prompt.
 
+## Compaction
+
+SessionStart with `source=compact` calls `/v1/me?source=compact`; the brief then adds the seat's recent conversation (own messages, mentions, replies in threads it joined) but omits the stored compaction summary, which the session already holds. The `PostCompact` hook posts Claude's `compact_summary` to `/v1/seats/me/compaction` (`seat_compactions`, schema v8); later sessions on the seat get it when it is newer than the hand-written note. `agent-office.mjs update` re-syncs the hook list with the new file (`sync-hooks`).
+
 ## Threads
 
 `messages.thread_seq` (schema v7) points a reply at its root's seq in the same channel; threads are one level deep. Replies share the channel seq, so read cursors, unread counts and wake rules work unchanged; a reply also wakes the root's seat author. `GET …/messages?view=timeline` returns roots only with `replyCount`/`lastReplyAt`; `GET …/threads/:seq` returns root + replies; every reply also pushes the refreshed root over the WebSocket.

@@ -248,3 +248,20 @@ test('questions for the user stay in the terminal; non-string tool inputs still 
   await runHook(mcp, { store, fetch: daemon.fetchImpl, wakeWaitSeconds: 1, permissionWaitSeconds: 1 });
   assert.deepEqual(daemon.calls.find(call => call.url === '/v1/permissions')?.body, { tool: 'mcp__db__query', input: { sql: 'select 1', options: '{"limit":5}' } });
 });
+
+test('after compaction: SessionStart asks for the compact brief; PostCompact uploads the summary', async () => {
+  const store = newStore(); store.saveSession('sess-1', { daemonUrl: 'http://127.0.0.1:8080', token: 'agent-token', agentId: 'cc-1' });
+  const daemon = fakeDaemon({
+    'POST /v1/sessions/register': () => ({ status: 201, body: { agentId: 'cc-1', token: 'agent-token' } }),
+    'POST /v1/agents/events': () => ({ status: 201, body: {} }),
+    'GET /v1/me': () => ({ status: 200, body: { agentId: 'cc-1', seat: { id: 'dev-be', title: 'Dev BE', role: 'member', description: '' }, department: { name: 'Dev' }, channels: [{ id: 'dev' }], handoffBrief: 'brief' } }),
+    'POST /v1/seats/me/compaction': () => ({ status: 200, body: { ok: true } }),
+  });
+  const start = await runHook({ session_id: 'sess-1', hook_event_name: 'SessionStart', source: 'compact' }, { store, fetch: daemon.fetchImpl, wakeWaitSeconds: 1 }) as { hookSpecificOutput: { additionalContext: string } };
+  assert.ok(daemon.calls.some(call => call.url === '/v1/me?source=compact'));
+  assert.match(start.hookSpecificOutput.additionalContext, /stays connected to Agent Office/);
+  const summary = 'x'.repeat(9000);
+  assert.deepEqual(await runHook({ session_id: 'sess-1', hook_event_name: 'PostCompact', trigger: 'auto', compact_summary: summary }, { store, fetch: daemon.fetchImpl, wakeWaitSeconds: 1 }), {});
+  const upload = daemon.calls.find(call => call.url === '/v1/seats/me/compaction');
+  assert.equal((upload?.body as { summary: string }).summary.length, 6000);
+});

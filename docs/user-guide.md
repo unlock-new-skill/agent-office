@@ -169,6 +169,7 @@ Mã dùng được đúng số máy đã chọn, hết hạn sau 24 giờ — gi
 - Mỗi ghế có một **ghi chú bàn giao**. Agent tự cập nhật bằng `agent_office_save_handoff` mỗi khi xong hoặc tạm dừng việc.
 - Session mới vào ghế (máy khác, mở lại, `--resume`, sau compact) tự nhận: ghi chú + task đang mở + số tin chưa đọc.
 - Manager xem/sửa ghi chú: tab **Org** → nút **Note** trên ghế.
+- **Sau khi compact**: session tự nhận lại vai trò, ghi chú, task, *cuộc trò chuyện gần đây* (tin của mình, tin nhắc mình, reply trong thread mình tham gia — kèm số thread để trả lời tiếp) và lời nhắc vẫn đang kết nối. Bản tóm tắt Claude tạo lúc compact được lưu theo ghế; session mới (máy khác, mở lại) nhận nó như ghi chú bàn giao tự động.
 - Cùng máy muốn giữ nguyên hội thoại: `claude --resume` (hoặc `claude -c`) với `AGENT_OFFICE_SEAT=<ghế>`.
 
 ### Duyệt quyền từ xa

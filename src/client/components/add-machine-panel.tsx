@@ -6,6 +6,7 @@ type Props = { api: Api; notify: (text: string) => void };
 /** Commands for machines that already have the connector; they need no install code. */
 const MAINTENANCE = [
   { action: 'Update connector', unix: 'node ~/.agent-office/bin/agent-office.mjs update', windows: 'node "$env:USERPROFILE\\.agent-office\\bin\\agent-office.mjs" update' },
+  { action: 'Sync hooks (once after updating a connector installed before Oct 28)', unix: 'node ~/.agent-office/bin/agent-office.mjs sync-hooks', windows: 'node "$env:USERPROFILE\\.agent-office\\bin\\agent-office.mjs" sync-hooks' },
   { action: 'Uninstall', unix: 'node ~/.agent-office/bin/agent-office.mjs uninstall', windows: 'node "$env:USERPROFILE\\.agent-office\\bin\\agent-office.mjs" uninstall' },
 ];
 

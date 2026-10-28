@@ -97,6 +97,14 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
     return c.json(office.handoffs.save(actor, c.req.param('id'), body));
   }));
 
+  // PostCompact hook: keep the summary Claude Code wrote so the seat's next session (any machine) can continue.
+  app.post('/v1/seats/me/compaction', c => withActor(c, async ({ actor, credential }) => {
+    if (actor.kind !== 'seat' || !credential) return json('seat_only', 403);
+    const { summary } = z.object({ summary: z.string().min(1).max(200_000) }).strict().parse(await c.req.json());
+    office.handoffs.saveCompaction(actor.seatId, credential.agentId, summary);
+    return c.json({ ok: true });
+  }));
+
   app.post('/v1/connectors', c => managerOnly(c, () => c.json(auth.createConnectorCredential(), 201)));
   app.post('/v1/sessions/register', async c => {
     if (!auth.authenticateConnector(c.req.raw)) return json('unauthorized', 401);

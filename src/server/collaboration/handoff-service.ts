@@ -4,7 +4,7 @@ import type { Actor, MessageService } from './message-service.js';
 import { forbidden } from './office-error.js';
 import type { OrgService } from './org-service.js';
 
-const MAX_BRIEF = 4000; const MAX_NOTE_IN_BRIEF = 2500; const MAX_TASKS = 10;
+const MAX_BRIEF = 6000; const MAX_NOTE_IN_BRIEF = 2500; const MAX_TASKS = 10; const MAX_SUMMARY_IN_BRIEF = 1500; const RECENT_LINES = 8; const RECENT_ITEM = 220;
 const HANDOFF_COLUMNS = 'seat_id AS seatId,body,updated_at AS updatedAt,updated_by AS updatedBy';
 
 const age = (ms: number): string => {
@@ -36,7 +36,18 @@ export class HandoffService {
   }
 
   /** Bounded plain-text brief injected into a session's context when it takes (or resumes, or compacts in) a seat. */
-  brief(seatId: string, now = Date.now()): string {
+  /** Stores the summary Claude Code wrote when it compacted this seat's session (latest one wins). */
+  saveCompaction(seatId: string, agentId: string, summary: string): void {
+    this.db.raw.prepare('INSERT INTO seat_compactions(seat_id,summary,agent_id,created_at) VALUES (?,?,?,?) ON CONFLICT(seat_id) DO UPDATE SET summary=excluded.summary,agent_id=excluded.agent_id,created_at=excluded.created_at')
+      .run(seatId, summary.trim().slice(0, 6000), agentId, Date.now());
+  }
+
+  /**
+   * `afterCompaction`: the session just compacted and already holds its own summary, so the stored one is skipped;
+   * every other start (new session, other machine, resume) gets it when it is newer than the seat note.
+   */
+  brief(seatId: string, options: { afterCompaction?: boolean; now?: number } = {}): string {
+    const now = options.now ?? Date.now();
     const note = this.db.raw.prepare(`SELECT ${HANDOFF_COLUMNS} FROM seat_handoffs WHERE seat_id=?`).get(seatId) as SeatHandoff | undefined;
     const tasks = this.db.raw.prepare("SELECT id,number,title,status FROM tasks WHERE assignee_seat_id=? AND status<>'done' ORDER BY status='todo',updated_at DESC LIMIT ?").all(seatId, MAX_TASKS) as Array<{ id: string; number: number; title: string; status: TaskStatus }>;
     const unread = this.messages.channelsForSeat(seatId).filter(channel => channel.unread > 0);
@@ -45,8 +56,14 @@ export class HandoffService {
       const body = note.body.length > MAX_NOTE_IN_BRIEF ? `${note.body.slice(0, MAX_NOTE_IN_BRIEF)}… (truncated; full note via agent_office_whoami)` : note.body;
       lines.push(`Note (updated ${age(now - note.updatedAt)} ago by ${note.updatedBy}):`, body);
     } else lines.push('Note: none yet.');
+    const compaction = this.db.raw.prepare('SELECT summary,created_at AS createdAt FROM seat_compactions WHERE seat_id=?').get(seatId) as { summary: string; createdAt: number } | undefined;
+    if (compaction && !options.afterCompaction && compaction.createdAt > (note?.updatedAt ?? 0)) {
+      const summary = compaction.summary.length > MAX_SUMMARY_IN_BRIEF ? `${compaction.summary.slice(0, MAX_SUMMARY_IN_BRIEF)}…` : compaction.summary;
+      lines.push(`Auto summary from the previous session's last context compaction (${age(now - compaction.createdAt)} ago):`, summary);
+    }
     lines.push(tasks.length ? `Open tasks assigned to you:\n${tasks.map(task => `- ${task.id} #${task.number} [${task.status}] ${task.title}`).join('\n')}` : 'Open tasks assigned to you: none.');
     lines.push(...this.crossDepartment(seatId));
+    lines.push(...this.recentConversation(seatId));
     lines.push(unread.length ? `Unread: ${unread.map(channel => `#${channel.id} ${channel.unread}`).join(', ')} — read them with agent_office_read_channel.` : 'Unread: none.');
     lines.push('Keep the note current with agent_office_save_handoff (what you are doing, decisions, next steps, where the code is) whenever you finish or pause a task.');
     const text = lines.join('\n');
@@ -65,6 +82,28 @@ export class HandoffService {
       serving.length ? `Requests your department is serving:\n${serving.map(task => `- ${task.id} [${task.status}] ${task.title} ← @${task.other}`).join('\n')}` : 'Requests your department is serving: none.',
       waiting.length ? `Your requests still open in other departments:\n${waiting.map(task => `- ${task.id} [${task.status}] ${task.title} → ${task.other}`).join('\n')}` : 'Your requests still open in other departments: none.',
     ];
+  }
+
+  /**
+   * The last few messages this seat was part of — its own, ones mentioning it, and replies in threads it started or
+   * joined — with [seq]/thread ids, so a session that lost its context (compaction, restart) can pick the thread back up.
+   */
+  private recentConversation(seatId: string): string[] {
+    type Row = { channelId: string; seq: number; threadSeq: number | null; senderKind: string; senderId: string; body: string };
+    const rows = this.db.raw.prepare(`SELECT m.channel_id AS channelId,m.seq,m.thread_seq AS threadSeq,m.sender_kind AS senderKind,m.sender_id AS senderId,m.body
+      FROM messages m JOIN channel_members cm ON cm.channel_id=m.channel_id AND cm.seat_id=?
+      WHERE m.deleted_at IS NULL AND (
+        (m.sender_kind='seat' AND m.sender_id=?) OR m.mentions_json LIKE ? OR
+        (m.thread_seq IS NOT NULL AND EXISTS (SELECT 1 FROM messages t WHERE t.channel_id=m.channel_id AND (t.seq=m.thread_seq OR t.thread_seq=m.thread_seq) AND t.sender_kind='seat' AND t.sender_id=?))
+      ) ORDER BY m.created_at DESC LIMIT ?`).all(seatId, seatId, `%"${seatId}"%`, seatId, RECENT_LINES) as Row[];
+    if (rows.length === 0) return ['Recent conversation: none.'];
+    const line = (row: Row): string => {
+      const where = row.threadSeq ? `#${row.channelId} thread [${row.threadSeq}]` : `#${row.channelId} [${row.seq}]`;
+      const who = row.senderKind === 'seat' ? (row.senderId === seatId ? 'you' : `@${row.senderId}`) : row.senderKind;
+      const body = row.body.replace(/\s+/g, ' ').trim();
+      return `- ${where} ${who}: ${body.length > RECENT_ITEM ? `${body.slice(0, RECENT_ITEM)}…` : body}`;
+    };
+    return [`Recent conversation (newest last; continue a thread with agent_office_send_message threadSeq, full thread via agent_office_read_thread):\n${rows.reverse().map(line).join('\n')}`];
   }
 
   private authorize(actor: Actor, seatId: string): void {

@@ -5,7 +5,7 @@
 type HookEntry = { matcher?: string; hooks: Array<{ type: string; command: string; timeout?: number }> };
 export type ClaudeSettings = { hooks?: Record<string, HookEntry[]>; [key: string]: unknown };
 
-const TELEMETRY_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SessionEnd'];
+const TELEMETRY_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SessionEnd', 'PostCompact'];
 /** Commands we installed, from a repo checkout (claude-hook.js) or the bundled connector (agent-office.mjs). */
 const OURS = /claude-hook\.js|agent-office\.mjs/;
 

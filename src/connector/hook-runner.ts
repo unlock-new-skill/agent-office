@@ -46,6 +46,7 @@ export const seatContext = (me: WhoAmI): string => me.seat
       : me.department?.deputySeatId === me.seat.id
         ? 'You are the deputy of your department: you are in #leaders and stand in for your leader when they are unavailable (guide section 7). Otherwise work as a member.'
         : 'Requests for other departments go through your leader.')
+    + '\nConnection: this session stays connected to Agent Office through hooks — you do not need to reconnect, even after a context compaction. When you finish a piece of work, end your turn: the Stop hook waits for messages addressed to your seat and wakes you. If you lose track, call agent_office_whoami.'
     + (me.handoffBrief ? `\n${me.handoffBrief}\n` : '')
   : `[Agent Office] This session is registered as agent ${me.agentId} but not seated yet. Read the rules with agent_office_guide. Join a seat with the agent_office_join tool (seat id or join URL), or the manager assigns one in the Org view; until then other agent_office_* tools return not_seated.`;
 
@@ -61,8 +62,14 @@ export const runHook = async (raw: unknown, deps: HookDeps): Promise<HookOutput>
     await sendTelemetry(raw, input.session_id, session, deps);
     if (input.hook_event_name === 'SessionStart') {
       const refused = deps.requestedSeat ? await claimSeat(session, seatIdFromJoin(deps.requestedSeat), deps) : '';
-      const me = await daemonCall<WhoAmI>(deps.fetch, session.daemonUrl, session.token, '/v1/me');
+      // After a compaction the session keeps Claude's own summary; the server then leaves its stored one out.
+      const me = await daemonCall<WhoAmI>(deps.fetch, session.daemonUrl, session.token, input.source === 'compact' ? '/v1/me?source=compact' : '/v1/me');
       return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: refused + seatContext(me) } };
+    }
+    if (input.hook_event_name === 'PostCompact' && typeof input.compact_summary === 'string' && input.compact_summary.trim()) {
+      // Seat-level copy of the compaction summary: the next session on this seat (any machine) starts from it.
+      try { await daemonCall(deps.fetch, session.daemonUrl, session.token, '/v1/seats/me/compaction', { body: { summary: input.compact_summary.slice(0, 6000) }, timeoutMs: 3000 }); } catch { /* unseated or offline: nothing to keep */ }
+      return {};
     }
     // A join link pasted into the prompt seats the session right here, without relying on the model to call a tool.
     const linkedSeat = input.hook_event_name === 'UserPromptSubmit' && typeof input.prompt === 'string' ? joinLinkSeat(input.prompt, session.daemonUrl) : null;

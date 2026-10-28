@@ -13,7 +13,8 @@ import { SessionStore } from './session-store.js';
  *   hook       Claude Code hook entry: JSON on stdin → decision on stdout, always exit 0
  *   mcp        agent_office_* MCP tools over stdio
  *   install    --url <daemon> --code <install code>: store a connector credential, merge hooks, register MCP
- *   update     replace this file with the daemon's current connector (hooks/MCP settings stay as they are)
+ *   update     replace this file with the daemon's current connector, then re-sync the hook list in settings
+ *   sync-hooks merge the current hook list into ~/.claude/settings.json (run by update with the new file)
  *   uninstall  remove our hooks, the MCP registration and the stored connector
  */
 const [mode, ...rest] = process.argv.slice(2);
@@ -70,7 +71,14 @@ const update = async (): Promise<void> => {
   const text = await response.text();
   if (!response.ok || !text.includes('agent-office.mjs')) throw new Error(`download failed (${response.status})`);
   writeFileSync(`${self}.tmp`, text); renameSync(`${self}.tmp`, self);
+  // The new file may hook more events than this (old) process knows about, so let it merge its own hook list.
+  execFileSync(process.execPath, [self, 'sync-hooks'], { stdio: 'inherit' });
   process.stdout.write(`Connector updated from ${connector.daemonUrl}. Restart running Claude sessions to use it.\n`);
+};
+
+const syncHooks = (): void => {
+  const backup = writeSettings(mergeAgentOfficeHooks(readSettings(), agentOfficeHooks(hookCommand(process.execPath, self), numberEnv('AGENT_OFFICE_PERMISSION_WAIT_SECONDS', 120))));
+  process.stdout.write(`Hooks synced in ${settingsFile}${existsSync(backup) ? ` (previous version: ${backup})` : ''}.\n`);
 };
 
 const uninstall = (): void => {
@@ -91,5 +99,6 @@ if (mode === 'hook') {
 } else if (mode === 'mcp') startMcpServer();
 else if (mode === 'install') await install().catch(error => { process.stderr.write(`agent-office install failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
 else if (mode === 'update') await update().catch(error => { process.stderr.write(`agent-office update failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
+else if (mode === 'sync-hooks') syncHooks();
 else if (mode === 'uninstall') uninstall();
-else { process.stderr.write('usage: agent-office.mjs hook | mcp | install --url <url> --code <code> | update | uninstall\n'); process.exitCode = 2; }
+else { process.stderr.write('usage: agent-office.mjs hook | mcp | install --url <url> --code <code> | update | sync-hooks | uninstall\n'); process.exitCode = 2; }

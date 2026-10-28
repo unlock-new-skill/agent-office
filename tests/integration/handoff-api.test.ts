@@ -44,10 +44,31 @@ test('handoff access: agent only its own seat, manager any seat, body bounded', 
 test('a v3 database upgrades in place to the current schema with seat_handoffs', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'ao-mig-')); const filename = path.join(dir, 'office.db');
   new Database({ filename }).close();
-  const raw = new DatabaseSync(filename); raw.exec('DROP TABLE seat_handoffs; DROP TABLE permission_requests; DROP TABLE install_codes; ALTER TABLE departments DROP COLUMN deputy_seat_id; ALTER TABLE tasks DROP COLUMN requester_seat_id; DROP INDEX messages_thread; ALTER TABLE messages DROP COLUMN thread_seq; PRAGMA user_version=3;'); raw.close();
+  const raw = new DatabaseSync(filename); raw.exec('DROP TABLE seat_handoffs; DROP TABLE permission_requests; DROP TABLE install_codes; DROP TABLE seat_compactions; ALTER TABLE departments DROP COLUMN deputy_seat_id; ALTER TABLE tasks DROP COLUMN requester_seat_id; DROP INDEX messages_thread; ALTER TABLE messages DROP COLUMN thread_seq; PRAGMA user_version=3;'); raw.close();
   const db = new Database({ filename });
   assert.equal((db.raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, SCHEMA_VERSION);
   assert.ok(db.raw.prepare("SELECT 1 FROM sqlite_master WHERE name='seat_handoffs'").get());
   assert.ok(db.raw.prepare("SELECT 1 FROM sqlite_master WHERE name='install_codes'").get());
   db.close();
+});
+
+test('brief carries recent conversation and the last compaction summary to the next session, not to the compacted one', async () => {
+  const fixture = createAppFixture(); const devLead = fixture.seatToken('dev-lead'); const devBe = fixture.seatToken('dev-be');
+  const root = await (await fixture.agent(devBe, '/v1/channels/dev/messages', { body: { body: 'blocked on schema' } })).json() as { seq: number };
+  await fixture.agent(devLead, '/v1/channels/dev/messages', { body: { body: 'use v2', threadSeq: root.seq } });
+  await fixture.agent(devLead, '/v1/channels/dev/messages', { body: { body: 'unrelated chatter' } });
+  assert.equal((await fixture.agent(devBe, '/v1/seats/me/compaction', { body: { summary: 'Was migrating auth to v2 schema; next: tests.' } })).status, 200);
+  const fresh = await (await fixture.agent(devBe, '/v1/me')).json() as { handoffBrief: string };
+  assert.match(fresh.handoffBrief, /Auto summary from the previous session's last context compaction/);
+  assert.match(fresh.handoffBrief, /Was migrating auth to v2 schema/);
+  assert.match(fresh.handoffBrief, new RegExp(`#dev \\[${root.seq}\\] you: blocked on schema`));
+  assert.match(fresh.handoffBrief, new RegExp(`#dev thread \\[${root.seq}\\] @dev-lead: use v2`));
+  assert.doesNotMatch(fresh.handoffBrief, /unrelated chatter/);
+  const compacted = await (await fixture.agent(devBe, '/v1/me?source=compact')).json() as { handoffBrief: string };
+  assert.doesNotMatch(compacted.handoffBrief, /Auto summary/);
+  assert.match(compacted.handoffBrief, /Recent conversation/);
+  // A newer hand-written note takes precedence over an older automatic summary.
+  await fixture.agent(devBe, '/v1/seats/dev-be/handoff', { method: 'PUT', body: { body: 'manual note' } });
+  assert.doesNotMatch((await (await fixture.agent(devBe, '/v1/me')).json() as { handoffBrief: string }).handoffBrief, /Auto summary/);
+  fixture.close();
 });

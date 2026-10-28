@@ -71,7 +71,7 @@ export const createApp = (context: AppContext): Hono => {
     const session = context.auth.authenticateRequest(c.req.raw);
     if (session) return c.json({ userId: 'manager', expiresAt: session.expiresAt, csrfToken: session.csrfToken });
     const credential = context.auth.authenticateBearer(c.req.raw);
-    return credential ? c.json(context.office.whoami(credential.agentId)) : jsonError('unauthorized', 401);
+    return credential ? c.json(context.office.whoami(credential.agentId, { afterCompaction: c.req.query('source') === 'compact' })) : jsonError('unauthorized', 401);
   });
 
   app.get('/v1/agents', c => context.auth.authenticateRequest(c.req.raw) ? c.json({ agents: context.events.snapshot().agents }) : jsonError('unauthorized', 401));
