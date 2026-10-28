@@ -71,6 +71,16 @@ Tasks may carry `requesterSeatId` (a leader of another department, set via `requ
 
 Schema version 6 (`PRAGMA user_version=6`); v2–v5 upgrade in place. No in-place migration from v1: the daemon refuses a v1 database (`schema_reset_required`); run `npm run wipe -- --yes && npm run setup`. Tables: auth (`users`, `auth_sessions`, `credentials`), telemetry (`agents`, `turns`, `invocations`, `permission_waits`, `events`), collaboration (`departments`, `seats`, `channels`, `channel_members`, `messages`, `seat_reads`, `tasks`, `task_events`, `seat_handoffs`, `permission_requests`).
 
+## Runner (headless seats)
+
+`agent-office.mjs runner` runs the seats of the machine's `~/.agent-office/runner.json` as `claude -p --input-format stream-json --output-format stream-json --verbose` processes (env: `AGENT_OFFICE_SEAT`, `AGENT_OFFICE_RUNNER=1`, nested-session vars stripped). `SeatWorker` keeps the session id per seat (`runner-state.json`) and restarts crashes with `--resume` (backoff 2–60 s, 5 crashes / 10 min → `failed`; an unresumable session starts fresh). When a turn ends it long-polls `/v1/wake` with the session token the SessionStart hook stored and writes the reason as the next user message; the Stop hook returns at once under `AGENT_OFFICE_RUNNER=1`. Prompts written by Agent Office start with `[Agent Office]`; their `turn.start` telemetry carries `summary: agent-office:auto` so the auto-wake guard is not reset as it is for a human prompt. Interrupt = stream-json `control_request {subtype: interrupt}`.
+
+The runner authenticates with the machine's connector credential (runner id = credential id) and talks outbound only: `POST /v1/runners/register` (seats offered; unknown ids refused), long-poll `GET /v1/runners/me/commands?wait=60`, `POST …/commands/:id/result`, batched `POST /v1/runners/me/status` and `/log`. `RunnerService` (schema v9: `runners`, `runner_commands`) routes a manager command to the most recently seen runner offering the seat, rejects it when that runner is offline (no poll for 90 s), expires unpicked commands after 2 min, rate-limits 30/min and keeps every command as an audit row. The live log is an in-memory ring of 300 entries per seat, pushed over the WebSocket. Service install writes a launchd agent / systemd user unit / logon task with an allowlist of env vars (no API tokens).
+
+## Telegram notifications
+
+`TelegramNotifier` (enabled by `AGENT_OFFICE_TELEGRAM_BOT_TOKEN`) receives collab events: new permission prompts become messages with Allow/Deny inline buttons (`p:a|d:<id>` callback data), resolved prompts edit the message with the outcome; runner seats that turn `failed` are reported. Updates come from long-polling `getUpdates`; all Bot API traffic goes through `AGENT_OFFICE_TELEGRAM_PROXY` (undici `ProxyAgent` for http(s), `fetch-socks` for socks5). One chat is served, paired with a 10-minute code from the web UI (`app_settings`); callbacks from other chats are refused; decisions record `decided_by='telegram'`. Errors mask the token; logs mask proxy credentials. Max 20 messages/min.
+
 ## Code map
 
 | Path | Role |
@@ -83,6 +93,9 @@ Schema version 6 (`PRAGMA user_version=6`); v2–v5 upgrade in place. No in-plac
 | `src/server/collaboration/permission-service.ts` | Remote permission prompts, long-poll decisions |
 | `src/server/http-policy.ts` | Host/origin allowlists, security headers, client peer |
 | `src/server/office-routes.ts` | REST surface for the above |
+| `src/connector/runner/*` | Runner: config, stream-json adapter, seat worker, server link, service install |
+| `src/server/collaboration/runner-service.ts`, `src/server/runner-routes.ts` | Runner registry, command queue + audit, live log |
+| `src/server/notify/*` | Telegram client (proxy), notifier, pairing routes |
 | `src/connector/hook-runner.ts` | Hook logic (register, telemetry, Stop wake with retry, remote permission) |
 | `src/server/mcp-stdio.ts` | MCP tools `agent_office_*` |
 | `src/client/map3d/office-3d.ts` | 3D map (default): Three.js isometric open-plan office floor (department zones with own flooring, windowed shell, pantry/lounge, plants, pendant lamps; props in `office-3d-props.ts`, clock-driven lighting in `day-night.ts`) reusing the 2D layout; loaded lazily as its own chunk; rebuilds meshes only on org layout changes, restyles actors on status changes |
@@ -92,4 +105,4 @@ Schema version 6 (`PRAGMA user_version=6`); v2–v5 upgrade in place. No in-plac
 
 ## Frozen
 
-SLO/benchmark work, headless agent spawning, heartbeat wakes.
+SLO/benchmark work, heartbeat wakes, spawning seats on machines that have no runner.json entry for them.

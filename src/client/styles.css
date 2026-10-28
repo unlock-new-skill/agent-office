@@ -273,3 +273,34 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .link-btn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
 .connect-link { text-decoration: none; }
 .connect-link.active { outline: 2px solid var(--accent-soft); }
+
+/* Runner (headless seats): controls on the seat card and the live-log drawer */
+.runner-box { margin-top: 8px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); display: grid; gap: 6px; min-width: 0; }
+.runner-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; min-width: 0; }
+.runner-state { font-weight: 600; }
+.runner-state.state-running { color: var(--busy); }
+.runner-state.state-idle { color: var(--ok); }
+.runner-state.state-starting { color: var(--warn); }
+.runner-state.state-failed { color: var(--bad); }
+.runner-state.state-stopped { color: var(--text-mute); }
+.runner-machine { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.runner-detail { font-size: 12px; overflow-wrap: anywhere; }
+.runner-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.runner-prompt { display: grid; gap: 6px; }
+.runner-prompt textarea { width: 100%; resize: vertical; }
+.runner-last { font-size: 11px; overflow-wrap: anywhere; }
+.runner-last.status-failed, .runner-last.status-expired { color: var(--bad); }
+.log-drawer { position: fixed; z-index: 30; top: 48px; right: 0; bottom: 0; width: min(520px, 100vw); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--panel); border-left: 1px solid var(--line); box-shadow: var(--shadow); }
+.log-entries { list-style: none; margin: 0; padding: 8px 12px; overflow-y: auto; font-size: 12px; display: grid; gap: 4px; align-content: start; }
+.log-entry { display: grid; grid-template-columns: auto 52px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.log-entry time, .log-audit time { color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.log-kind { color: var(--text-dim); text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
+.log-text { overflow-wrap: anywhere; white-space: pre-wrap; }
+.log-entry.kind-tool .log-kind { color: var(--busy); }
+.log-entry.kind-error .log-kind, .log-entry.kind-error .log-text { color: var(--bad); }
+.log-entry.kind-prompt .log-kind { color: var(--mention); }
+.log-entry.kind-result .log-kind { color: var(--ok); }
+.log-end { height: 1px; }
+.log-audit { border-top: 1px solid var(--line); padding: 8px 12px 12px; max-height: 32vh; overflow-y: auto; font-size: 12px; }
+.log-audit h3 { margin: 0 0 6px; font-size: 12px; color: var(--text-dim); }
+.log-audit ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }

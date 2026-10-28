@@ -7,8 +7,9 @@ import type { SessionRecord, SessionStore } from './session-store.js';
 /**
  * requestedSeat: seat id or join URL from AGENT_OFFICE_SEAT, claimed on SessionStart. wakeWaitSeconds: how long one Stop
  * hook listens before a keep-alive turn. alive: false once the Claude Code process that started the hook is gone.
+ * runnerManaged: the session runs headless under the runner, which delivers wakes itself.
  */
-export type HookDeps = { store: SessionStore; fetch: typeof fetch; wakeWaitSeconds: number; requestedSeat?: string | undefined; permissionWaitSeconds?: number; sleep?: (ms: number) => Promise<void>; now?: () => number; alive?: () => boolean };
+export type HookDeps = { store: SessionStore; fetch: typeof fetch; wakeWaitSeconds: number; requestedSeat?: string | undefined; permissionWaitSeconds?: number; sleep?: (ms: number) => Promise<void>; now?: () => number; alive?: () => boolean; runnerManaged?: boolean };
 export type HookOutput = Record<string, unknown>;
 export type WhoAmI = { agentId: string; seat: { id: string; title: string; role: string; description: string } | null; department: { name: string; deputySeatId?: string | null } | null; channels: Array<{ id: string }>; handoffBrief?: string | null };
 
@@ -18,7 +19,7 @@ const WAKE_BACKOFF_MS = [2000, 4000, 8000, 15_000, 30_000, 60_000];
 /** One listening round: the daemon is asked again at least once a minute. */
 export const POLL_SECONDS = 60;
 /** Sent when the listen window (just under the Stop hook timeout) runs out: one cheap turn re-arms the listener. */
-const KEEPALIVE_REASON = '[Agent Office] No new messages for you. Still listening: end your turn now without doing anything else.';
+export const KEEPALIVE_REASON = '[Agent Office] No new messages for you. Still listening: end your turn now without doing anything else.';
 /** Prompts that need an answer typed by the user, not Allow/Deny: always left to the terminal. */
 const TERMINAL_ONLY_TOOLS = new Set(['AskUserQuestion']);
 /** One long-poll request never outlives this: proxies such as Cloudflare cut idle responses after 100 s. */
@@ -86,6 +87,7 @@ export const runHook = async (raw: unknown, deps: HookDeps): Promise<HookOutput>
     }
     if (input.hook_event_name === 'PermissionRequest' && (deps.permissionWaitSeconds ?? 0) > 0) return await askManager(input, session, deps);
     if (input.hook_event_name === 'Stop') {
+      if (deps.runnerManaged) return {};
       return await listenForWake(input.session_id, input.cwd, session, deps);
     }
     return {};
@@ -114,7 +116,7 @@ const claimSeat = async (session: SessionRecord, seatId: string, deps: HookDeps)
  * which the CLI turns into exit code 2 to wake Claude. It stops quietly when the session ended, another listener for the
  * same session took over, or Claude Code (the parent process) is gone, so no orphan can swallow mentions.
  */
-const listenForWake = async (sessionId: string, cwd: string | undefined, initial: SessionRecord, deps: HookDeps): Promise<HookOutput> => {
+export const listenForWake = async (sessionId: string, cwd: string | undefined, initial: SessionRecord, deps: HookDeps): Promise<HookOutput> => {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const alive = deps.alive ?? (() => true);
@@ -179,7 +181,7 @@ const askManager = async (input: Record<string, unknown>, session: SessionRecord
 };
 
 /** Returns the stored credential, registering through the connector on SessionStart or when a session predates the hook install. */
-const ensureSession = async (sessionId: string, cwd: string | undefined, deps: HookDeps, forceRegister: boolean): Promise<SessionRecord | null> => {
+export const ensureSession = async (sessionId: string, cwd: string | undefined, deps: HookDeps, forceRegister: boolean): Promise<SessionRecord | null> => {
   const existing = deps.store.session(sessionId);
   if (existing && !forceRegister) return existing;
   const connector = deps.store.connector();

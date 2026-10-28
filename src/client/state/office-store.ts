@@ -1,4 +1,4 @@
-import type { AgentSnapshot, ChatMessage, CollabEvent, OrgView, PermissionRequest, Seat, Snapshot, Task } from '../../shared/contracts.js';
+import type { AgentSnapshot, ChatMessage, CollabEvent, OrgView, PermissionRequest, RunnerCommand, RunnerLogEntry, RunnerSeat, RunnerView, Seat, Snapshot, Task } from '../../shared/contracts.js';
 
 export type OfficeState = {
   org: OrgView | null;
@@ -12,6 +12,10 @@ export type OfficeState = {
   permissions: PermissionRequest[];
   /** Open threads by `${channelId}:${rootSeq}`; channel `messages` hold top-level messages only. */
   threads: Record<string, { root: ChatMessage; replies: ChatMessage[] }>;
+  /** Machines running seats headless, their live log and the manager's commands, per seat. */
+  runners: RunnerView[];
+  runnerLogs: Record<string, RunnerLogEntry[]>;
+  runnerCommands: Record<string, RunnerCommand[]>;
 };
 
 export type OfficeAction =
@@ -25,9 +29,24 @@ export type OfficeAction =
   | { type: 'thread'; channelId: string; root: ChatMessage; replies: ChatMessage[] }
   | { type: 'read'; channelId: string; seq: number }
   | { type: 'connection'; connected: boolean }
+  | { type: 'runners'; runners: RunnerView[] }
+  | { type: 'runner-log'; seatId: string; entries: RunnerLogEntry[] }
+  | { type: 'runner-commands'; seatId: string; commands: RunnerCommand[] }
   | { type: 'reset' };
 
-export const initialOfficeState: OfficeState = { org: null, agents: [], messages: {}, tasks: {}, readSeq: {}, connected: false, permissions: [], threads: {} };
+export const initialOfficeState: OfficeState = { org: null, agents: [], messages: {}, tasks: {}, readSeq: {}, connected: false, permissions: [], threads: {}, runners: [], runnerLogs: {}, runnerCommands: {} };
+const LOG_RING = 300;
+
+/** The runner that offers a seat (online one first) and that runner's view of the seat. */
+export const runnerSeatFor = (state: OfficeState, seatId: string): { runner: RunnerView; seat: RunnerSeat } | null => {
+  for (const runner of [...state.runners].sort((a, b) => Number(b.online) - Number(a.online) || b.lastSeenAt - a.lastSeenAt)) {
+    const seat = runner.seats.find(candidate => candidate.seatId === seatId);
+    if (seat) return { runner, seat };
+  }
+  return null;
+};
+
+const upsertCommand = (list: RunnerCommand[], command: RunnerCommand): RunnerCommand[] => [command, ...list.filter(item => item.id !== command.id)].sort((a, b) => b.createdAt - a.createdAt).slice(0, 20);
 export const threadKey = (channelId: string, seq: number): string => `${channelId}:${seq}`;
 
 const mergeMessages = (current: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] => {
@@ -46,6 +65,9 @@ export const officeReducer = (state: OfficeState, action: OfficeAction): OfficeS
     case 'permissions': return { ...state, permissions: action.pending };
     case 'thread': return { ...state, threads: { ...state.threads, [threadKey(action.channelId, action.root.seq)]: { root: action.root, replies: mergeMessages([], action.replies) } } };
     case 'connection': return { ...state, connected: action.connected };
+    case 'runners': return { ...state, runners: action.runners };
+    case 'runner-log': return { ...state, runnerLogs: { ...state.runnerLogs, [action.seatId]: action.entries.slice(-LOG_RING) } };
+    case 'runner-commands': return { ...state, runnerCommands: { ...state.runnerCommands, [action.seatId]: action.commands } };
     case 'reset': return { ...state, messages: {} };
     case 'history': {
       const current = state.messages[action.channelId] ?? [];
@@ -56,6 +78,9 @@ export const officeReducer = (state: OfficeState, action: OfficeAction): OfficeS
       if (event.kind === 'org') return { ...state, org: event.org };
       if (event.kind === 'task') return { ...state, tasks: { ...state.tasks, [event.task.id]: event.task } };
       if (event.kind === 'permission') return { ...state, permissions: event.pending };
+      if (event.kind === 'runners') return { ...state, runners: event.runners };
+      if (event.kind === 'runner-log') return { ...state, runnerLogs: { ...state.runnerLogs, [event.seatId]: [...state.runnerLogs[event.seatId] ?? [], ...event.entries].slice(-LOG_RING) } };
+      if (event.kind === 'runner-command') return { ...state, runnerCommands: { ...state.runnerCommands, [event.command.seatId]: upsertCommand(state.runnerCommands[event.command.seatId] ?? [], event.command) } };
       const { message } = event;
       const org = state.org && { ...state.org, channels: state.org.channels.map(channel => channel.id === message.channelId ? { ...channel, lastSeq: Math.max(channel.lastSeq, message.seq) } : channel) };
       if (message.threadSeq) {

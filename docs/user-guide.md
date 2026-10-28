@@ -205,6 +205,30 @@ Giới hạn tự đánh thức (mặc định 15): thêm `AGENT_OFFICE_MAX_AUTO
 AGENT_OFFICE_SEAT=dev-be claude --permission-mode acceptEdits
 ```
 
+### Chạy agent không cần terminal (runner)
+
+Runner là service chạy trên mỗi máy agent: giữ các ghế chạy headless (`claude -p`), tự mở lại session đã chết bằng `--resume` (giữ context), đưa mention vào thành lượt mới, và cho manager điều khiển từ web.
+
+```sh
+node ~/.agent-office/bin/agent-office.mjs runner init              # tạo ~/.agent-office/runner.json mẫu
+# sửa runner.json: [{ "seatId": "dev-be", "cwd": "/đường/dẫn/repo", "permissionMode": "acceptEdits" }]
+node ~/.agent-office/bin/agent-office.mjs runner                   # chạy thử (Ctrl+C dừng)
+node ~/.agent-office/bin/agent-office.mjs runner install-service   # tự chạy khi đăng nhập (launchd / systemd / Task Scheduler)
+```
+
+- Thẻ ghế trong **Org** có thêm hộp runner: trạng thái (working / listening / stopped / failed), **Start · Stop · Restart · Interrupt · Prompt · Log**. Stop/Restart bấm 2 lần để xác nhận. **Log** mở log trực tiếp (agent nói gì, chạy tool gì) và lịch sử lệnh (ai, lúc nào, kết quả).
+- Quyền mặc định `acceptEdits`: tự sửa file trong repo; lệnh shell chờ Allow/Deny trên web hoặc Telegram, hết giờ thì **từ chối** (không kẹt ở terminal).
+- Session chết thì tự mở lại sau 2 → 60 giây; chết 5 lần trong 10 phút thì ghế chuyển **failed** và báo Telegram — xem Log rồi bấm Start.
+- An toàn: server chỉ gửi được lệnh start/stop/restart/interrupt/prompt cho các ghế có trong `runner.json` của máy; không thể gửi đường dẫn, lệnh shell hay biến môi trường. Lệnh hết hạn sau 2 phút.
+
+### Thông báo Telegram
+
+Bot Telegram báo ngay khi agent chờ duyệt quyền (bấm ✅ Allow / ❌ Deny trong chat) và khi ghế runner lỗi. Mọi kết nối tới Telegram đi qua proxy.
+
+1. Tạo bot với @BotFather, lấy token.
+2. Trên VPS, thêm vào `/opt/my-studio/.env`: `AGENT_OFFICE_TELEGRAM_BOT_TOKEN=...` và `AGENT_OFFICE_TELEGRAM_PROXY=http://user:pass@ip:port` (hoặc `socks5://...`), rồi `docker compose -f docker-compose.prod.yml up -d`.
+3. Web → **Setup → Thông báo Telegram → Ghép Telegram**, bấm link mở bot (hoặc gửi `/start <mã>`). Chỉ chat đã ghép mới bấm duyệt được.
+
 ---
 
 ## 8. Xử lý sự cố

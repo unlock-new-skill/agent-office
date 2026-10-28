@@ -12,13 +12,26 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
   seat_id TEXT PRIMARY KEY REFERENCES seats(id) ON DELETE CASCADE, summary TEXT NOT NULL CHECK(length(summary) <= 6000),
   agent_id TEXT NOT NULL, created_at INTEGER NOT NULL
 ) STRICT;`;
+/** v9: per-machine runners with an audited command queue, and small app settings (e.g. the paired Telegram chat). */
+const V9_TABLES = `CREATE TABLE runners(
+  id TEXT PRIMARY KEY, machine TEXT NOT NULL, seats_json TEXT NOT NULL, last_seen_at INTEGER NOT NULL
+) STRICT;
+CREATE TABLE runner_commands(
+  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL, seat_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('start','stop','restart','interrupt','prompt')), text TEXT,
+  status TEXT NOT NULL CHECK(status IN ('queued','sent','done','failed','expired')), result TEXT,
+  requested_by TEXT NOT NULL, created_at INTEGER NOT NULL, done_at INTEGER
+) STRICT;
+CREATE INDEX runner_commands_runner ON runner_commands(runner_id, status);
+CREATE INDEX runner_commands_seat ON runner_commands(seat_id, created_at);
+CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;`;
 const THREAD_INDEX = 'CREATE INDEX messages_thread ON messages(channel_id, thread_seq);';
 
 /** v4 additions: seat handoff notes and remotely answerable permission prompts. */
@@ -85,7 +98,7 @@ export class Database {
   private migrate(): void {
     const version = this.raw.prepare('PRAGMA user_version').get() as { user_version: number };
     if (version.user_version === SCHEMA_VERSION) return;
-    // Additive upgrades run in place: v3 message edit/delete markers, v4 handoff notes + permission requests, v5 install codes, v6 deputies + task requesters, v7 message threads, v8 compaction summaries.
+    // Additive upgrades run in place: v3 message edit/delete markers, v4 handoff notes + permission requests, v5 install codes, v6 deputies + task requesters, v7 message threads, v8 compaction summaries, v9 runners + app settings.
     const from = version.user_version;
     if (from >= 2 && from < SCHEMA_VERSION) {
       this.transaction(() => {
@@ -97,6 +110,7 @@ export class Database {
         // v7: thread replies point at the seq of their root message in the same channel.
         if (from < 7) this.raw.exec(`ALTER TABLE messages ADD COLUMN thread_seq INTEGER; ${THREAD_INDEX}`);
         if (from < 8) this.raw.exec(V8_TABLES);
+        if (from < 9) this.raw.exec(V9_TABLES);
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
       return;
@@ -184,6 +198,7 @@ export class Database {
       ${V4_TABLES}
       ${V5_TABLES}
       ${V8_TABLES}
+      ${V9_TABLES}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

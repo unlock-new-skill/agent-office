@@ -4,16 +4,19 @@ import { z } from 'zod';
 import type { AppConfig } from './config.js';
 import { AuthService, clearedSessionCookie, sessionCookie } from './auth/auth-service.js';
 import type { Database } from './db/database.js';
-import { AgentRegistrationSchema, EnrollmentSchema, LoginSchema, TelemetrySchema } from '../shared/contracts.js';
+import { AgentRegistrationSchema, AUTO_TURN_SUMMARY, EnrollmentSchema, LoginSchema, TelemetrySchema } from '../shared/contracts.js';
 import { EventStore } from './events/event-store.js';
 import { AdmissionLimiter } from './admission.js';
 import type { Office } from './collaboration/office.js';
 import { registerOfficeRoutes } from './office-routes.js';
+import { registerRunnerRoutes } from './runner-routes.js';
+import { registerNotifyRoutes } from './notify/notify-routes.js';
+import type { TelegramNotifier } from './notify/telegram-notifier.js';
 import { registerInstallRoutes } from './install-routes.js';
 import { logger } from './logger.js';
 import { allowedHostsAndOrigins, isHttpsPublic, securityHeaders } from './http-policy.js';
 
-export type AppContext = { config: AppConfig; db: Database; auth: AuthService; events: EventStore; office: Office; revokeSession?: (id: string) => void };
+export type AppContext = { config: AppConfig; db: Database; auth: AuthService; events: EventStore; office: Office; revokeSession?: (id: string) => void; notifier?: TelegramNotifier | null };
 const jsonError = (message: string, status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500 | 503): Response => Response.json({ error: message }, { status });
 
 export const createApp = (context: AppContext): Hono => {
@@ -77,6 +80,8 @@ export const createApp = (context: AppContext): Hono => {
   app.get('/v1/agents', c => context.auth.authenticateRequest(c.req.raw) ? c.json({ agents: context.events.snapshot().agents }) : jsonError('unauthorized', 401));
   registerOfficeRoutes(app, { auth: context.auth, office: context.office, manager, wakeWaitSeconds: context.config.wakeWaitSeconds, publicOrigin: context.config.publicOrigin });
   registerInstallRoutes(app, { auth: context.auth, manager, publicOrigin: context.config.publicOrigin });
+  registerRunnerRoutes(app, { auth: context.auth, office: context.office, manager });
+  registerNotifyRoutes(app, { manager, notifier: context.notifier ?? null });
 
   app.post('/v1/agents/enrollment', async c => {
     if (!manager(c.req.raw)) return jsonError('unauthorized', 401);
@@ -111,7 +116,8 @@ export const createApp = (context: AppContext): Hono => {
     try {
       const body = TelemetrySchema.parse(await c.req.json());
       const event = context.events.append({ ...body, source: 'claude', producerId: credential.id, producerIncarnation: credential.incarnation, agentId: credential.agentId, sessionId: credential.sessionId, incarnation: credential.incarnation, project: credential.project });
-      if (body.kind === 'turn.start') context.office.wake.resetGuardForAgent(credential.agentId);
+      // A prompt written by Agent Office (runner wake) is not a human taking over: keep the auto-wake guard counting.
+      if (body.kind === 'turn.start' && body.summary !== AUTO_TURN_SUMMARY) context.office.wake.resetGuardForAgent(credential.agentId);
       if (body.kind === 'turn.start' || body.kind === 'session.end') context.office.permissions.settleForAgent(credential.agentId);
       return c.json(event, 201);
     } catch (error) {

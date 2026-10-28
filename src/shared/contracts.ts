@@ -52,11 +52,31 @@ export type Task = { id: string; departmentId: string; number: number; assigneeS
 export type PermissionStatus = 'pending' | 'allowed' | 'denied' | 'expired';
 export type PermissionBehavior = 'allow' | 'deny';
 export type PermissionRequest = { id: string; agentId: string; seatId: string | null; tool: string; summary: string; status: PermissionStatus; message: string; createdAt: number; decidedAt: number | null; decidedBy: string | null };
+
+/** Prefix of prompts written by Agent Office itself (wakes, runner starts); they are not a human taking over. */
+export const AUTO_PROMPT_MARK = '[Agent Office]';
+/** Summary carried by turn.start telemetry for an automatic prompt, so the server keeps the auto-wake guard. */
+export const AUTO_TURN_SUMMARY = 'agent-office:auto';
+
+/** Headless seats run by a per-machine runner (connector mode `runner`). */
+export type RunnerSeatState = 'starting' | 'running' | 'idle' | 'stopped' | 'failed';
+export type RunnerSeat = { seatId: string; state: RunnerSeatState; sessionId: string | null; restarts: number; permissionMode: string; detail: string };
+export type RunnerView = { id: string; machine: string; online: boolean; lastSeenAt: number; seats: RunnerSeat[] };
+export const RUNNER_COMMAND_KINDS = ['start', 'stop', 'restart', 'interrupt', 'prompt'] as const;
+export type RunnerCommandKind = typeof RUNNER_COMMAND_KINDS[number];
+export type RunnerCommandStatus = 'queued' | 'sent' | 'done' | 'failed' | 'expired';
+export type RunnerCommand = { id: string; runnerId: string; seatId: string; kind: RunnerCommandKind; text: string | null; status: RunnerCommandStatus; result: string | null; requestedBy: string; createdAt: number; doneAt: number | null };
+export type RunnerLogKind = 'text' | 'tool' | 'result' | 'error' | 'state' | 'prompt';
+export type RunnerLogEntry = { seatId: string; ts: number; kind: RunnerLogKind; summary: string };
+
 export type CollabEvent =
   | { type: 'collab'; kind: 'message'; message: ChatMessage }
   | { type: 'collab'; kind: 'org'; org: OrgView }
   | { type: 'collab'; kind: 'task'; task: Task }
-  | { type: 'collab'; kind: 'permission'; pending: PermissionRequest[] };
+  | { type: 'collab'; kind: 'permission'; pending: PermissionRequest[] }
+  | { type: 'collab'; kind: 'runners'; runners: RunnerView[] }
+  | { type: 'collab'; kind: 'runner-command'; command: RunnerCommand }
+  | { type: 'collab'; kind: 'runner-log'; seatId: string; entries: RunnerLogEntry[] };
 
 const slug = z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]*$/, 'lowercase slug');
 export const SeatInputSchema = z.object({ id: slug.optional(), title: z.string().min(1).max(80), description: z.string().max(2000).default(''), role: z.enum(['leader', 'member']) }).strict();

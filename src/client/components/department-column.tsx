@@ -2,6 +2,7 @@ import { useState, type CSSProperties, type FormEvent, type ReactNode } from 're
 import type { Department, SeatHandoff, SeatRole } from '../../shared/contracts.js';
 import { errorText, type Api } from '../api/http.js';
 import { seatStatus, unassignedAgents, type OfficeState } from '../state/office-store.js';
+import { SeatRunnerPanel } from './runner-controls.js';
 import { SeatCard } from './seat-card.js';
 
 type Props = { department: Department; state: OfficeState; api: Api; notify: (text: string) => void };
@@ -50,7 +51,8 @@ export function DepartmentColumn({ department, state, api, notify }: Props): Rea
             onSave={patch => run(api.send('PATCH', `/v1/seats/${seat.id}`, patch))}
             loadHandoff={() => api.get<{ handoff: SeatHandoff | null }>(`/v1/seats/${seat.id}/handoff`).then(result => result.handoff).catch(error => { notify(errorText(error)); throw error; })}
             saveHandoff={body => api.send('PUT', `/v1/seats/${seat.id}/handoff`, { body }).then(() => notify(`Handoff note for @${seat.id} saved.`)).catch(error => { notify(errorText(error)); throw error; })}
-            onDelete={() => { if (window.confirm(`Delete seat ${seat.title}? Its tasks become unassigned.`)) run(api.send('DELETE', `/v1/seats/${seat.id}`)); }} />
+            onDelete={() => { if (window.confirm(`Delete seat ${seat.title}? Its tasks become unassigned.`)) run(api.send('DELETE', `/v1/seats/${seat.id}`)); }}
+            runner={<SeatRunnerPanel seatId={seat.id} title={seat.title} state={state} api={api} notify={notify} />} />
         ))}
       </div>
       {adding

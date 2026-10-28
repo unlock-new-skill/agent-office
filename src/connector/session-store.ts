@@ -20,6 +20,9 @@ export class SessionStore {
   /** Marks a new Stop-hook listener as the session's only one; earlier listeners see the change and exit. */
   claimListener(sessionId: string): string { const id = randomUUID(); this.write(this.listenerFile(sessionId), { id }); return id; }
   listener(sessionId: string): string | null { return this.read<{ id: string }>(this.listenerFile(sessionId))?.id ?? null; }
+  /** Small JSON files kept next to the credentials (runner config/state), same 0600 permissions. */
+  readJson<T>(name: string): T | null { return this.read<T>(path.join(this.home, name)); }
+  saveJson(name: string, value: unknown): void { this.write(path.join(this.home, name), value); }
   spoolDir(sessionId: string): string { this.assertSessionId(sessionId); return path.join(this.home, 'spool', sessionId); }
 
   private listenerFile(sessionId: string): string { this.assertSessionId(sessionId); return path.join(this.home, 'listeners', `${sessionId}.json`); }

@@ -68,6 +68,69 @@ paths:
       parameters: [{in: path, name: id, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [body], additionalProperties: false, properties: {body: {type: string, maxLength: 8000}}}}}}
       responses: {'200': {description: Saved SeatHandoff}, '403': {description: Agent may only write its own seat}}
+  /v1/runners/register:
+    post:
+      description: Runner (connector credential) offers the seats of its local runner.json. Unknown seat ids are refused.
+      security: [{bearerAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [machine, seats], properties: {machine: {type: string, maxLength: 120}, seats: {type: array, maxItems: 20, items: {$ref: '#/components/schemas/RunnerSeat'}}}}}}}
+      responses: {'200': {description: '{refused: string[]}'}, '401': {description: Not a connector credential}}
+  /v1/runners/me/commands:
+    get:
+      description: Long-poll (wait ≤ 60 s) for manager commands; returned commands are marked sent.
+      security: [{bearerAuth: []}]
+      parameters: [{in: query, name: wait, schema: {type: integer, minimum: 0, maximum: 60}}]
+      responses: {'200': {description: '{commands: RunnerCommand[]}'}}
+  /v1/runners/me/commands/{id}/result:
+    post:
+      security: [{bearerAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [ok, message], properties: {ok: {type: boolean}, message: {type: string, maxLength: 2000}}}}}}
+      responses: {'200': {description: Completed RunnerCommand}}
+  /v1/runners/me/status:
+    post:
+      security: [{bearerAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [seats], properties: {seats: {type: array, items: {$ref: '#/components/schemas/RunnerSeat'}}}}}}}
+      responses: {'200': {description: ok}}
+  /v1/runners/me/log:
+    post:
+      security: [{bearerAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [entries], properties: {entries: {type: array, maxItems: 200, items: {type: object, required: [seatId, ts, kind, summary], properties: {seatId: {type: string}, ts: {type: integer}, kind: {type: string, enum: [text, tool, result, error, state, prompt]}, summary: {type: string, maxLength: 500}}}}}}}}}
+      responses: {'200': {description: ok}}
+  /v1/runners:
+    get:
+      security: [{cookieAuth: []}]
+      responses: {'200': {description: '{runners: RunnerView[]}'}}
+  /v1/seats/{id}/runner-commands:
+    get:
+      security: [{cookieAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: '{commands: RunnerCommand[]} (audit, newest first, 20)'}}
+    post:
+      description: Queue start | stop | restart | interrupt | prompt for the online runner offering the seat. Expires after 2 min. Max 30/min.
+      security: [{cookieAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [kind], additionalProperties: false, properties: {kind: {type: string, enum: [start, stop, restart, interrupt, prompt]}, text: {type: string, maxLength: 8000}}}}}}
+      responses: {'201': {description: Queued RunnerCommand}, '409': {description: no_runner_for_seat | runner_offline | too_many_commands}}
+  /v1/seats/{id}/runner-log:
+    get:
+      security: [{cookieAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: '{entries: RunnerLogEntry[]} (last 300, in memory)'}}
+  /v1/notify/telegram:
+    get:
+      security: [{cookieAuth: []}]
+      responses: {'200': {description: '{enabled, paired, botUsername}'}}
+    delete:
+      security: [{cookieAuth: []}]
+      responses: {'200': {description: Unpaired}}
+  /v1/notify/telegram/pair:
+    post:
+      security: [{cookieAuth: []}]
+      responses: {'201': {description: '{code, expiresAt, link} — send /start <code> to the bot within 10 min'}, '409': {description: telegram_disabled}}
+  /v1/notify/telegram/test:
+    post:
+      security: [{cookieAuth: []}]
+      responses: {'200': {description: Sent}, '502': {description: not_paired | telegram_unreachable}}
   /v1/permissions:
     get:
       security: [{cookieAuth: []}]
@@ -95,6 +158,10 @@ components:
   responses:
     Unauthorized: {description: Authentication failed}
   schemas:
+    RunnerSeat:
+      type: object
+      required: [seatId, state, sessionId, restarts, permissionMode, detail]
+      properties: {seatId: {type: string}, state: {type: string, enum: [starting, running, idle, stopped, failed]}, sessionId: {type: [string, 'null']}, restarts: {type: integer}, permissionMode: {type: string}, detail: {type: string, maxLength: 300}}
     LoginRequest: {type: object, required: [password], additionalProperties: false, properties: {password: {type: string, minLength: 1, maxLength: 256, description: 'Login accepts any non-empty attempt; first-run setup/reset enforces 12+ characters.'}}}
     EnrollmentRequest:
       type: object

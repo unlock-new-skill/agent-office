@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { errorText, type Api } from '../api/http.js';
 import { joinUrl } from '../../shared/join.js';
 import type { OfficeState } from '../state/office-store.js';
@@ -9,6 +9,50 @@ type Created = { code: string; expiresAt: number; uses: number; commands: { unix
 
 const CONNECTOR = { unix: '~/.agent-office/bin/agent-office.mjs', windows: '"$env:USERPROFILE\\.agent-office\\bin\\agent-office.mjs"' };
 const connector = (os: Os, mode: string): string => `node ${CONNECTOR[os]} ${mode}`;
+const RUNNER_JSON = { unix: '~/.agent-office/runner.json', windows: '"$env:USERPROFILE\\.agent-office\\runner.json"' };
+type Telegram = { enabled: boolean; paired: boolean; botUsername: string | null };
+type Pairing = { code: string; expiresAt: number; link: string | null };
+
+/** Telegram notifications: pairing with the bot, test message, unpair. Token and proxy stay in the server's .env. */
+function TelegramSetup({ api, notify, cmd }: { api: Api; notify: (text: string) => void; cmd: (text: string) => ReactNode }): ReactNode {
+  const [status, setStatus] = useState<Telegram | null>(null); const [pairing, setPairing] = useState<Pairing | null>(null);
+  const refresh = useCallback((): void => { void api.get<Telegram>('/v1/notify/telegram').then(setStatus).catch(error => notify(errorText(error))); }, [api, notify]);
+  useEffect(() => { refresh(); }, [refresh]);
+  // While a pairing code is open, poll until the bot reports the chat as paired.
+  useEffect(() => {
+    if (!pairing) return;
+    const timer = setInterval(() => { void api.get<Telegram>('/v1/notify/telegram').then(next => { setStatus(next); if (next.paired) { setPairing(null); notify('Telegram paired.'); } }).catch(() => undefined); }, 3000);
+    return () => clearInterval(timer);
+  }, [api, pairing, notify]);
+  const run = (action: Promise<unknown>, done?: string): void => { void action.then(() => { if (done) notify(done); refresh(); }).catch(error => notify(errorText(error))); };
+
+  if (!status) return <p className="muted">Đang kiểm tra…</p>;
+  if (!status.enabled) return (
+    <>
+      <p>Chưa bật. Trên server, thêm vào file <code>.env</code> (cạnh <code>docker-compose.prod.yml</code>) rồi khởi động lại:</p>
+      {cmd('AGENT_OFFICE_TELEGRAM_BOT_TOKEN=<token từ @BotFather>')}
+      {cmd('AGENT_OFFICE_TELEGRAM_PROXY=http://user:pass@ip:port')}
+      <p className="muted">Proxy có thể là <code>http://</code> hoặc <code>socks5://</code>. Mọi kết nối tới Telegram đều đi qua proxy này; token và proxy không bao giờ được gửi xuống trình duyệt.</p>
+    </>
+  );
+  return (
+    <>
+      <p>Bot <strong>@{status.botUsername ?? '…'}</strong> — {status.paired ? 'đã ghép với chat của bạn.' : 'chưa ghép.'}</p>
+      {pairing
+        ? <>
+            <p>Mở bot và gửi mã (hết hạn sau 10 phút): {pairing.link ? <a href={pairing.link} target="_blank" rel="noreferrer">mở @{status.botUsername}</a> : null}</p>
+            {cmd(`/start ${pairing.code}`)}
+            <p className="muted">Trang này tự cập nhật khi ghép xong.</p>
+          </>
+        : <div className="row-actions">
+            <button type="button" className="btn btn-small btn-primary" onClick={() => run(api.send<Pairing>('POST', '/v1/notify/telegram/pair').then(setPairing))}>{status.paired ? 'Ghép lại chat khác' : 'Ghép Telegram'}</button>
+            {status.paired && <button type="button" className="btn btn-small" onClick={() => run(api.send('POST', '/v1/notify/telegram/test'), 'Đã gửi tin thử.')}>Gửi tin thử</button>}
+            {status.paired && <button type="button" className="btn btn-small" onClick={() => run(api.send('DELETE', '/v1/notify/telegram'), 'Đã huỷ ghép Telegram.')}>Huỷ ghép</button>}
+          </div>}
+      <p className="muted">Bạn nhận tin khi agent chờ duyệt quyền (bấm ✅ Allow / ❌ Deny ngay trong Telegram) và khi một ghế runner bị lỗi. Chỉ đúng chat đã ghép mới bấm duyệt được.</p>
+    </>
+  );
+}
 
 function Command({ text, notify }: { text: string; notify: (text: string) => void }): ReactNode {
   const copy = (): void => { navigator.clipboard.writeText(text).then(() => notify('Copied.')).catch(() => window.prompt('Copy this command:', text)); };
@@ -97,7 +141,26 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
       </section>
 
       <section className="setup-step">
-        <h2><span>6</span>Cài lại từ đầu</h2>
+        <h2><span>6</span>Chạy agent không cần terminal (runner)</h2>
+        <p>Runner là một service trên máy agent: chạy các ghế ở chế độ headless, tự mở lại session khi chết (giữ nguyên context), nhận mention, và cho bạn <strong>Start / Stop / Restart / Interrupt / gửi prompt / xem log</strong> ngay trên thẻ ghế ở Org — không cần ngồi máy.</p>
+        <ol>
+          <li>Tạo file cấu hình mẫu: {cmd(connector(os, 'runner init'))}</li>
+          <li>Sửa {cmd(os === 'windows' ? `notepad ${RUNNER_JSON.windows}` : `open -e ${RUNNER_JSON.unix}   # Linux: nano ${RUNNER_JSON.unix}`)}
+            liệt kê các ghế máy này chạy — <code>seatId</code> và đường dẫn tuyệt đối tới repo (<code>cwd</code>). Mặc định <code>"permissionMode": "acceptEdits"</code>: tự sửa file, lệnh shell chờ duyệt trên web/Telegram (hết giờ thì từ chối). Server không thể đổi danh sách hay đường dẫn này.</li>
+          <li>Chạy thử ở terminal (Ctrl+C để dừng): {cmd(connector(os, 'runner'))}</li>
+          <li>Cài thành service tự chạy khi đăng nhập: {cmd(connector(os, 'runner install-service'))}
+            <span className="muted">Gỡ: <code>runner uninstall-service</code>. Lệnh <code>update</code> tự khởi động lại service. Linux: chạy thêm <code>loginctl enable-linger $USER</code> để chạy cả khi đăng xuất.</span></li>
+        </ol>
+        <p className="muted">Ghế chạy bằng runner không có terminal để gõ — điều khiển và duyệt quyền qua web hoặc Telegram. Một máy có thể vừa có ghế runner vừa có ghế mở tay (bước 3), miễn là không trùng ghế.</p>
+      </section>
+
+      <section className="setup-step">
+        <h2><span>7</span>Thông báo Telegram</h2>
+        <TelegramSetup api={api} notify={notify} cmd={cmd} />
+      </section>
+
+      <section className="setup-step">
+        <h2><span>8</span>Cài lại từ đầu</h2>
         <p>Dùng khi đổi server, mất credential, hoặc mọi thứ lỗi. Đóng các session Claude trước.</p>
         <ol>
           <li>Gỡ hook, MCP và credential: {cmd(connector(os, 'uninstall'))}</li>
@@ -109,7 +172,7 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
       </section>
 
       <section className="setup-step">
-        <h2><span>7</span>Tuỳ chỉnh</h2>
+        <h2><span>9</span>Tuỳ chỉnh</h2>
         <ul>
           <li><strong>Duyệt quyền từ web</strong>: agent chờ tối đa 120 giây cho Allow/Deny trên web rồi mới hỏi ở terminal. Máy có người ngồi trực nên tắt:
             {cmd(os === 'windows' ? '$env:AGENT_OFFICE_PERMISSION_WAIT_SECONDS="0"; claude' : 'AGENT_OFFICE_PERMISSION_WAIT_SECONDS=0 claude')}
@@ -121,7 +184,7 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
       </section>
 
       <section className="setup-step">
-        <h2><span>8</span>Xử lý sự cố</h2>
+        <h2><span>10</span>Xử lý sự cố</h2>
         <table className="requests-table">
           <thead><tr><th>Triệu chứng</th><th>Cách xử lý</th></tr></thead>
           <tbody>
@@ -133,6 +196,8 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
             <tr><td>Chấm đỏ "wake limit"</td><td>Tự dậy liên tiếp quá nhiều: nhắn vào kênh của ghế (manager) hoặc gõ trong terminal.</td></tr>
             <tr><td>Chấm vàng "waiting permission"</td><td>Bấm Allow/Deny ở khung nổi trên web, hoặc duyệt trong terminal.</td></tr>
             <tr><td>Sau compact agent "quên" Agent Office</td><td>Hook tự bơm lại vai trò, task và cuộc trò chuyện gần đây — cần connector mới (bước 5) và session mở lại.</td></tr>
+            <tr><td>Ghế runner báo <code>failed</code></td><td>Session chết 5 lần trong 10 phút: xem Log trên thẻ ghế, sửa nguyên nhân rồi bấm Start. Log máy: <code>~/.agent-office/logs/runner.log</code>.</td></tr>
+            <tr><td>Runner <code>offline</code></td><td>Service không chạy hoặc mất mạng: kiểm tra log máy, chạy lại <code>runner install-service</code>.</td></tr>
             <tr><td>Install code bị từ chối</td><td>Mã hết hạn hoặc hết lượt — tạo mã mới ở bước 2.</td></tr>
           </tbody>
         </table>

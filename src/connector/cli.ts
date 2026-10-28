@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { runHook } from './hook-runner.js';
 import { agentOfficeHooks, hookCommand, LISTEN_SECONDS, mergeAgentOfficeHooks, removeAgentOfficeHooks, type ClaudeSettings } from './installer.js';
 import { startMcpServer } from './mcp-server.js';
+import { loadRunnerConfig, runnerConfigFile, SAMPLE_CONFIG } from './runner/runner-config.js';
+import { installService, restartServiceIfInstalled, uninstallService } from './runner/runner-service-install.js';
+import { Runner } from './runner/runner.js';
 import { SessionStore } from './session-store.js';
 
 /**
@@ -16,6 +19,8 @@ import { SessionStore } from './session-store.js';
  *   update     replace this file with the daemon's current connector, then re-sync the hook list in settings
  *   sync-hooks merge the current hook list into ~/.claude/settings.json (run by update with the new file)
  *   uninstall  remove our hooks, the MCP registration and the stored connector
+ *   runner     run the seats in ~/.agent-office/runner.json headless and take commands from the web
+ *              (`runner init` writes a sample; `runner install-service` / `uninstall-service` start it at login)
  */
 const [mode, ...rest] = process.argv.slice(2);
 const option = (name: string): string | undefined => { const index = rest.indexOf(`--${name}`); return index >= 0 ? rest[index + 1] : undefined; };
@@ -82,7 +87,8 @@ const update = async (): Promise<void> => {
   writeFileSync(`${self}.tmp`, text); renameSync(`${self}.tmp`, self);
   // The new file may hook more events than this (old) process knows about, so let it merge its own hook list.
   execFileSync(process.execPath, [self, 'sync-hooks'], { stdio: 'inherit' });
-  process.stdout.write(`Connector updated from ${connector.daemonUrl}. Restart running Claude sessions to use it.\n`);
+  const restarted = restartServiceIfInstalled(self, new SessionStore().home);
+  process.stdout.write(`Connector updated from ${connector.daemonUrl}. ${restarted ? 'Runner service restarted. ' : ''}Restart running Claude sessions to use it.\n`);
 };
 
 const syncHooks = (): void => {
@@ -97,13 +103,35 @@ const uninstall = (): void => {
   process.stdout.write('Agent Office hooks, MCP registration and connector credential removed.\n');
 };
 
+/** Foreground runner; `runner init` writes a sample config to edit first. */
+const runner = async (): Promise<void> => {
+  const store = new SessionStore();
+  if (rest[0] === 'init') {
+    const file = runnerConfigFile(store);
+    if (existsSync(file)) { process.stdout.write(`${file} already exists; edit it, then run: agent-office.mjs runner\n`); return; }
+    store.saveJson('runner.json', SAMPLE_CONFIG);
+    process.stdout.write(`Wrote ${file}. List the seats this machine runs (seatId, absolute cwd of the repo), then run: agent-office.mjs runner\n`);
+    return;
+  }
+  if (rest[0] === 'uninstall-service') { process.stdout.write(`${uninstallService(self, store.home)}\n`); return; }
+  if (!store.connector()) throw new Error('not installed: run the install command from the web UI (Connect machine) first.');
+  if (rest[0] === 'install-service') {
+    loadRunnerConfig(store);
+    process.stdout.write(`${installService(self, store.home)}\n`); return;
+  }
+  const active = new Runner({ store, fetch, config: loadRunnerConfig(store), out: line => process.stdout.write(`${new Date().toISOString()} ${line}\n`) });
+  const shutdown = (): void => { void active.close().finally(() => process.exit(0)); };
+  process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
+  await active.run();
+};
+
 if (mode === 'hook') {
   let raw: unknown = null;
   try { raw = JSON.parse(await readStdin()) as unknown; } catch { /* malformed input degrades to {} */ }
   const output = await runHook(raw, {
     store: new SessionStore(), fetch, wakeWaitSeconds: Math.min(numberEnv('AGENT_OFFICE_WAKE_WAIT_SECONDS', LISTEN_SECONDS) || LISTEN_SECONDS, LISTEN_SECONDS),
     requestedSeat: process.env.AGENT_OFFICE_SEAT || undefined, permissionWaitSeconds: Math.min(numberEnv('AGENT_OFFICE_PERMISSION_WAIT_SECONDS', 120), 580),
-    alive: parentAlive(),
+    alive: parentAlive(), runnerManaged: process.env.AGENT_OFFICE_RUNNER === '1',
   });
   // A background Stop hook (asyncRewake) wakes Claude only through exit code 2, with the reason on stderr.
   if (output.decision === 'block' && typeof output.reason === 'string') { process.stderr.write(`${output.reason}\n`); process.exitCode = 2; }
@@ -113,4 +141,5 @@ else if (mode === 'install') await install().catch(error => { process.stderr.wri
 else if (mode === 'update') await update().catch(error => { process.stderr.write(`agent-office update failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
 else if (mode === 'sync-hooks') syncHooks();
 else if (mode === 'uninstall') uninstall();
-else { process.stderr.write('usage: agent-office.mjs hook | mcp | install --url <url> --code <code> | update | sync-hooks | uninstall\n'); process.exitCode = 2; }
+else if (mode === 'runner') await runner().catch(error => { process.stderr.write(`agent-office runner: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
+else { process.stderr.write('usage: agent-office.mjs hook | mcp | install --url <url> --code <code> | update | sync-hooks | uninstall | runner [init | install-service | uninstall-service]\n'); process.exitCode = 2; }

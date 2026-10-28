@@ -10,10 +10,12 @@ type Props = {
   seat: Seat; status: SeatStatus; agent: AgentSnapshot | undefined; unassigned: AgentSnapshot[];
   onAssign: (agentId: string | null) => void; onSave: (patch: { title: string; description: string; role: SeatRole }) => void; onDelete: () => void;
   loadHandoff: () => Promise<SeatHandoff | null>; saveHandoff: (body: string) => Promise<void>;
+  /** Remote controls when a machine's runner runs this seat headless. */
+  runner?: ReactNode;
 };
 export const sessionLabel = (agent: AgentSnapshot): string => `${agent.project.split('/').filter(Boolean).at(-1) ?? agent.project} · ${agent.sessionId.slice(0, 8)}`;
 
-export function SeatCard({ seat, status, agent, unassigned, onAssign, onSave, onDelete, loadHandoff, saveHandoff }: Props): ReactNode {
+export function SeatCard({ seat, status, agent, unassigned, onAssign, onSave, onDelete, loadHandoff, saveHandoff, runner }: Props): ReactNode {
   const [editing, setEditing] = useState(false); const [handoffOpen, setHandoffOpen] = useState(false);
   const closeHandoff = useCallback(() => setHandoffOpen(false), []); const [over, setOver] = useState(false); const [copied, setCopied] = useState(false);
   const copyJoin = (): void => {
@@ -55,6 +57,7 @@ export function SeatCard({ seat, status, agent, unassigned, onAssign, onSave, on
                     <option value="">{unassigned.length ? 'Assign session… (or drop here)' : 'Drop a session here'}</option>
                     {unassigned.map(candidate => <option key={candidate.id} value={candidate.id}>{sessionLabel(candidate)}</option>)}
                   </select></label>}
+            {runner}
           </>}
     </article>
   );
