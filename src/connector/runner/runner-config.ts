@@ -33,11 +33,10 @@ export { SeatConfigSchema };
 export const runnerConfigFile = (store: SessionStore): string => path.join(store.home, 'runner.json');
 const STATE_FILE = 'runner-state.json';
 
-export const SAMPLE_CONFIG: RunnerConfig = {
-  seats: [{ seatId: 'dev-be', cwd: process.platform === 'win32' ? 'C:\\Users\\me\\projects\\game-server' : '/Users/me/projects/game-server', permissionMode: 'acceptEdits', autoStart: true }],
-};
+/** Starting point for runner.json: seats normally come from the web, so only the folders web seats may use are set. */
+export const sampleConfig = (): RunnerConfig => ({ seats: [], allowedRoots: [homedir()] });
 
-/** Loads and validates runner.json (absent = no local seats); local seats' working directories must exist. */
+/** Loads and validates runner.json (absent = no local seats). A local seat whose folder is missing is reported, not fatal. */
 export const loadRunnerConfig = (store: SessionStore): RunnerConfig => {
   const file = runnerConfigFile(store);
   if (!existsSync(file)) return { seats: [] };
@@ -45,9 +44,6 @@ export const loadRunnerConfig = (store: SessionStore): RunnerConfig => {
   try { raw = JSON.parse(readFileSync(file, 'utf8')); } catch { throw new Error(`${file} is not valid JSON`); }
   const parsed = RunnerConfigSchema.safeParse(raw);
   if (!parsed.success) throw new Error(`${file}: ${parsed.error.issues.map(issue => `${issue.path.join('.') || 'config'} ${issue.message}`).join('; ')}`);
-  for (const seat of parsed.data.seats) {
-    if (!existsSync(seat.cwd) || !statSync(seat.cwd).isDirectory()) throw new Error(`${file}: cwd of seat ${seat.seatId} does not exist: ${seat.cwd}`);
-  }
   return parsed.data;
 };
 

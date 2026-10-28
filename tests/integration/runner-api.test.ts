@@ -56,7 +56,7 @@ test('the runner executes a web command on its headless seat and reports back', 
   const sent: string[] = []; let emit: (event: ClaudeEvent) => void = () => undefined;
   const runner = new Runner({
     store, fetch: appFetch, out: () => undefined, machine: 'test-box', sleep: () => new Promise(resolve => setTimeout(resolve, 5)),
-    config: { seats: [{ seatId: 'dev-be', cwd: '/repo', permissionMode: 'acceptEdits', autoStart: false }] },
+    config: { seats: [{ seatId: 'dev-be', cwd: mkdtempSync(path.join(tmpdir(), 'ao-runner-repo-')), permissionMode: 'acceptEdits', autoStart: false }] },
     spawn: (_seat, _resume, onEvent) => { emit = onEvent; return { send: text => sent.push(text), interrupt: () => undefined, close: () => onEvent({ kind: 'exit', code: 0, stderr: '' }), kill: () => undefined }; },
   });
   const running = runner.run();

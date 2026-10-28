@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { runHook } from './hook-runner.js';
 import { agentOfficeHooks, hookCommand, LISTEN_SECONDS, mergeAgentOfficeHooks, removeAgentOfficeHooks, type ClaudeSettings } from './installer.js';
 import { startMcpServer } from './mcp-server.js';
-import { loadRunnerConfig, runnerConfigFile, SAMPLE_CONFIG } from './runner/runner-config.js';
+import { loadRunnerConfig, runnerConfigFile, sampleConfig } from './runner/runner-config.js';
 import { installService, restartServiceIfInstalled, uninstallService } from './runner/runner-service-install.js';
 import { Runner } from './runner/runner.js';
 import { SessionStore } from './session-store.js';
@@ -114,8 +114,8 @@ const runner = async (): Promise<void> => {
   if (rest[0] === 'init') {
     const file = runnerConfigFile(store);
     if (existsSync(file)) { process.stdout.write(`${file} already exists; edit it, then run: agent-office.mjs runner\n`); return; }
-    store.saveJson('runner.json', SAMPLE_CONFIG);
-    process.stdout.write(`Wrote ${file}. List the seats this machine runs (seatId, absolute cwd of the repo), then run: agent-office.mjs runner\n`);
+    store.saveJson('runner.json', sampleConfig());
+    process.stdout.write(`Wrote ${file}. Seats are best managed on the web (Machines). allowedRoots lists the folders web-managed seats may use; for a machine not managed on the web add seats: [{"seatId": "dev-be", "cwd": "/absolute/path/to/repo"}].\n`);
     return;
   }
   if (rest[0] === 'uninstall-service') { process.stdout.write(`${uninstallService(self, store.home)}\n`); return; }

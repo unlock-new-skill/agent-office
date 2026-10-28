@@ -89,3 +89,10 @@ test('runner applies the web config live: add, restart on change, refuse folders
   await runner.close(); fixture.office.runners.close(); await running;
   fixture.close();
 });
+
+test('a local seat with a missing folder is reported as failed instead of stopping the runner', () => {
+  const store = new SessionStore(mkdtempSync(path.join(tmpdir(), 'ao-badlocal-')));
+  const runner = new Runner({ store, fetch, out: () => undefined, config: { seats: [{ seatId: 'dev-be', cwd: '/Users/me/projects/game-server', permissionMode: 'acceptEdits', autoStart: true }] } });
+  const status = (runner as unknown as { statuses: Map<string, { state: string; detail: string }> }).statuses.get('dev-be')!;
+  assert.equal(status.state, 'failed'); assert.match(status.detail, /folder not found/);
+});

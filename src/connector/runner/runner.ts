@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
 import type { MachineConfig, MachineSeat, RunnerCommand, RunnerLogEntry, RunnerSeat } from '../../shared/contracts.js';
 import { daemonCall, KEEPALIVE_REASON, listenForWake } from '../hook-runner.js';
@@ -45,12 +46,16 @@ export class Runner {
       const output = await listenForWake(sessionId, cwd, session, { store: deps.store, fetch: deps.fetch, wakeWaitSeconds: LISTEN_WINDOW_SECONDS, alive, ...(deps.sleep ? { sleep: deps.sleep } : {}) });
       return output.decision === 'block' && typeof output.reason === 'string' && output.reason !== KEEPALIVE_REASON ? output.reason : null;
     };
-    for (const seat of deps.config.seats) this.addWorker(seat);
+    for (const seat of deps.config.seats) {
+      if (existsSync(seat.cwd)) { this.addWorker(seat); continue; }
+      // One bad local entry must not take the other seats down with it.
+      this.statuses.set(seat.seatId, { seatId: seat.seatId, state: 'failed', sessionId: null, restarts: 0, permissionMode: seat.permissionMode, detail: `folder not found on this machine: ${seat.cwd} (fix runner.json)` });
+    }
   }
 
   /** Starts auto-start seats, then keeps the command and report loops running until close(). */
   async run(): Promise<void> {
-    for (const seat of this.deps.config.seats) if (seat.autoStart) this.workers.get(seat.seatId)!.start();
+    for (const seat of this.deps.config.seats) if (seat.autoStart) this.workers.get(seat.seatId)?.start();
     if (this.workers.size === 0) this.deps.out('no seats yet: add them for this machine on the web (Machines)');
     await Promise.all([this.commandLoop(), this.flushLoop()]);
   }
