@@ -185,7 +185,7 @@ export class AuthService {
     const binding = { agentId, project: input.project, sessionId: input.sessionId, incarnation: input.sessionId };
     this.db.transaction(() => {
       const existing = this.db.raw.prepare('SELECT 1 FROM agents WHERE id=?').get(agentId);
-      if (existing) this.db.raw.prepare("UPDATE agents SET project=?,ended_at=NULL,activity='online',last_contact_at=?,machine_id=COALESCE(?,machine_id) WHERE id=?").run(input.project, timestamp, machine, agentId);
+      if (existing) this.db.raw.prepare("UPDATE agents SET project=?,ended_at=NULL,dismissed_at=NULL,activity='online',last_contact_at=?,machine_id=COALESCE(?,machine_id) WHERE id=?").run(input.project, timestamp, machine, agentId);
       else this.db.raw.prepare("INSERT INTO agents(id,source,project,session_id,incarnation,last_contact_at,activity,machine_id) VALUES (?,'claude',?,?,?,?,'online',?)").run(agentId, input.project, input.sessionId, input.sessionId, timestamp, machine);
       this.db.raw.prepare("UPDATE credentials SET revoked_at=? WHERE kind='agent' AND revoked_at IS NULL AND json_extract(binding_json,'$.agentId')=?").run(timestamp, agentId);
       this.db.raw.prepare('INSERT INTO credentials(id,token_hash,kind,binding_json,expires_at) VALUES (?,?,?,?,?)').run(credentialId, hashToken(token), 'agent', JSON.stringify(binding), timestamp + SESSION_CREDENTIAL_TTL_MS);

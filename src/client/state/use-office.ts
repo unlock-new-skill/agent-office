@@ -11,6 +11,8 @@ export type OfficeHandle = {
   loadOlder: (channelId: string) => Promise<boolean>;
   markRead: (channelId: string, seq: number) => void;
   loadThread: (channelId: string, seq: number) => Promise<void>;
+  /** Hides a session from the lobby until it starts again. */
+  dismissAgent: (agentId: string) => Promise<void>;
 };
 
 /** Owns office state: initial REST load, realtime stream, and debounced agent refresh on telemetry deltas. */
@@ -72,5 +74,10 @@ export const useOffice = (api: Api): OfficeHandle => {
     return () => { dispose(); clearInterval(poll); if (agentRefresh.current) clearTimeout(agentRefresh.current); };
   }, [api, refreshAll, loadHistory, loadThread]);
 
-  return useMemo(() => ({ state, api, loadHistory, loadOlder, markRead, loadThread }), [state, api, loadHistory, loadOlder, markRead, loadThread]);
+  const dismissAgent = useCallback(async (agentId: string) => {
+    await api.send('POST', `/v1/agents/${encodeURIComponent(agentId)}/dismiss`);
+    dispatch({ type: 'agents', agents: (await api.get<{ agents: AgentSnapshot[] }>('/v1/agents')).agents });
+  }, [api]);
+
+  return useMemo(() => ({ state, api, loadHistory, loadOlder, markRead, loadThread, dismissAgent }), [state, api, loadHistory, loadOlder, markRead, loadThread, dismissAgent]);
 };

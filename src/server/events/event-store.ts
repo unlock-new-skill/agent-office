@@ -59,8 +59,9 @@ export class EventStore {
 
   snapshot(): Snapshot {
     return this.db.transaction(() => {
-      const agents = this.db.raw.prepare("SELECT a.id,a.source,a.project,a.session_id AS sessionId,a.incarnation AS sessionIncarnation,a.activity AS state,CASE WHEN a.ended_at IS NOT NULL THEN 'exited' WHEN a.last_contact_at IS NULL THEN 'unknown' WHEN a.last_contact_at < ? THEN 'contact_lost' ELSE 'connected' END AS contactState,a.last_event_at AS lastEventAt,(SELECT tool FROM invocations i WHERE i.agent_id=a.id AND i.state='open' ORDER BY rowid DESC LIMIT 1) AS currentTool,COALESCE(i.pending,0) AS pendingInvocations,COALESCE(p.pending,0) AS pendingPermissions FROM agents a LEFT JOIN (SELECT agent_id,COUNT(*) AS pending FROM invocations WHERE state='open' GROUP BY agent_id) i ON i.agent_id=a.id LEFT JOIN (SELECT agent_id,COUNT(*) AS pending FROM permission_waits GROUP BY agent_id) p ON p.agent_id=a.id ORDER BY a.id").all(Date.now() - 20_000) as AgentSnapshot[];
-      return { generation: meta(this.db, 'dataset_generation'), seq: Number(meta(this.db, 'event_seq') || '0'), agents };
+      const agents = this.db.raw.prepare("SELECT a.id,a.source,a.project,a.session_id AS sessionId,a.incarnation AS sessionIncarnation,a.activity AS state,CASE WHEN a.ended_at IS NOT NULL THEN 'exited' WHEN a.last_contact_at IS NULL THEN 'unknown' WHEN a.last_contact_at < ? THEN 'contact_lost' ELSE 'connected' END AS contactState,a.last_event_at AS lastEventAt,a.last_contact_at AS lastContactAt,a.dismissed_at IS NOT NULL AS dismissed,(SELECT tool FROM invocations i WHERE i.agent_id=a.id AND i.state='open' ORDER BY rowid DESC LIMIT 1) AS currentTool,COALESCE(i.pending,0) AS pendingInvocations,COALESCE(p.pending,0) AS pendingPermissions FROM agents a LEFT JOIN (SELECT agent_id,COUNT(*) AS pending FROM invocations WHERE state='open' GROUP BY agent_id) i ON i.agent_id=a.id LEFT JOIN (SELECT agent_id,COUNT(*) AS pending FROM permission_waits GROUP BY agent_id) p ON p.agent_id=a.id ORDER BY a.id").all(Date.now() - 20_000) as Array<Omit<AgentSnapshot, 'dismissed'> & { dismissed: number }>;
+      const normalized: AgentSnapshot[] = agents.map(agent => ({ ...agent, dismissed: Boolean(agent.dismissed) }));
+      return { generation: meta(this.db, 'dataset_generation'), seq: Number(meta(this.db, 'event_seq') || '0'), agents: normalized };
     });
   }
 

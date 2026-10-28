@@ -12,14 +12,17 @@ const MapView = lazy(() => import('./views/map-view.js').then(module => ({ defau
 const OrgView = lazy(() => import('./views/org-view.js').then(module => ({ default: module.OrgView })));
 const MachinesView = lazy(() => import('./views/machines-view.js').then(module => ({ default: module.MachinesView })));
 const RequestsView = lazy(() => import('./views/requests-view.js').then(module => ({ default: module.RequestsView })));
+const PublicMapView = lazy(() => import('./views/public-map-view.js').then(module => ({ default: module.PublicMapView })));
 const SetupView = lazy(() => import('./views/setup-view.js').then(module => ({ default: module.SetupView })));
 const TABS: Array<{ view: View; label: string }> = [{ view: 'chat', label: 'Chat' }, { view: 'map', label: 'Map' }, { view: 'org', label: 'Org' }, { view: 'machines', label: 'Machines' }, { view: 'requests', label: 'Requests' }];
 const DEFAULT_CHANNEL = 'leaders';
 
 export function App(): ReactNode {
-  const [csrfToken, setCsrfToken] = useState<string | null | undefined>(undefined);
+  const [csrfToken, setCsrfToken] = useState<string | null | undefined>(undefined); const [signingIn, setSigningIn] = useState(false);
   useEffect(() => { currentSession().then(setCsrfToken).catch(() => setCsrfToken(null)); }, []);
   if (csrfToken === undefined) return <div className="loading">Loading…</div>;
+  // /map is public: visitors who are not signed in see the read-only office map.
+  if (csrfToken === null && location.pathname.startsWith('/map') && !signingIn) return <Suspense fallback={<div className="loading">Loading…</div>}><PublicMapView onSignIn={() => setSigningIn(true)} /></Suspense>;
   if (csrfToken === null) return <LoginView onLogin={setCsrfToken} />;
   return <Workspace csrfToken={csrfToken} onSignedOut={() => setCsrfToken(null)} />;
 }
@@ -58,8 +61,8 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
       <ApprovalsBar pending={office.state.permissions} api={api} notify={notify} />
       <Suspense fallback={<div className="loading">Loading…</div>}>
         {route.view === 'chat' && <ChatView office={office} channelId={channelId} onSelectChannel={id => navigate({ view: 'chat', channelId: id })} notify={notify} />}
-        {route.view === 'map' && <MapView state={office.state} notify={notify} />}
-        {route.view === 'org' && <OrgView state={office.state} api={api} notify={notify} />}
+        {route.view === 'map' && <MapView state={office.state} notify={notify} onDismiss={office.dismissAgent} />}
+        {route.view === 'org' && <OrgView state={office.state} api={api} notify={notify} onDismiss={office.dismissAgent} />}
         {route.view === 'machines' && <MachinesView state={office.state} api={api} notify={notify} />}
         {route.view === 'requests' && <RequestsView state={office.state} />}
         {route.view === 'setup' && <SetupView state={office.state} api={api} notify={notify} />}

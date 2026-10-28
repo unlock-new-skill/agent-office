@@ -1,3 +1,5 @@
+import type { AgentSnapshot, OrgView } from '../../shared/contracts.js';
+
 export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
 }
@@ -44,4 +46,11 @@ export const currentSession = async (): Promise<string | null> => {
   const response = await fetch('/v1/me', { credentials: 'include' });
   if (!response.ok) return null;
   return ((await response.json()) as { csrfToken?: string }).csrfToken ?? null;
+};
+
+/** The anonymous office map: departments, seats and live status only. */
+export const publicMap = async (): Promise<{ org: OrgView; agents: AgentSnapshot[] }> => {
+  const response = await fetch('/v1/public/map');
+  if (!response.ok) throw new ApiError(response.status, 'public_map_unavailable');
+  return await response.json() as { org: OrgView; agents: AgentSnapshot[] };
 };

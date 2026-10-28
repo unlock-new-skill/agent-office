@@ -85,6 +85,10 @@ Schema v10. `POST /v1/machines` creates a runner row (`m-…`) before anything i
 
 `TelegramNotifier` (enabled by `AGENT_OFFICE_TELEGRAM_BOT_TOKEN`) receives collab events: new permission prompts become messages with Allow/Deny inline buttons (`p:a|d:<id>` callback data), resolved prompts edit the message with the outcome; runner seats that turn `failed` are reported. Updates come from long-polling `getUpdates`; all Bot API traffic goes through `AGENT_OFFICE_TELEGRAM_PROXY` (undici `ProxyAgent` for http(s), `fetch-socks` for socks5). One chat is served, paired with a 10-minute code from the web UI (`app_settings`); callbacks from other chats are refused; decisions record `decided_by='telegram'`. Errors mask the token; logs mask proxy credentials. Max 20 messages/min.
 
+## Public map and lobby
+
+`GET /v1/public/map` (no auth, cached 2 s) returns the org and live agents through `publicMap`: seat descriptions, channels, session ids and project paths are removed and agent ids are replaced by per-response aliases; the client renders it read-only at `/map` for anonymous visitors. The lobby shows unseated sessions that have not exited, were not dismissed (`agents.dismissed_at`, schema v11, cleared on the next registration) and reached the daemon within 5 minutes (`isLobbySession`). Machine seats may set `model`, passed to `claude --model`.
+
 ## Code map
 
 | Path | Role |

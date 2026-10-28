@@ -1,3 +1,4 @@
+import { isLobbySession } from '../../shared/lobby.js';
 import type { AgentSnapshot, ChatMessage, CollabEvent, OrgView, PermissionRequest, RunnerCommand, RunnerLogEntry, RunnerSeat, RunnerView, Seat, Snapshot, Task } from '../../shared/contracts.js';
 
 export type OfficeState = {
@@ -120,5 +121,6 @@ export const seatStatus = (seat: Seat, agents: AgentSnapshot[]): SeatStatus => {
 /** Live sessions not bound to any seat (shown in the Org view tray). */
 export const unassignedAgents = (state: OfficeState): AgentSnapshot[] => {
   const seated = new Set(state.org?.seats.map(seat => seat.agentId).filter(Boolean));
-  return state.agents.filter(agent => !seated.has(agent.id) && agent.contactState !== 'exited');
+  const now = Date.now();
+  return state.agents.filter(agent => !seated.has(agent.id) && isLobbySession(agent, now));
 };

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { joinPrompt } from '../../shared/join.js';
+import { errorText } from '../api/http.js';
 import { sessionLabel } from '../components/seat-card.js';
 import { StatusDot } from '../components/status-dot.js';
 import { hitTest, layoutOffice } from '../map/office-map-layout.js';
@@ -8,7 +9,8 @@ import { SEAT_STATUS_LABEL, seatStatus, unassignedAgents, type OfficeState, type
 import type { TimeOfDay } from '../map3d/day-night.js';
 import { Map3DStage } from './map-3d-stage.js';
 
-type Props = { state: OfficeState; notify: (text: string) => void };
+/** publicView: the anonymous /map (no session names, no actions). onDismiss hides a lobby session. */
+type Props = { state: OfficeState; notify: (text: string) => void; publicView?: boolean; onDismiss?: (agentId: string) => Promise<void> };
 type Target = { seatId: string } | { agentId: string };
 const LEGEND: SeatStatus[] = ['working', 'listening', 'blocked', 'idle', 'wake_limited', 'offline', 'vacant'];
 const keyOf = (target: Target | null): string | null => target ? ('seatId' in target ? target.seatId : target.agentId) : null;
@@ -24,7 +26,7 @@ const TIMES: Array<{ value: TimeOfDay; label: string; title: string }> = [
 const savedTime = (): TimeOfDay => { try { const value = localStorage.getItem(TIME_KEY); return value === 'day' || value === 'night' ? value : 'auto'; } catch { return 'auto'; } };
 
 /** Office map, 3D (Three.js, default) or 2D pixel canvas: one room per department, a desk per seat, agents with live status. */
-export function MapView({ state, notify }: Props): ReactNode {
+export function MapView({ state, notify, publicView = false, onDismiss }: Props): ReactNode {
   const host = useRef<HTMLDivElement>(null); const canvas = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0); const [hover, setHover] = useState<{ target: Target; x: number; y: number } | null>(null); const [selected, setSelected] = useState<Target | null>(null);
   const scale = width >= 1200 ? 3 : 2;
@@ -45,7 +47,7 @@ export function MapView({ state, notify }: Props): ReactNode {
   const layout = useMemo(() => layoutOffice(state.org?.departments ?? [], seats, lobbyAgents.map(agent => agent.id), mode === '3d' ? LAYOUT_WIDTH_3D : Math.max(width / scale, 120), mode === '3d' ? ROOM_GAP_3D : undefined), [state.org, seats, lobbyAgents, width, scale, mode]);
   const leaders = useMemo(() => new Set(seats.filter(seat => seat.role === 'leader').map(seat => seat.id)), [seats]);
   const sprites = useMemo(() => new Map<string, SeatSprite>(seats.map(seat => [seat.id, { title: seat.title, status: seatStatus(seat, state.agents) }])), [seats, state.agents]);
-  const lobbyLabels = useMemo(() => new Map(lobbyAgents.map(agent => [agent.id, sessionLabel(agent)])), [lobbyAgents]);
+  const lobbyLabels = useMemo(() => new Map(lobbyAgents.map(agent => [agent.id, publicView ? 'Claude session' : sessionLabel(agent)])), [lobbyAgents, publicView]);
 
   // The animation loop reads the latest frame input from a ref so React renders never restart it.
   const frame = useRef<Omit<PaintInput, 'time'>>({ layout, seats: sprites, lobbyLabels, hovered: null, selected: null });
@@ -81,6 +83,7 @@ export function MapView({ state, notify }: Props): ReactNode {
   const describe = (target: Target): { title: string; lines: string[]; status: SeatStatus | null; seat: { id: string; title: string } | null } => {
     if ('agentId' in target) {
       const agent = state.agents.find(candidate => candidate.id === target.agentId);
+      if (publicView) return { title: 'Claude session', status: null, seat: null, lines: [`Waiting for a seat · ${agent?.state ?? 'unknown'}`] };
       return { title: agent ? sessionLabel(agent) : target.agentId, status: null, seat: null, lines: [`Unseated session · ${agent?.state ?? 'unknown'}${agent?.currentTool ? ` · ${agent.currentTool}` : ''}`, 'Assign it in Org or paste a join link into it.'] };
     }
     const seat = seats.find(candidate => candidate.id === target.seatId);
@@ -89,7 +92,7 @@ export function MapView({ state, notify }: Props): ReactNode {
     const department = state.org?.departments.find(candidate => candidate.id === seat.departmentId);
     return {
       title: seat.title, status, seat,
-      lines: [`@${seat.id} · ${seat.role} of ${department?.name ?? seat.departmentId}`, `Status: ${SEAT_STATUS_LABEL[status]}`, agent ? `Session: ${sessionLabel(agent)}${agent.currentTool ? ` · running ${agent.currentTool}` : ''}` : 'No session', ...(seat.description ? [seat.description] : [])],
+      lines: [`@${seat.id} · ${seat.role} of ${department?.name ?? seat.departmentId}`, `Status: ${SEAT_STATUS_LABEL[status]}`, agent ? (publicView ? `Agent active${agent.currentTool ? ` · running ${agent.currentTool}` : ''}` : `Session: ${sessionLabel(agent)}${agent.currentTool ? ` · running ${agent.currentTool}` : ''}`) : 'No session', ...(seat.description ? [seat.description] : [])],
     };
   };
   const detail = selected ? describe(selected) : null; const tip = hover ? describe(hover.target) : null;
@@ -125,7 +128,8 @@ export function MapView({ state, notify }: Props): ReactNode {
         <aside className="map-detail" aria-label="Selected seat">
           <header>{detail.status && <StatusDot status={detail.status} />}<strong>{detail.title}</strong><span className="spacer" /><button type="button" className="icon-btn" aria-label="Close" onClick={() => setSelected(null)}>✕</button></header>
           {detail.lines.map(line => <p key={line}>{line}</p>)}
-          {detail.seat && <div className="row-actions"><button type="button" className="btn btn-small" onClick={() => copyJoin(detail.seat!)}>Copy join</button></div>}
+          {detail.seat && !publicView && <div className="row-actions"><button type="button" className="btn btn-small" onClick={() => copyJoin(detail.seat!)}>Copy join</button></div>}
+          {selected && 'agentId' in selected && !publicView && onDismiss && <div className="row-actions"><button type="button" className="btn btn-small" title="Hide from the lobby until this session starts again" onClick={() => { const agentId = selected.agentId; onDismiss(agentId).then(() => setSelected(null)).catch(error => notify(errorText(error))); }}>Dismiss</button></div>}
         </aside>
       )}
     </div>

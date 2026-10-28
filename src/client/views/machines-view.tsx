@@ -11,6 +11,8 @@ const MODES: Array<{ value: MachineSeat['permissionMode']; label: string }> = [
   { value: 'bypassPermissions', label: 'Bỏ qua mọi quyền (mặc định)' }, { value: 'acceptEdits', label: 'Tự sửa file, shell hỏi web' },
   { value: 'default', label: 'Mọi thứ hỏi web' }, { value: 'plan', label: 'Chỉ lập kế hoạch' },
 ];
+/** Suggestions only; any model name the machine's Claude Code (or its proxy) accepts can be typed. */
+const MODELS = ['claude-opus-5-5', 'gpt-6-astra', 'opus', 'sonnet'];
 const STATE_LABEL: Record<string, string> = { starting: 'starting', running: 'working', idle: 'listening', stopped: 'stopped', failed: 'failed' };
 const shortPath = (value: string): string => value.split(/[\\/]/).filter(Boolean).slice(-2).join('/') || value;
 const ago = (ts: number): string => { const minutes = Math.round((Date.now() - ts) / 60_000); return minutes < 1 ? 'vừa xong' : minutes < 60 ? `${minutes} phút trước` : `${Math.round(minutes / 60)} giờ trước`; };
@@ -97,9 +99,9 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
       )}
 
       <table className="machine-seats">
-        <thead><tr><th>Ghế</th><th>Thư mục repo</th><th>Quyền</th><th>Session</th><th>Tự chạy</th><th title="Mở cửa sổ Terminal trên máy để xem session trực tiếp">Cửa sổ</th><th>Trạng thái</th><th><span className="sr-only">Xoá</span></th></tr></thead>
+        <thead><tr><th>Ghế</th><th>Thư mục repo</th><th>Model</th><th>Quyền</th><th>Session</th><th>Tự chạy</th><th title="Mở cửa sổ Terminal trên máy để xem session trực tiếp">Cửa sổ</th><th>Trạng thái</th><th><span className="sr-only">Xoá</span></th></tr></thead>
         <tbody>
-          {draft.length === 0 && <tr><td colSpan={8} className="muted">Chưa có ghế. Bấm "+ Thêm ghế".</td></tr>}
+          {draft.length === 0 && <tr><td colSpan={9} className="muted">Chưa có ghế. Bấm "+ Thêm ghế".</td></tr>}
           {draft.map((seat, index) => {
             const live = status(seat.seatId); const chosen = sessions.find(session => session.sessionId === seat.sessionId);
             return (
@@ -108,6 +110,7 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
                   {orgSeats.map(option => <option key={option.id} value={option.id} disabled={seatsElsewhere.has(option.id) || (option.id !== seat.seatId && draft.some(row => row.seatId === option.id))}>{option.title} (@{option.id})</option>)}
                 </select></td>
                 <td data-label="Thư mục repo"><input aria-label="Thư mục repo (đường dẫn tuyệt đối)" value={seat.cwd} placeholder="/Users/me/projects/game" list={`cwd-${runner.id}`} onChange={event => edit(index, { cwd: event.target.value })} /></td>
+                <td data-label="Model"><input aria-label="Model (trống = mặc định của máy)" list="runner-models" value={seat.model ?? ''} placeholder="mặc định" maxLength={80} onChange={event => edit(index, { model: event.target.value.trim() || null })} /></td>
                 <td data-label="Quyền"><select aria-label="Quyền" value={seat.permissionMode} onChange={event => edit(index, { permissionMode: event.target.value as MachineSeat['permissionMode'] })}>
                   {MODES.map(mode => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
                 </select></td>
@@ -130,6 +133,7 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
           })}
         </tbody>
       </table>
+      <datalist id="runner-models">{MODELS.map(model => <option key={model} value={model} />)}</datalist>
       <datalist id={`sessions-${runner.id}`}>{sessions.map(session => <option key={session.sessionId} value={session.sessionId}>{shortPath(session.project)}{session.seatId ? ` · @${session.seatId}` : ''}{session.ended ? ' · đã đóng' : ' · đang mở'}</option>)}</datalist>
       <datalist id={`cwd-${runner.id}`}>{[...new Set(sessions.map(session => session.project))].map(project => <option key={project} value={project} />)}</datalist>
       <div className="row-actions">

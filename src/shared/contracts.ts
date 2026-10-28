@@ -29,6 +29,10 @@ export type AgentSnapshot = {
   id: string; project: string; source: 'claude'; sessionId: string; sessionIncarnation: string;
   state: ActivityState; contactState: ContactState; lastEventAt: string | null; currentTool: string | null;
   pendingInvocations: number; pendingPermissions: number;
+  /** Last time the session reached the daemon (hook or wake poll); quiet sessions leave the lobby. */
+  lastContactAt?: number | null;
+  /** Hidden from the lobby by the manager until the session starts again. */
+  dismissed?: boolean;
 };
 export type Snapshot = { generation: string; seq: number; agents: AgentSnapshot[]; org?: OrgView };
 export type Delta = { type: 'delta'; generation: string; seq: number; event: EventEnvelope };
@@ -63,9 +67,10 @@ export type RunnerSeatState = 'starting' | 'running' | 'idle' | 'stopped' | 'fai
 export type RunnerSeat = { seatId: string; state: RunnerSeatState; sessionId: string | null; restarts: number; permissionMode: string; detail: string };
 /**
  * A seat a machine should run, managed on the web. `sessionId` resumes an existing Claude session on that machine;
- * `showWindow` opens a read-only live view of the session in a terminal window on the machine's desktop.
+ * `showWindow` opens a read-only live view of the session in a terminal window on the machine's desktop; `model` is
+ * passed to `claude --model` (null = the machine's default, e.g. from its proxy settings).
  */
-export type MachineSeat = { seatId: string; cwd: string; permissionMode: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'; sessionId: string | null; autoStart: boolean; showWindow: boolean };
+export type MachineSeat = { seatId: string; cwd: string; permissionMode: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'; sessionId: string | null; autoStart: boolean; showWindow: boolean; model?: string | null };
 export type MachineConfig = { version: number; seats: MachineSeat[] };
 /** A Claude session the machine's hooks registered: candidates for a seat's working directory and session id. */
 export type MachineSession = { agentId: string; sessionId: string; project: string; ended: boolean; seatId: string | null; lastContactAt: number | null };

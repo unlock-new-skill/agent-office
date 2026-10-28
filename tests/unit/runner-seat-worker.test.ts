@@ -120,3 +120,7 @@ test('the desktop live view renders prompts, wakes, replies, tools and results, 
   assert.deepEqual(renderEntry(JSON.stringify({ type: 'attachment' })), []);
   assert.deepEqual(renderEntry('not json'), []);
 });
+
+test('a seat model is passed to claude --model', () => {
+  assert.ok(claudeArgs({ ...seat, model: 'gpt-6-astra' }, null).join(' ').includes('--model gpt-6-astra'));
+});

@@ -24,7 +24,7 @@ test('machines: install code binds the connector, config is validated and versio
   const sessions = await (await fixture.manager(`/v1/machines/${machine.id}/sessions`)).json() as { sessions: MachineSession[] };
   assert.deepEqual(sessions.sessions.map(session => [session.sessionId, session.project, session.ended]), [['sess-abc', '/Users/me/game', false]]);
 
-  const seat = { seatId: 'dev-be', cwd: '/Users/me/game', permissionMode: 'acceptEdits', sessionId: 'sess-abc', autoStart: true, showWindow: false };
+  const seat = { seatId: 'dev-be', cwd: '/Users/me/game', permissionMode: 'acceptEdits', sessionId: 'sess-abc', autoStart: true, showWindow: false, model: null };
   assert.equal((await fixture.manager(`/v1/machines/${machine.id}/config`, { method: 'PUT', body: { seats: [{ ...seat, seatId: 'ghost' }] } })).status, 404);
   assert.equal((await fixture.manager(`/v1/machines/${machine.id}/config`, { method: 'PUT', body: { seats: [seat, seat] } })).status, 400);
   assert.equal((await fixture.manager(`/v1/machines/${machine.id}/config`, { method: 'PUT', body: { seats: [{ ...seat, cwd: 'relative/path' }] } })).status, 400);

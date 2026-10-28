@@ -44,7 +44,7 @@ test('handoff access: agent only its own seat, manager any seat, body bounded', 
 test('a v3 database upgrades in place to the current schema with seat_handoffs', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'ao-mig-')); const filename = path.join(dir, 'office.db');
   new Database({ filename }).close();
-  const raw = new DatabaseSync(filename); raw.exec('DROP TABLE seat_handoffs; DROP TABLE permission_requests; DROP TABLE install_codes; DROP TABLE seat_compactions; DROP TABLE runner_commands; DROP TABLE runners; DROP TABLE app_settings; ALTER TABLE agents DROP COLUMN machine_id; ALTER TABLE departments DROP COLUMN deputy_seat_id; ALTER TABLE tasks DROP COLUMN requester_seat_id; DROP INDEX messages_thread; ALTER TABLE messages DROP COLUMN thread_seq; PRAGMA user_version=3;'); raw.close();
+  const raw = new DatabaseSync(filename); raw.exec('DROP TABLE seat_handoffs; DROP TABLE permission_requests; DROP TABLE install_codes; DROP TABLE seat_compactions; DROP TABLE runner_commands; DROP TABLE runners; DROP TABLE app_settings; ALTER TABLE agents DROP COLUMN machine_id; ALTER TABLE agents DROP COLUMN dismissed_at; ALTER TABLE departments DROP COLUMN deputy_seat_id; ALTER TABLE tasks DROP COLUMN requester_seat_id; DROP INDEX messages_thread; ALTER TABLE messages DROP COLUMN thread_seq; PRAGMA user_version=3;'); raw.close();
   const db = new Database({ filename });
   assert.equal((db.raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, SCHEMA_VERSION);
   assert.ok(db.raw.prepare("SELECT 1 FROM sqlite_master WHERE name='seat_handoffs'").get());

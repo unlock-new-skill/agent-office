@@ -10,6 +10,7 @@ import { AdmissionLimiter } from './admission.js';
 import type { Office } from './collaboration/office.js';
 import { registerOfficeRoutes } from './office-routes.js';
 import { registerRunnerRoutes } from './runner-routes.js';
+import { publicMap } from './public-map.js';
 import { registerNotifyRoutes } from './notify/notify-routes.js';
 import type { TelegramNotifier } from './notify/telegram-notifier.js';
 import { registerInstallRoutes } from './install-routes.js';
@@ -78,6 +79,18 @@ export const createApp = (context: AppContext): Hono => {
   });
 
   app.get('/v1/agents', c => context.auth.authenticateRequest(c.req.raw) ? c.json({ agents: context.events.snapshot().agents }) : jsonError('unauthorized', 401));
+  app.post('/v1/agents/:id/dismiss', c => {
+    if (!manager(c.req.raw)) return jsonError('unauthorized', 401);
+    const changed = context.db.raw.prepare('UPDATE agents SET dismissed_at=? WHERE id=?').run(Date.now(), c.req.param('id'));
+    return changed.changes === 1 ? c.json({ ok: true }) : jsonError('agent_not_found', 404);
+  });
+  // The office map is public: anyone may watch seats and their status, nothing else (see publicMap).
+  let publicCache: { at: number; body: ReturnType<typeof publicMap> } | null = null;
+  app.get('/v1/public/map', c => {
+    if (!publicCache || Date.now() - publicCache.at > 2000) publicCache = { at: Date.now(), body: publicMap(context.office.org.view(), context.events.snapshot().agents) };
+    c.header('cache-control', 'no-store');
+    return c.json(publicCache.body);
+  });
   registerOfficeRoutes(app, { auth: context.auth, office: context.office, manager, wakeWaitSeconds: context.config.wakeWaitSeconds, publicOrigin: context.config.publicOrigin });
   registerInstallRoutes(app, { auth: context.auth, manager, publicOrigin: context.config.publicOrigin });
   registerRunnerRoutes(app, { auth: context.auth, office: context.office, manager, publicOrigin: context.config.publicOrigin });

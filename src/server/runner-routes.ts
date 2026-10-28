@@ -20,6 +20,8 @@ const absolutePath = z.string().min(1).max(500).regex(/^(\/|[A-Za-z]:[\\/])[^\u0
 const MachineSeatSchema = z.object({
   seatId, cwd: absolutePath, permissionMode: z.enum(['default', 'acceptEdits', 'plan', 'bypassPermissions']).default('bypassPermissions'),
   sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).nullable().default(null), autoStart: z.boolean().default(true), showWindow: z.boolean().default(true),
+  // Model names reach the claude command line (through a shell on Windows): plain identifiers only.
+  model: z.string().trim().max(80).regex(/^[A-Za-z0-9._:\-/[\]]*$/).transform(value => value || null).nullable().default(null),
 }).strict();
 const machineId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 const LogEntrySchema = z.object({ seatId, ts: z.number().int().min(0), kind: z.enum(['text', 'tool', 'result', 'error', 'state', 'prompt']), summary: z.string().max(500) }).strict();

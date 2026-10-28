@@ -85,7 +85,7 @@ export class Runner {
       for (const seat of config.seats) {
         const before = this.applied.get(seat.seatId); this.applied.set(seat.seatId, seat);
         const worker = this.workers.get(seat.seatId);
-        const changed = !before || before.cwd !== seat.cwd || before.permissionMode !== seat.permissionMode || before.sessionId !== seat.sessionId;
+        const changed = !before || before.cwd !== seat.cwd || before.permissionMode !== seat.permissionMode || before.sessionId !== seat.sessionId || (before.model ?? null) !== (seat.model ?? null);
         if (worker && !changed) {
           // Only the window switch changed: open or close the live view without touching the session.
           if (before?.showWindow !== seat.showWindow) {
@@ -103,7 +103,7 @@ export class Runner {
           this.deps.out(`[${seat.seatId}] ${problem}`); continue;
         }
         if (seat.sessionId && seat.sessionId !== before?.sessionId) this.state.setSessionId(seat.seatId, seat.sessionId);
-        const added = this.addWorker({ seatId: seat.seatId, cwd: seat.cwd, permissionMode: seat.permissionMode, autoStart: seat.autoStart, showWindow: seat.showWindow });
+        const added = this.addWorker({ seatId: seat.seatId, cwd: seat.cwd, permissionMode: seat.permissionMode, autoStart: seat.autoStart, showWindow: seat.showWindow, ...(seat.model ? { model: seat.model } : {}) });
         if (wasRunning || seat.autoStart) this.startSeat(added);
       }
       this.lastStatus = '';
