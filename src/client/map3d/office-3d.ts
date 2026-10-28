@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { SeatStatus } from '../state/office-store.js';
 import { CELL_H, CELL_W, TILE, seatHash, type MapLayout } from '../map/office-map-layout.js';
-import { currentHour, lightingAt } from './day-night.js';
+import { hourFor, lightingAt, type TimeOfDay } from './day-night.js';
 import { buildStreet, streetBand, type Patron } from './office-3d-street.js';
 import { box, cube, floorTexture, grassTexture, makeBush, makeCoffeeTable, makeFlowers, makeMoon, makeOutdoorTree, makePantry, makePendantLamp, makePlant, makeSofa, shared, ZONE_FLOORS, type FloorKind } from './office-3d-props.js';
 import type { SeatSprite } from '../map/office-map-painter.js';
@@ -84,6 +84,7 @@ export class Office3D {
   private bulbs: THREE.MeshStandardMaterial[] = [];
   private lamps: THREE.PointLight[] = [];
   private patrons: Patron[] = [];
+  private timeOfDay: TimeOfDay = 'auto';
   private center = new THREE.Vector3();
   private reach = 20;
   private lightingCheckedAt = -Infinity;
@@ -128,6 +129,9 @@ export class Office3D {
     }
     this.refreshSigns();
   }
+
+  /** Follow the clock, or pin the scene to day or night; relit on the next frame. */
+  setTimeOfDay(mode: TimeOfDay): void { this.timeOfDay = mode; this.lightingCheckedAt = -Infinity; }
 
   setHighlight(hovered: string | null, selected: string | null): void {
     this.hovered = hovered; this.selected = selected;
@@ -284,7 +288,7 @@ export class Office3D {
 
   /** Sun, sky, ambient and interior lamps for the current local hour; re-evaluated once a minute. */
   private applyLighting(): void {
-    const light = lightingAt(currentHour());
+    const light = lightingAt(hourFor(this.timeOfDay));
     const sky = new THREE.Color(light.skyColor);
     (this.scene.background as THREE.Color).copy(sky).multiplyScalar(0.55 + light.daylight * 0.25);
     (this.scene.fog as THREE.Fog).color.copy(this.scene.background as THREE.Color);

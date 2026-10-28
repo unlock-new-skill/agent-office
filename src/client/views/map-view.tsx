@@ -5,6 +5,7 @@ import { StatusDot } from '../components/status-dot.js';
 import { hitTest, layoutOffice } from '../map/office-map-layout.js';
 import { paintOffice, type PaintInput, type SeatSprite } from '../map/office-map-painter.js';
 import { SEAT_STATUS_LABEL, seatStatus, unassignedAgents, type OfficeState, type SeatStatus } from '../state/office-store.js';
+import type { TimeOfDay } from '../map3d/day-night.js';
 import { Map3DStage } from './map-3d-stage.js';
 
 type Props = { state: OfficeState; notify: (text: string) => void };
@@ -16,6 +17,11 @@ const LAYOUT_WIDTH_3D = 760; const ROOM_GAP_3D = 48;
 type Mode = '3d' | '2d';
 const MODE_KEY = 'agent-office.map-mode';
 const savedMode = (): Mode => { try { return localStorage.getItem(MODE_KEY) === '2d' ? '2d' : '3d'; } catch { return '3d'; } };
+const TIME_KEY = 'agent-office.time-of-day';
+const TIMES: Array<{ value: TimeOfDay; label: string; title: string }> = [
+  { value: 'auto', label: 'Auto', title: 'Follow your local time' }, { value: 'day', label: '☀ Day', title: 'Always daytime' }, { value: 'night', label: '☾ Night', title: 'Always night' },
+];
+const savedTime = (): TimeOfDay => { try { const value = localStorage.getItem(TIME_KEY); return value === 'day' || value === 'night' ? value : 'auto'; } catch { return 'auto'; } };
 
 /** Office map, 3D (Three.js, default) or 2D pixel canvas: one room per department, a desk per seat, agents with live status. */
 export function MapView({ state, notify }: Props): ReactNode {
@@ -23,6 +29,8 @@ export function MapView({ state, notify }: Props): ReactNode {
   const [width, setWidth] = useState(0); const [hover, setHover] = useState<{ target: Target; x: number; y: number } | null>(null); const [selected, setSelected] = useState<Target | null>(null);
   const scale = width >= 1200 ? 3 : 2;
   const [mode, setModeState] = useState<Mode>(savedMode);
+  const [timeOfDay, setTimeState] = useState<TimeOfDay>(savedTime);
+  const setTimeOfDay = (next: TimeOfDay): void => { setTimeState(next); try { localStorage.setItem(TIME_KEY, next); } catch { /* preference is optional */ } };
   const setMode = (next: Mode): void => { setModeState(next); setHover(null); try { localStorage.setItem(MODE_KEY, next); } catch { /* preference is optional */ } };
 
   useEffect(() => {
@@ -100,11 +108,14 @@ export function MapView({ state, notify }: Props): ReactNode {
           <button type="button" className={mode === '3d' ? 'active' : ''} aria-pressed={mode === '3d'} onClick={() => setMode('3d')}>3D</button>
           <button type="button" className={mode === '2d' ? 'active' : ''} aria-pressed={mode === '2d'} onClick={() => setMode('2d')}>2D</button>
         </span>
+        {mode === '3d' && <span className="map-mode" role="group" aria-label="Time of day">
+          {TIMES.map(time => <button key={time.value} type="button" title={time.title} className={timeOfDay === time.value ? 'active' : ''} aria-pressed={timeOfDay === time.value} onClick={() => setTimeOfDay(time.value)}>{time.label}</button>)}
+        </span>}
         {mode === '3d' && <span className="muted map-hint">drag: rotate · wheel: zoom · right-drag: pan</span>}
       </div>
       <div className={`map-stage ${mode === '3d' ? 'is-3d' : ''}`} ref={host} onMouseLeave={() => setHover(null)}>
         {mode === '3d'
-          ? <Map3DStage layout={layout} seats={sprites} leaders={leaders} lobbyLabels={lobbyLabels} hovered={keyOf(hover?.target ?? null)} selected={keyOf(selected)}
+          ? <Map3DStage layout={layout} seats={sprites} leaders={leaders} lobbyLabels={lobbyLabels} hovered={keyOf(hover?.target ?? null)} selected={keyOf(selected)} timeOfDay={timeOfDay}
               onHover={(target, x, y) => setHover(target ? { target, x, y } : null)} onSelect={setSelected} onUnavailable={() => { setMode('2d'); notify('3D is not available in this browser; showing the 2D map.'); }} />
           : <canvas ref={canvas} className="map-canvas" role="img" aria-label={`Office map: ${counts.filter(([, count]) => count > 0).map(([status, count]) => `${count} ${SEAT_STATUS_LABEL[status]}`).join(', ')}`}
           onMouseMove={onMove} onClick={event => setSelected(targetAt(event))} style={{ cursor: hover ? 'pointer' : 'default' }} />}

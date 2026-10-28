@@ -39,6 +39,11 @@ export const lightingAt = (hour: number): Lighting => {
   };
 };
 
+/** 'auto' follows the local clock; 'day' and 'night' pin the scene to a fixed hour chosen by the viewer. */
+export type TimeOfDay = 'auto' | 'day' | 'night';
+const FIXED_HOUR = { day: 13, night: 21.5 } as const;
+export const hourFor = (mode: TimeOfDay): number => mode === 'auto' ? currentHour() : FIXED_HOUR[mode];
+
 /** Fractional local hour; `?hour=21.5` in the page URL previews another time of day. */
 export const currentHour = (search = typeof location === 'undefined' ? '' : location.search): number => {
   const override = Number(new URLSearchParams(search).get('hour'));

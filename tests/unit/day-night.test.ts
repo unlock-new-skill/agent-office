@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { currentHour, lightingAt } from '../../src/client/map3d/day-night.js';
+import { currentHour, hourFor, lightingAt } from '../../src/client/map3d/day-night.js';
 
 test('noon is full day with a high sun; midnight is night with lamps on', () => {
   const noon = lightingAt(12); const midnight = lightingAt(0);
@@ -26,4 +26,10 @@ test('?hour= overrides the clock for previews', () => {
   assert.equal(currentHour('?hour=-2'), 22);
   const real = currentHour('');
   assert.ok(real >= 0 && real < 24);
+});
+
+test('day and night pin the scene to a fixed hour; auto follows the clock', () => {
+  assert.ok(lightingAt(hourFor('day')).daylight > 0.9);
+  assert.ok(lightingAt(hourFor('night')).daylight < 0.1);
+  assert.equal(Math.floor(hourFor('auto')), new Date().getHours());
 });
