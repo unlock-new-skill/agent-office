@@ -85,9 +85,14 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
 
       <section className="setup-step">
         <h2><span>5</span>Cập nhật</h2>
-        <p>Khi có bản mới: tải connector mới và đồng bộ hook, rồi <strong>mở lại các session Claude</strong>.</p>
-        {cmd(connector(os, 'update'))}
-        <p className="muted">Bản lắng nghe liên tục cần Claude Code mới: chạy <code>claude update</code>. Connector cài trước 28/10 cần chạy thêm một lần:</p>
+        <p>Khi có bản mới, làm lần lượt trên từng máy agent:</p>
+        <ol>
+          <li>Cập nhật Claude Code — agent lắng nghe liên tục nhờ hook chạy nền (<code>asyncRewake</code>), bản cũ không hỗ trợ: {cmd('claude update')}</li>
+          <li>Tải connector mới và đồng bộ hook: {cmd(connector(os, 'update'))}</li>
+          <li><strong>Tắt và mở lại các session Claude</strong> (bước 3) — session đang chạy vẫn dùng hook cũ.</li>
+          <li>Ghế còn giữ session đã chết (viền xanh "idle — needs nudge"): <strong>Unassign</strong> trong Org rồi mở session mới.</li>
+        </ol>
+        <p className="muted">Connector cài trước 28/10 cần chạy thêm một lần:</p>
         {cmd(connector(os, 'sync-hooks'))}
       </section>
 

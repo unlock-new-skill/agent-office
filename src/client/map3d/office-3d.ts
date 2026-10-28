@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { SeatStatus } from '../state/office-store.js';
 import { CELL_H, CELL_W, TILE, seatHash, type MapLayout } from '../map/office-map-layout.js';
 import { currentHour, lightingAt } from './day-night.js';
+import { buildStreet, streetBand, type Patron } from './office-3d-street.js';
 import { box, cube, floorTexture, grassTexture, makeBush, makeCoffeeTable, makeFlowers, makeMoon, makeOutdoorTree, makePantry, makePendantLamp, makePlant, makeSofa, shared, ZONE_FLOORS, type FloorKind } from './office-3d-props.js';
 import type { SeatSprite } from '../map/office-map-painter.js';
 
@@ -16,6 +17,8 @@ type Actor = {
 
 /** Layout pixels → world units: one floor tile is one unit. */
 const U = 1 / TILE;
+/** Stone walkway along the building's near sides. */
+const WALKWAY = 1.6;
 const SKIN = [0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0xffdbac];
 const HAIR = [0x2b1d14, 0x5a3825, 0xa0522d, 0xd8b04c, 0x1f2937, 0x7c2d12];
 const SHIRT = [0x3b82f6, 0xef4444, 0x10b981, 0x8b5cf6, 0xf59e0b, 0xec4899, 0x14b8a6, 0x6366f1];
@@ -80,6 +83,7 @@ export class Office3D {
   private glass: THREE.MeshStandardMaterial | null = null;
   private bulbs: THREE.MeshStandardMaterial[] = [];
   private lamps: THREE.PointLight[] = [];
+  private patrons: Patron[] = [];
   private center = new THREE.Vector3();
   private reach = 20;
   private lightingCheckedAt = -Infinity;
@@ -159,7 +163,7 @@ export class Office3D {
     });
     // Icon textures are shared across rebuilds; sprites above only disposed their own label maps.
     for (const lamp of this.lamps) lamp.dispose();
-    this.world.clear(); this.actors.clear(); this.hitBoxes = []; this.signs = []; this.bulbs = []; this.lamps = []; this.glass = null;
+    this.world.clear(); this.actors.clear(); this.hitBoxes = []; this.signs = []; this.bulbs = []; this.lamps = []; this.patrons = []; this.glass = null;
   }
 
   private floorFor(kind: FloorKind): THREE.CanvasTexture {
@@ -183,6 +187,10 @@ export class Office3D {
     const x0 = -1; const z0 = -1; const x1 = layout.width * U + 8; const z1 = contentDepth + 1.5;
     this.buildShell(x0, z0, x1, z1);
     this.buildGrounds(x0, z0, x1, z1);
+    const front = z1 + 0.4 + WALKWAY;
+    const street = buildStreet(this.world, (kind, color, x, z, w, d, y, tile) => { this.slab(kind, color, x, z, w, d, y, tile); }, id => this.makePerson(id, false, false), x0, x1, front);
+    this.bulbs.push(...street.bulbs); this.patrons = street.patrons;
+    for (const light of street.lights) this.addLampLight(light.x, light.z, light.size);
     layout.rooms.forEach((room, index) => {
       const rx = room.x * U; const rz = room.y * U; const w = room.w * U; const d = room.h * U;
       const kind = ZONE_FLOORS[index % ZONE_FLOORS.length]!;
@@ -224,7 +232,7 @@ export class Office3D {
     // Trees at the corners and plants along the windows.
     makePlant(this.world, x0 + 1.1, z0 + 1.1, true, 1); makePlant(this.world, x1 - 1.1, z0 + 7.5, true, 2); makePlant(this.world, x0 + 1.1, z1 - 1.1, true, 4);
     for (let x = x0 + 6; x < x1 - 9; x += 9) makePlant(this.world, x, z0 + 0.7, false, x);
-    this.frameScene(x0, z0, x1, z1);
+    this.frameScene(x0, z0, x1, streetBand(front).end);
     this.lightingCheckedAt = -Infinity;
   }
 
@@ -248,16 +256,16 @@ export class Office3D {
 
   /**
    * Meadow around the building: a stone walkway on the near sides, then trees, bushes and flowers scattered with a
-   * fixed seed. Nothing tall is placed close in front of the building, where it would block the isometric view.
+   * fixed seed. Nothing tall is placed close in front of the building, where it would block the isometric view, and
+   * nothing grows on the street in front of it.
    */
   private buildGrounds(x0: number, z0: number, x1: number, z1: number): void {
-    const walk = 1.6;
+    const walk = WALKWAY; const street = streetBand(z1 + 0.4 + walk);
     this.slab('concrete', 0xcbd5e1, x0 - 0.4, z1 + 0.4, x1 - x0 + walk + 0.4, walk, 0.0, 2);
     this.slab('concrete', 0xcbd5e1, x1 + 0.4, z0 - 0.4, walk, z1 - z0 + 0.8, 0.0, 2);
-    this.slab('concrete', 0xcbd5e1, x0 + (x1 - x0) / 2 - 1, z1 + 0.4 + walk, 2, 10, 0.0, 2);
     let seed = 7919; const random = (): number => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-    const margin = 26; const inBuilding = (x: number, z: number, pad: number): boolean => x > x0 - pad && x < x1 + walk + pad && z > z0 - pad && z < z1 + walk + pad;
-    const blocksView = (x: number, z: number): boolean => (z > z1 && z < z1 + 16 && x > x0 - 16) || (x > x1 && x < x1 + 16 && z > z0 - 16);
+    const margin = 26; const inBuilding = (x: number, z: number, pad: number): boolean => (x > x0 - pad && x < x1 + walk + pad && z > z0 - pad && z < z1 + walk + pad) || (z > street.near - pad && z < street.end + pad);
+    const blocksView = (x: number, z: number): boolean => (z > z1 && z < street.end + 8 && x > x0 - 16) || (x > x1 && x < x1 + 16 && z > z0 - 16);
     const spot = (pad: number, avoidView: boolean): [number, number] | null => {
       for (let attempt = 0; attempt < 30; attempt++) {
         const x = x0 - margin + random() * (x1 - x0 + margin * 2); const z = z0 - margin + random() * (z1 - z0 + margin * 2);
@@ -424,6 +432,13 @@ export class Office3D {
         actor.icon.position.y = 2.45 + Math.sin(phase * 3) * 0.08;
         actor.icon.material.opacity = actor.status === 'blocked' ? 0.55 + Math.abs(Math.sin(phase * 4)) * 0.45 : 1;
       }
+    }
+    for (const patron of this.patrons) {
+      // Every ~9 s each customer sips (arm up, head back); otherwise they chat, turning to their neighbours.
+      const cycle = (t + patron.phase) % 9; const sip = cycle < 1.6 ? Math.sin((Math.PI * cycle) / 1.6) : 0;
+      patron.arm.rotation.x = 1.15 + sip * 1.3;
+      patron.head.rotation.x = -sip * 0.3;
+      patron.head.rotation.y = sip > 0 ? 0 : Math.sin((t + patron.phase) * 0.9) * 0.55;
     }
     if (t - this.lightingCheckedAt > 60) { this.lightingCheckedAt = t; this.applyLighting(); }
     this.controls.update();
