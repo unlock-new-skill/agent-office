@@ -3,12 +3,12 @@ import { cube, shared } from './office-3d-props.js';
 
 type Person = { group: THREE.Group; arms: THREE.Object3D[]; head: THREE.Object3D };
 type SlabFn = (kind: 'concrete' | 'terrazzo', color: number, x: number, z: number, w: number, d: number, y: number, tile?: number) => void;
-/** One customer of the tea stall, animated by the scene: sips from the glass in one hand and chats. */
+/** One customer of the roadside café, animated by the scene: sips from the glass in one hand and chats. */
 export type Patron = { arm: THREE.Object3D; head: THREE.Object3D; phase: number };
 export type Street = { bulbs: THREE.MeshStandardMaterial[]; lights: Array<{ x: number; z: number; size: number }>; patrons: Patron[] };
 
 const VERGE = 1; const NEAR_WALK = 1.6; const ROAD = 7; const FAR_WALK = 5;
-const BRAND = 'Truong AAOOEE';
+const BRAND = 'Coffee - me đá';
 /** Meshes with a material made here (not from the shared cache) are disposed with the world on rebuild. */
 const own = (mesh: THREE.Mesh): THREE.Mesh => { mesh.userData.ownMaterial = true; return mesh; };
 
@@ -23,8 +23,7 @@ const signTexture = (): THREE.CanvasTexture => {
   context.fillStyle = '#b91c1c'; context.fillRect(0, 0, 512, 160);
   context.strokeStyle = '#fde047'; context.lineWidth = 8; context.strokeRect(8, 8, 496, 144);
   context.textAlign = 'center'; context.textBaseline = 'middle';
-  context.fillStyle = '#fde047'; context.font = 'bold 26px system-ui, sans-serif'; context.fillText('TRÀ ĐÁ · HƯỚNG DƯƠNG', 256, 42);
-  context.fillStyle = '#ffffff'; context.font = 'bold 58px system-ui, sans-serif'; context.fillText(BRAND, 256, 104);
+  context.fillStyle = '#ffffff'; context.font = 'bold 60px system-ui, sans-serif'; context.fillText(BRAND, 256, 82);
   const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 4;
   return texture;
 };
@@ -46,7 +45,7 @@ const scooter = (parent: THREE.Object3D, x: number, z: number, color: number): v
 
 /**
  * A wide road in front of the office with sidewalks, lane markings, a zebra crossing on the entrance path and street
- * lamps, plus a Vietnamese street tea stall on the far sidewalk: cart with a branded sign, string lights, low plastic
+ * lamps, plus a Vietnamese roadside café on the far sidewalk: cart with a branded sign, string lights, low plastic
  * table and stools, and four customers drinking tea.
  */
 export const buildStreet = (parent: THREE.Object3D, slab: SlabFn, makePerson: (id: string) => Person, x0: number, x1: number, frontZ: number): Street => {
