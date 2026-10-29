@@ -15,7 +15,7 @@ type Props = {
   /** Clears the auto-wake limit so the seat reacts to mentions again. */
   onResetWakes?: () => void;
 };
-export const sessionLabel = (agent: AgentSnapshot): string => `${agent.project.split('/').filter(Boolean).at(-1) ?? agent.project} · ${agent.sessionId.slice(0, 8)}`;
+export const sessionLabel = (agent: AgentSnapshot): string => `${agent.project.split(/[\\/]/).filter(Boolean).at(-1) ?? agent.project} · ${agent.sessionId.slice(0, 8)}`;
 
 export function SeatCard({ seat, status, agent, unassigned, onAssign, onSave, onDelete, loadHandoff, saveHandoff, runner, onResetWakes }: Props): ReactNode {
   const [editing, setEditing] = useState(false); const [handoffOpen, setHandoffOpen] = useState(false);
@@ -53,7 +53,7 @@ export function SeatCard({ seat, status, agent, unassigned, onAssign, onSave, on
             <div className="seat-handle">@{seat.id} · {SEAT_STATUS_LABEL[status]}{status === 'wake_limited' && onResetWakes && <> <button type="button" className="btn btn-small btn-warn" title="The seat woke itself too many times in a row; reset to let mentions wake it again" onClick={onResetWakes}>Reset</button></>}</div>
             {seat.description && <p className="seat-desc">{seat.description}</p>}
             {seat.agentId
-              ? <div className="seat-session"><span className="session-chip">{agent ? sessionLabel(agent) : seat.agentId}</span><button type="button" className="btn btn-small" onClick={() => onAssign(null)}>Unassign</button></div>
+              ? <div className="seat-session"><span className="session-chip" title={agent ? `${agent.project} · ${agent.sessionId}` : seat.agentId}>{agent ? sessionLabel(agent) : seat.agentId}</span><button type="button" className="btn btn-small seat-unassign" onClick={() => onAssign(null)}>Unassign</button></div>
               : <label className="seat-assign"><span className="sr-only">Assign session to {seat.title}</span>
                   <select value="" onChange={event => event.target.value && onAssign(event.target.value)} disabled={unassigned.length === 0}>
                     <option value="">{unassigned.length ? 'Assign session… (or drop here)' : 'Drop a session here'}</option>

@@ -14,9 +14,14 @@ type Props = { office: OfficeHandle; channelId: string; onSelectChannel: (channe
 
 export function ChatView({ office, channelId, onSelectChannel, notify }: Props): ReactNode {
   const { state, api, loadHistory, loadOlder, markRead, loadThread } = office;
-  const [panel, setPanel] = useState<'members' | 'tasks'>('members');
+  const [panel, setPanel] = useState<'members' | 'tasks' | null>(null);
   const [threadSeq, setThreadSeq] = useState<number | null>(null);
   useEffect(() => setThreadSeq(null), [channelId]);
+  useEffect(() => {
+    if (!panel) return;
+    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') setPanel(null); };
+    window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
+  }, [panel]);
   const channel = state.org?.channels.find(candidate => candidate.id === channelId);
   const department = state.org?.departments.find(candidate => candidate.id === channel?.departmentId);
   const messages = state.messages[channelId];
@@ -45,19 +50,24 @@ export function ChatView({ office, channelId, onSelectChannel, notify }: Props):
         <header className="chat-head">
           <h2><span className="hash" style={department ? { color: department.color } : undefined}>#</span>{channel.id}</h2>
           <span className="muted">{subtitle} · {channel.memberSeatIds.length} seats</span>
+          <span className="chat-head-actions">
+            <button type="button" className={`btn btn-small ${panel === 'members' ? 'active' : ''}`} aria-expanded={panel === 'members'} onClick={() => setPanel(panel === 'members' ? null : 'members')}>Members</button>
+            <button type="button" className={`btn btn-small ${panel === 'tasks' ? 'active' : ''}`} aria-expanded={panel === 'tasks'} onClick={() => setPanel(panel === 'tasks' ? null : 'tasks')}>Tasks</button>
+          </span>
         </header>
         <MessageList messages={messages ?? []} org={state.org} onLoadOlder={() => loadOlder(channelId)} onEdit={editMessage} onDelete={deleteMessage} onOpenThread={openThread} activeThreadSeq={threadSeq} />
         <Composer channelLabel={label} seats={members} onSend={body => send(body)} />
       </main>
       {threadSeq !== null && <ThreadPanel channelId={channelId} thread={state.threads[threadKey(channelId, threadSeq)]} org={state.org}
         seats={members} onSend={body => send(body, threadSeq)} onEdit={editMessage} onDelete={deleteMessage} onClose={() => setThreadSeq(null)} />}
-      <aside className={`detail-panel ${threadSeq !== null ? 'behind-thread' : ''}`} aria-label="Channel details">
+      {panel && <aside className="detail-panel" aria-label="Channel details">
         <div className="tabs" role="tablist">
           <button type="button" role="tab" aria-selected={panel === 'members'} className={panel === 'members' ? 'active' : ''} onClick={() => setPanel('members')}>Members</button>
           <button type="button" role="tab" aria-selected={panel === 'tasks'} className={panel === 'tasks' ? 'active' : ''} onClick={() => setPanel('tasks')}>Tasks</button>
+          <button type="button" className="icon-btn detail-close" aria-label="Close panel" onClick={() => setPanel(null)}>✕</button>
         </div>
         <div role="tabpanel">{panel === 'members' ? <MembersPanel state={state} channel={channel} /> : <TasksPanel state={state} channel={channel} api={api} notify={notify} />}</div>
-      </aside>
+      </aside>}
     </div>
   );
 }
