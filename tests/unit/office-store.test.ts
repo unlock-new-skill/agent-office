@@ -40,7 +40,7 @@ test('org events replace org; snapshot loads org and agents; reset clears histor
 });
 
 test('task events upsert tasks by id', () => {
-  const task: Task = { id: 't-dev-1', departmentId: 'dev', number: 1, assigneeSeatId: 'dev-be', requesterSeatId: null, createdByKind: 'manager', createdById: 'manager', title: 'A', body: '', status: 'todo', createdAt: 1, updatedAt: 1 };
+  const task: Task = { id: 't-dev-1', departmentId: 'dev', number: 1, assigneeSeatId: 'dev-be', requesterSeatId: null, createdByKind: 'manager', createdById: 'manager', title: 'A', body: '', status: 'todo', createdAt: 1, updatedAt: 1, estimateMinutes: null, dependsOn: [] };
   let state = officeReducer(initialOfficeState, { type: 'tasks', tasks: [task] });
   state = officeReducer(state, { type: 'collab', event: { type: 'collab', kind: 'task', task: { ...task, status: 'done' } } });
   assert.equal(Object.keys(state.tasks).length, 1); assert.equal(state.tasks['t-dev-1']?.status, 'done');

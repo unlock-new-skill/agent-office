@@ -56,7 +56,11 @@ export type ChatMessage = { id: string; channelId: string; seq: number; senderKi
 export type TaskStatus = 'todo' | 'doing' | 'blocked' | 'done';
 export type SeatHandoff = { seatId: string; body: string; updatedAt: number; updatedBy: string };
 /** requesterSeatId: leader of another department this task was requested by; told when it is blocked or done. */
-export type Task = { id: string; departmentId: string; number: number; assigneeSeatId: string | null; requesterSeatId: string | null; createdByKind: 'seat' | 'manager'; createdById: string; title: string; body: string; status: TaskStatus; createdAt: number; updatedAt: number };
+export type Task = { id: string; departmentId: string; number: number; assigneeSeatId: string | null; requesterSeatId: string | null; createdByKind: 'seat' | 'manager'; createdById: string; title: string; body: string; status: TaskStatus; createdAt: number; updatedAt: number;
+  /** Assignee's estimate of the work, in minutes (null until set). */
+  estimateMinutes: number | null;
+  /** Tasks (any department) that must be done before this one can start. */
+  dependsOn: string[] };
 /** Realtime collaboration notifications; state lives in SQLite, clients refetch over REST after reconnect. */
 export type PermissionStatus = 'pending' | 'allowed' | 'denied' | 'expired';
 export type PermissionBehavior = 'allow' | 'deny';

@@ -147,6 +147,9 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .task-top select { width: auto; padding: 2px 6px; font-size: 12px; }
 .task-title { font-size: 13px; }
 .task-assignee { font-size: 12px; color: var(--text-dim); }
+.task-plan { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--text-dim); }
+.task-no-estimate { color: var(--warn); }
+.task-waiting { color: var(--warn); }
 .task-body { font-size: 12px; color: var(--text-mute); white-space: pre-wrap; }
 
 /* Org */

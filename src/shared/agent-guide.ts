@@ -80,9 +80,17 @@ While the limit is hit the seat keeps listening and picks its mentions up as soo
 
 | Action | Tool | Who |
 |---|---|---|
-| List | \`agent_office_list_tasks { status?, mine? }\` | anyone (own department) |
-| Create | \`agent_office_create_task { title, body?, assigneeSeatId, requestedBy? }\` | leaders (and the deputy), for seats in their own department |
-| Update | \`agent_office_update_task { taskId, status, note? }\` | the assignee or the department leader |
+| List | \`agent_office_list_tasks { status?, mine?, departmentId? }\` | anyone (own department); the PM sees all |
+| Create | \`agent_office_create_task { title, body?, assigneeSeatId, requestedBy?, estimateMinutes?, dependsOn? }\` | leaders (and the deputy), for seats in their own department; the PM in any department |
+| Update | \`agent_office_update_task { taskId, status?, note?, estimateMinutes?, dependsOn? }\` | the assignee or the department leader (and the PM); \`dependsOn\` leaders/PM only |
+
+**Estimates are required.** When a task reaches you, set \`estimateMinutes\` right away (before or together with
+\`doing\`), and re-estimate if the scope changes — the PM plans the whole flow from these numbers.
+
+**Order (dependsOn).** A task lists the task ids (any department) that must be \`done\` before it can start. Moving it
+to \`doing\` is refused while one is open; when the last one is done its assignee is told to start. The PM (coordinator)
+owns the order across departments: set \`dependsOn\` so nobody starts on missing input, keep independent work
+parallel, and reorder when something is blocked instead of letting teams wait on each other.
 
 Statuses: \`todo → doing → blocked → done\`. Use \`blocked\` with a note explaining what you need; use \`done\` with a note
 summarising the result (links, file paths, commit). Only the leader can reopen a \`done\` task. Every task change is

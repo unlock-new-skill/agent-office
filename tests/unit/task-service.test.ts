@@ -66,3 +66,25 @@ test('list filters by status and assignee and records history', () => {
   assert.throws(() => tasks.create(seat('dev-lead'), { title: '', body: '', assigneeSeatId: 'dev-be' }), /invalid_task/);
   fixture.close();
 });
+
+test('estimates and dependencies: no start before dependencies are done, then the waiting assignee is told', () => {
+  const fixture = createSeededOffice({ coordinatorSeatId: 'ops-lead' }); const { tasks, messages } = fixture.office; seatAll(fixture, ['dev-be', 'design-atom']);
+  const last = (channelId: string) => messages.list(manager, channelId).at(-1)!;
+  const art = tasks.create(seat('design-lead'), { title: 'Icons', body: '', assigneeSeatId: 'design-atom', estimateMinutes: 90 });
+  assert.match(last('design').body, /Estimate: 1h 30m\./);
+  const api = tasks.create(seat('ops-lead'), { title: 'Use icons', body: '', assigneeSeatId: 'dev-be', dependsOn: [art.id] });
+  assert.equal(api.departmentId, 'dev', 'the coordinator creates tasks in other departments');
+  assert.match(last('dev').body, /No estimate yet: @dev-be set estimateMinutes.*Waits for: t-design-1 \(open: t-design-1\)/);
+  assert.throws(() => tasks.update(seat('dev-be'), api.id, { status: 'doing' }), /waiting_for_dependencies: t-design-1/);
+  assert.throws(() => tasks.update(seat('dev-be'), api.id, { dependsOn: [] }), /leader_only/, 'assignees do not reorder');
+  assert.equal(tasks.update(seat('dev-be'), api.id, { estimateMinutes: 45 }).estimateMinutes, 45);
+  assert.throws(() => tasks.update(seat('ops-lead'), art.id, { dependsOn: [api.id] }), /dependency_cycle/);
+  assert.throws(() => tasks.update(seat('dev-be'), api.id, { estimateMinutes: 0 }), /invalid_estimate/);
+  tasks.update(seat('design-atom'), art.id, { status: 'done' });
+  const ready = last('dev');
+  assert.match(ready.body, /t-dev-1 "Use icons" is ready to start/);
+  assert.deepEqual(ready.mentions, ['dev-be']);
+  assert.equal(tasks.update(seat('dev-be'), api.id, { status: 'doing' }).status, 'doing');
+  assert.equal(tasks.list(seat('ops-lead'), {}).length, 2, 'the coordinator lists every department');
+  fixture.close();
+});

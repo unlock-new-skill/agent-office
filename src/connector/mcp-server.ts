@@ -136,19 +136,19 @@ server.registerTool('agent_office_save_handoff', {
 });
 
 server.registerTool('agent_office_list_tasks', {
-  title: 'List tasks', description: 'List tasks of your department (or "mine" for tasks assigned to you), optionally filtered by status.',
-  inputSchema: z.object({ status: z.enum(['todo', 'doing', 'blocked', 'done']).optional(), mine: z.boolean().default(false) }).strict(), annotations: readOnly,
-}, async ({ status, mine }) => text(await call(`/v1/tasks?${new URLSearchParams({ ...(status ? { status } : {}), ...(mine ? { assignee: 'me' } : {}) }).toString()}`)));
+  title: 'List tasks', description: 'List tasks of your department (or "mine" for tasks assigned to you), optionally filtered by status. The PM (coordinator) sees every department, or one with departmentId. Each task shows estimateMinutes and dependsOn.',
+  inputSchema: z.object({ status: z.enum(['todo', 'doing', 'blocked', 'done']).optional(), mine: z.boolean().default(false), departmentId: id.optional() }).strict(), annotations: readOnly,
+}, async ({ status, mine, departmentId }) => text(await call(`/v1/tasks?${new URLSearchParams({ ...(status ? { status } : {}), ...(mine ? { assignee: 'me' } : {}), ...(departmentId ? { departmentId } : {}) }).toString()}`)));
 
 server.registerTool('agent_office_create_task', {
-  title: 'Create task', description: 'Leaders (and the deputy): create a task in your department and assign it to one of your members (the assignee is woken). For a request from another department set requestedBy to that leader\'s seat id: they are told automatically when the task is blocked or done.',
-  inputSchema: z.object({ title: z.string().min(1).max(200), body: z.string().max(8000).default(''), assigneeSeatId: id, requestedBy: id.optional() }).strict(), annotations: write,
+  title: 'Create task', description: 'Leaders (and the deputy): create a task in your department and assign it to one of your members (the assignee is woken). The PM (coordinator) may create in any department. Give estimateMinutes when you know it (otherwise the assignee must set it) and dependsOn = task ids (any department) that must be done first: the task cannot start before them and its assignee is told when they are done. For a request from another department set requestedBy to that leader\'s seat id: they are told automatically when the task is blocked or done.',
+  inputSchema: z.object({ title: z.string().min(1).max(200), body: z.string().max(8000).default(''), assigneeSeatId: id, requestedBy: id.optional(), estimateMinutes: z.number().int().min(1).max(10_080).optional(), dependsOn: z.array(z.string().min(1).max(80)).max(20).optional() }).strict(), annotations: write,
 }, async input => text(await call('/v1/tasks', { body: input })));
 
 server.registerTool('agent_office_update_task', {
-  title: 'Update task', description: 'Move a task to todo/doing/blocked/done with an optional note. Assignee or department leader only. blocked/done notify the leader.',
-  inputSchema: z.object({ taskId: id, status: z.enum(['todo', 'doing', 'blocked', 'done']), note: z.string().max(2000).default('') }).strict(), annotations: write,
-}, async ({ taskId, status, note }) => text(await call(`/v1/tasks/${encodeURIComponent(taskId)}`, { method: 'PATCH', body: { status, note } })));
+  title: 'Update task', description: 'Move a task to todo/doing/blocked/done with an optional note, and/or set estimateMinutes (assignee: estimate every task you get, re-estimate when it changes). Leaders and the PM may also set dependsOn (task ids that must be done first; [] clears). A task cannot move to doing while a dependency is open. Assignee, department leader or the PM only. blocked/done notify the leader.',
+  inputSchema: z.object({ taskId: id, status: z.enum(['todo', 'doing', 'blocked', 'done']).optional(), note: z.string().max(2000).default(''), estimateMinutes: z.number().int().min(1).max(10_080).optional(), dependsOn: z.array(z.string().min(1).max(80)).max(20).optional() }).strict(), annotations: write,
+}, async ({ taskId, ...patch }) => text(await call(`/v1/tasks/${encodeURIComponent(taskId)}`, { method: 'PATCH', body: patch })));
 
 /** Serves the agent_office_* tools over stdio for the Claude Code session that spawned this process. */
 export const startMcpServer = (): void => { serveStdio(() => server, { onerror: error => process.stderr.write(`${error.message}\n`) }); };

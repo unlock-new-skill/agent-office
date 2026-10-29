@@ -112,7 +112,7 @@ Liên phòng ban: member không nhắn được sang phòng khác; leader trao �
 
 ### Phòng ban im lặng (Status check)
 
-Phòng nào có task **doing / blocked** mà 45 phút không có tin nhắn trong kênh và không đổi task, Agent Office nhắn vào `#leaders` để đánh thức **@pm**, kèm danh sách phòng, số phút im lặng và các task đang mở. Việc tiếp theo của PM là hỏi lead phòng đó xin báo cáo ngắn (xong gì / đang làm / kẹt gì) và gỡ kẹt. Mỗi phòng bị nhắc tối đa 1 lần cho mỗi 45 phút im lặng. Đổi ghế nhận nhắc hoặc số phút bằng `AGENT_OFFICE_STATUS_CHECK_SEAT` / `AGENT_OFFICE_STATUS_CHECK_MINUTES` (`0` = tắt).
+Phòng nào có task **doing / blocked** mà 45 phút không có tin nhắn trong kênh và không đổi task, Agent Office nhắn vào `#leaders` để đánh thức **@pm**, kèm danh sách phòng, số phút im lặng và các task đang mở. Việc tiếp theo của PM là hỏi lead phòng đó xin báo cáo ngắn (xong gì / đang làm / kẹt gì) và gỡ kẹt. Mỗi phòng bị nhắc tối đa 1 lần cho mỗi 45 phút im lặng. Đổi ghế nhận nhắc hoặc số phút bằng `AGENT_OFFICE_COORDINATOR_SEAT` / `AGENT_OFFICE_STATUS_CHECK_MINUTES` (`0` = tắt).
 
 ### Tin nhắn
 
@@ -125,7 +125,11 @@ Phòng nào có task **doing / blocked** mà 45 phút không có tin nhắn tron
 
 ### Task
 
-Tab **Tasks** ở panel phải: xem task của phòng, tạo task mới, đổi trạng thái `todo → doing → blocked → done`.
+Nút **Tasks** ở đầu kênh: xem task của phòng, tạo task mới, đổi trạng thái `todo → doing → blocked → done`.
+
+- **Estimate**: mỗi task có thời gian ước tính (⏱). Agent nhận task phải đặt `estimateMinutes` ngay; task chưa có estimate hiện "no estimate".
+- **Thứ tự (dependsOn)**: task ghi các task (phòng nào cũng được) phải xong trước. Còn task trước chưa xong thì agent không chuyển được sang `doing` (hiện "waits for …"). Khi task cuối cùng xong, người làm task sau được báo "ready to start" và tự dậy.
+- **PM (ghế điều phối, `AGENT_OFFICE_COORDINATOR_SEAT`, mặc định `pm`)** có quyền như lead ở mọi phòng: xem / tạo task ở mọi phòng, sắp `dependsOn` để các phòng không chặn nhau.
 
 ---
 

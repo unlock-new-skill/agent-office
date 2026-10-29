@@ -19,9 +19,9 @@ export const ORIGIN = `http://${HOST}`;
 export type Fixture = { db: Database; office: Office; emitted: CollabEvent[]; close: () => void };
 
 /** In-memory office seeded from office.example.yaml. */
-export const createSeededOffice = (options: { maxAutoWakes?: number; remoteApproval?: boolean } = {}): Fixture => {
+export const createSeededOffice = (options: { maxAutoWakes?: number; remoteApproval?: boolean; coordinatorSeatId?: string } = {}): Fixture => {
   const db = new Database({ filename: ':memory:' }); const emitted: CollabEvent[] = [];
-  const office = createOffice(db, { maxAutoWakes: options.maxAutoWakes ?? 15, emit: event => emitted.push(event), remoteApproval: options.remoteApproval ?? false });
+  const office = createOffice(db, { maxAutoWakes: options.maxAutoWakes ?? 15, emit: event => emitted.push(event), remoteApproval: options.remoteApproval ?? false, coordinatorSeatId: options.coordinatorSeatId ?? null });
   office.org.seed(parseOfficeConfig(exampleOfficeYaml()));
   return { db, office, emitted, close: () => { office.close(); db.close(); } };
 };

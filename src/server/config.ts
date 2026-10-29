@@ -13,7 +13,9 @@ export type AppConfig = {
   sessionTtlSeconds: number;
   containerMode: boolean;
   maxAutoWakes: number;
-  /** Seat asked in #leaders to collect reports when a department with work in progress goes quiet; null = off. */
+  /** Coordinator seat (the PM): leader rights over every department's tasks; '' = none. */
+  coordinatorSeatId: string | null;
+  /** Coordinator is asked in #leaders to collect reports when a department with work in progress goes quiet; null = off. */
   statusCheck: { seatId: string; silentMs: number } | null;
   wakeWaitSeconds: number;
   /** Public https origin when served behind a reverse proxy (e.g. https://office.example.com); null = local only. */
@@ -43,8 +45,9 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => (
   sessionTtlSeconds: positiveInteger(env.AGENT_OFFICE_SESSION_TTL_SECONDS, 43_200),
   containerMode: env.AGENT_OFFICE_CONTAINER_MODE === 'true',
   maxAutoWakes: positiveInteger(env.AGENT_OFFICE_MAX_AUTO_WAKES, 15),
-  statusCheck: env.AGENT_OFFICE_STATUS_CHECK_MINUTES === '0' || env.AGENT_OFFICE_STATUS_CHECK_SEAT === '' ? null
-    : { seatId: env.AGENT_OFFICE_STATUS_CHECK_SEAT ?? 'pm', silentMs: positiveInteger(env.AGENT_OFFICE_STATUS_CHECK_MINUTES, 45) * 60_000 },
+  coordinatorSeatId: env.AGENT_OFFICE_COORDINATOR_SEAT === '' ? null : env.AGENT_OFFICE_COORDINATOR_SEAT ?? 'pm',
+  statusCheck: env.AGENT_OFFICE_STATUS_CHECK_MINUTES === '0' || env.AGENT_OFFICE_COORDINATOR_SEAT === '' ? null
+    : { seatId: env.AGENT_OFFICE_COORDINATOR_SEAT ?? 'pm', silentMs: positiveInteger(env.AGENT_OFFICE_STATUS_CHECK_MINUTES, 45) * 60_000 },
   wakeWaitSeconds: Math.min(positiveInteger(env.AGENT_OFFICE_WAKE_WAIT_SECONDS, 290), 3500),
   publicOrigin: parseOrigin(env.AGENT_OFFICE_PUBLIC_ORIGIN),
   trustProxy: env.AGENT_OFFICE_TRUST_PROXY === 'true',

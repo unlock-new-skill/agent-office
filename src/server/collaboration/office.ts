@@ -11,7 +11,7 @@ import { WakeService } from './wake-service.js';
 
 /** Longest gap between two events of an active session that still counts as work. */
 export const WORK_GAP_MS = 15 * 60_000;
-export type OfficeOptions = { maxAutoWakes: number; emit: (event: CollabEvent) => void; remoteApproval?: boolean; statusCheck?: StatusCheckOptions | null };
+export type OfficeOptions = { maxAutoWakes: number; emit: (event: CollabEvent) => void; remoteApproval?: boolean; statusCheck?: StatusCheckOptions | null; coordinatorSeatId?: string | null };
 /** handoff = the seat's raw note; handoffBrief = note + open tasks + unread, ready to inject into a session's context. */
 export type WhoAmI = { agentId: string; seat: Seat | null; department: Department | null; channels: ChannelSummary[]; handoff: SeatHandoff | null; handoffBrief: string | null };
 export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; trackWork: (agentId: string, kind: string, ts: string) => void; close: () => void };
@@ -23,7 +23,7 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
   const messages = new MessageService(db, org, options.emit, message => wake?.onPosted(message), () => wake?.notify());
   wake = new WakeService(db, org, messages, options.maxAutoWakes);
   const wakeService = wake; org.onMutated = () => wakeService.notify();
-  const tasks = new TaskService(db, org, messages, options.emit);
+  const tasks = new TaskService(db, org, messages, options.emit, options.coordinatorSeatId ?? null);
   const handoffs = new HandoffService(db, org, messages);
   const permissions = new PermissionService(db, org, options.emit, options.remoteApproval ?? false);
   const runners = new RunnerService(db, org, options.emit);
