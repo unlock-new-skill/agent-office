@@ -32,7 +32,7 @@ const auth = new AuthService(db, config.sessionTtlSeconds, config.minPasswordLen
 if (!auth.isSetupComplete()) { logger.error('manager setup required; run npm run setup before starting daemon'); db.close(); dataLock.release(); process.exit(1); }
 const events = new EventStore(db, delta => hub.publish(delta));
 let notifier: TelegramNotifier | null = null;
-const office = createOffice(db, { maxAutoWakes: config.maxAutoWakes, emit: event => { hub.broadcast(event); notifier?.onEvent(event); }, remoteApproval: config.remoteApproval });
+const office = createOffice(db, { maxAutoWakes: config.maxAutoWakes, emit: event => { hub.broadcast(event); notifier?.onEvent(event); }, remoteApproval: config.remoteApproval, statusCheck: config.statusCheck });
 if (config.telegramBotToken) {
   notifier = new TelegramNotifier({ client: new TelegramClient(config.telegramBotToken, config.telegramProxy), db, office, publicOrigin: config.publicOrigin, log: message => logger.error(message) });
   notifier.start(); logger.info(`telegram notifications on (proxy: ${describeProxy(config.telegramProxy)})`);

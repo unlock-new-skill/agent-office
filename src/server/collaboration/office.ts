@@ -6,9 +6,10 @@ import { RunnerService } from './runner-service.js';
 import { MessageService, type ChannelSummary } from './message-service.js';
 import { OrgService } from './org-service.js';
 import { TaskService } from './task-service.js';
+import { StatusCheck, type StatusCheckOptions } from './status-check.js';
 import { WakeService } from './wake-service.js';
 
-export type OfficeOptions = { maxAutoWakes: number; emit: (event: CollabEvent) => void; remoteApproval?: boolean };
+export type OfficeOptions = { maxAutoWakes: number; emit: (event: CollabEvent) => void; remoteApproval?: boolean; statusCheck?: StatusCheckOptions | null };
 /** handoff = the seat's raw note; handoffBrief = note + open tasks + unread, ready to inject into a session's context. */
 export type WhoAmI = { agentId: string; seat: Seat | null; department: Department | null; channels: ChannelSummary[]; handoff: SeatHandoff | null; handoffBrief: string | null };
 export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; recordWork: (agentId: string, ms: number) => void; close: () => void };
@@ -25,6 +26,8 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
   const permissions = new PermissionService(db, org, options.emit, options.remoteApproval ?? false);
   const runners = new RunnerService(db, org, options.emit);
   const sweep = setInterval(() => runners.sweep(), 30_000); sweep.unref();
+  const statusCheck = options.statusCheck ? new StatusCheck(db, org, messages, options.statusCheck) : null;
+  const statusTimer = statusCheck ? setInterval(() => statusCheck.run(), 5 * 60_000) : null; statusTimer?.unref();
   const whoami = (agentId: string, options: { afterCompaction?: boolean } = {}): WhoAmI => {
     const seat = org.seatForAgent(agentId);
     if (!seat) return { agentId, seat, department: null, channels: [], handoff: null, handoffBrief: null };
@@ -39,5 +42,5 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
     org.publish();
   };
   const touchAgent = (agentId: string): void => { db.raw.prepare('UPDATE agents SET last_contact_at=? WHERE id=?').run(Date.now(), agentId); };
-  return { org, messages, wake: wakeService, tasks, handoffs, permissions, runners, whoami, touchAgent, recordWork, close: () => { clearInterval(sweep); wakeService.close(); permissions.close(); runners.close(); } };
+  return { org, messages, wake: wakeService, tasks, handoffs, permissions, runners, whoami, touchAgent, recordWork, close: () => { clearInterval(sweep); if (statusTimer) clearInterval(statusTimer); wakeService.close(); permissions.close(); runners.close(); } };
 };
