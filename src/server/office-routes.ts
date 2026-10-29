@@ -51,6 +51,7 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
   app.patch('/v1/seats/:id', c => managerOnly(c, async () => c.json(office.org.updateSeat(c.req.param('id'), SeatInputSchema.omit({ id: true }).partial().strict().parse(await c.req.json())))));
   app.delete('/v1/seats/:id', c => managerOnly(c, () => { office.org.deleteSeat(c.req.param('id')); return c.json({ ok: true }); }));
 
+  app.post('/v1/seats/:id/reset-wakes', c => managerOnly(c, () => c.json(office.org.resetWakeLimit(c.req.param('id')))));
   app.put('/v1/seats/:id/agent', c => managerOnly(c, async () => {
     const { agentId } = z.object({ agentId: z.string().min(1).max(128).nullable() }).strict().parse(await c.req.json());
     return c.json(office.org.assignAgent(c.req.param('id'), agentId));

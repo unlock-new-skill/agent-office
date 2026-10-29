@@ -163,6 +163,13 @@ export class OrgService {
   /** Publishes the current org view; used when only derived state (e.g. listening) changed. */
   publish(): void { this.emit({ type: 'collab', kind: 'org', org: this.view() }); }
 
+  /** Clears a seat's auto-wake counter; parked listeners re-check at once, so waiting mentions are delivered. */
+  resetWakeLimit(seatId: string): Seat {
+    this.seat(seatId);
+    this.mutate(() => this.db.raw.prepare('UPDATE seats SET consecutive_wakes=0 WHERE id=?').run(seatId));
+    return this.seat(seatId);
+  }
+
   private mutate(operation: () => void): void {
     try { this.db.transaction(() => { operation(); this.syncMembership(); }); }
     catch (error) {

@@ -10,7 +10,7 @@ import type { TimeOfDay } from '../map3d/day-night.js';
 import { Map3DStage } from './map-3d-stage.js';
 
 /** publicView: the anonymous /map (no session names, no actions). onDismiss hides a lobby session. */
-type Props = { state: OfficeState; notify: (text: string) => void; publicView?: boolean; onDismiss?: (agentId: string) => Promise<void> };
+type Props = { state: OfficeState; notify: (text: string) => void; publicView?: boolean; onDismiss?: (agentId: string) => Promise<void>; onResetWakes?: (seatId: string) => Promise<void> };
 type Target = { seatId: string } | { agentId: string };
 const LEGEND: SeatStatus[] = ['working', 'listening', 'blocked', 'idle', 'wake_limited', 'offline', 'vacant'];
 const keyOf = (target: Target | null): string | null => target ? ('seatId' in target ? target.seatId : target.agentId) : null;
@@ -26,7 +26,7 @@ const TIMES: Array<{ value: TimeOfDay; label: string; title: string }> = [
 const savedTime = (): TimeOfDay => { try { const value = localStorage.getItem(TIME_KEY); return value === 'day' || value === 'night' ? value : 'auto'; } catch { return 'auto'; } };
 
 /** Office map, 3D (Three.js, default) or 2D pixel canvas: one room per department, a desk per seat, agents with live status. */
-export function MapView({ state, notify, publicView = false, onDismiss }: Props): ReactNode {
+export function MapView({ state, notify, publicView = false, onDismiss, onResetWakes }: Props): ReactNode {
   const host = useRef<HTMLDivElement>(null); const canvas = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0); const [hover, setHover] = useState<{ target: Target; x: number; y: number } | null>(null); const [selected, setSelected] = useState<Target | null>(null);
   const scale = width >= 1200 ? 3 : 2;
@@ -132,7 +132,10 @@ export function MapView({ state, notify, publicView = false, onDismiss }: Props)
         <aside className="map-detail" aria-label="Selected seat">
           <header>{detail.status && <StatusDot status={detail.status} />}<strong>{detail.title}</strong><span className="spacer" /><button type="button" className="icon-btn" aria-label="Close" onClick={() => setSelected(null)}>✕</button></header>
           {detail.lines.map(line => <p key={line}>{line}</p>)}
-          {detail.seat && !publicView && <div className="row-actions"><button type="button" className="btn btn-small" onClick={() => copyJoin(detail.seat!)}>Copy join</button></div>}
+          {detail.seat && !publicView && <div className="row-actions">
+            <button type="button" className="btn btn-small" onClick={() => copyJoin(detail.seat!)}>Copy join</button>
+            {detail.status === 'wake_limited' && onResetWakes && <button type="button" className="btn btn-small btn-warn" onClick={() => { const seatId = detail.seat!.id; onResetWakes(seatId).then(() => notify(`@${seatId} can be woken again.`)).catch(error => notify(errorText(error))); }}>Reset wake limit</button>}
+          </div>}
           {selected && 'agentId' in selected && !publicView && onDismiss && <div className="row-actions"><button type="button" className="btn btn-small" title="Hide from the lobby until this session starts again" onClick={() => { const agentId = selected.agentId; onDismiss(agentId).then(() => setSelected(null)).catch(error => notify(errorText(error))); }}>Dismiss</button></div>}
         </aside>
       )}

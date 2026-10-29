@@ -63,6 +63,17 @@ test('pairing, permission prompt with buttons, approve from Telegram, message ed
   notifier.onEvent({ type: 'collab', kind: 'runners', runners: [{ id: 'r1', label: null, config: { version: 0, seats: [] }, machine: 'mac', online: true, lastSeenAt: 0, seats: [{ seatId: 'dev-be', state: 'failed', sessionId: null, restarts: 5, permissionMode: 'acceptEdits', detail: 'crashed 5×' }] }] });
   await settle();
   assert.ok(calls.some(call => call.method === 'sendMessage' && /Runner seat @dev-be on mac failed: crashed 5×/.test(String(call.body.text))));
+  // Wake limit: the first org view only seeds state; a seat that then hits the limit is reported with a Reset button.
+  notifier.onEvent({ type: 'collab', kind: 'org', org: office.org.view() });
+  insertAgent(fixture.db, 'cc-2'); office.org.assignAgent('dev-fe', 'cc-2');
+  fixture.db.raw.prepare('UPDATE seats SET consecutive_wakes=99 WHERE id=?').run('dev-fe');
+  notifier.onEvent({ type: 'collab', kind: 'org', org: office.org.view() });
+  await settle();
+  const alert = calls.find(call => call.method === 'sendMessage' && String(call.body.text).includes('@dev-fe'))!;
+  assert.match(String(alert.body.text), /auto-wake limit/);
+  updates.push([{ update_id: 9, callback_query: { id: 'q-reset', data: 'w:dev-fe', message: { chat: { id: 42 }, message_id: 200 } } }]);
+  await settle();
+  assert.equal(office.org.seat('dev-fe').consecutiveWakes, 0);
   notifier.stop(); office.close(); fixture.close();
 });
 

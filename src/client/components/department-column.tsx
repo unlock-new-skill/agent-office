@@ -52,6 +52,7 @@ export function DepartmentColumn({ department, state, api, notify }: Props): Rea
             loadHandoff={() => api.get<{ handoff: SeatHandoff | null }>(`/v1/seats/${seat.id}/handoff`).then(result => result.handoff).catch(error => { notify(errorText(error)); throw error; })}
             saveHandoff={body => api.send('PUT', `/v1/seats/${seat.id}/handoff`, { body }).then(() => notify(`Handoff note for @${seat.id} saved.`)).catch(error => { notify(errorText(error)); throw error; })}
             onDelete={() => { if (window.confirm(`Delete seat ${seat.title}? Its tasks become unassigned.`)) run(api.send('DELETE', `/v1/seats/${seat.id}`)); }}
+            onResetWakes={() => run(api.send('POST', `/v1/seats/${seat.id}/reset-wakes`).then(() => notify(`@${seat.id} can be woken again.`)))}
             runner={<SeatRunnerPanel seatId={seat.id} title={seat.title} state={state} api={api} notify={notify} />} />
         ))}
       </div>

@@ -15,6 +15,7 @@ const CHAT_KEY = 'telegram.chat_id';
 const PAIRING_MS = 10 * 60_000; const MAX_SENDS_PER_MINUTE = 20;
 const BACKOFF_MS = [2000, 5000, 15_000, 30_000, 60_000];
 const DECISION = /^p:(a|d):([0-9a-f-]{36})$/;
+const RESET = /^w:([a-z0-9][a-z0-9-]{0,63})$/;
 const OUTCOME: Record<string, string> = { allowed: '✅ Allowed', denied: '❌ Denied', expired: '⌛ Expired — denied' };
 
 /**
@@ -28,6 +29,8 @@ export class TelegramNotifier {
   private readonly pending = new Set<string>();
   private readonly messages = new Map<string, { messageId: number; text: string }>();
   private readonly seatStates = new Map<string, string>();
+  private readonly wakeLimited = new Set<string>();
+  private orgSeen = false;
   private readonly sends: number[] = [];
 
   constructor(private readonly deps: Deps) {}
@@ -54,6 +57,15 @@ export class TelegramNotifier {
   /** Collaboration events from the office; sends are async and never block the emitter. */
   onEvent(event: CollabEvent): void {
     if (event.kind === 'permission') this.onPermissions(event.pending);
+    if (event.kind === 'org') {
+      // Alert when a seat newly hits the auto-wake limit (usually two agents looping); the first view only seeds state.
+      for (const seat of event.org.seats) {
+        const limited = seat.wakeState === 'wake_limited';
+        if (limited && !this.wakeLimited.has(seat.id) && this.orgSeen) this.send(`⛔ @${seat.id} (${seat.title}) hit the auto-wake limit — agents may be looping. It stops reacting to mentions until reset.`, { inline_keyboard: [[{ text: '🔄 Reset', callback_data: `w:${seat.id}` }]] });
+        if (limited) this.wakeLimited.add(seat.id); else this.wakeLimited.delete(seat.id);
+      }
+      this.orgSeen = true;
+    }
     if (event.kind === 'runners') {
       for (const runner of event.runners) for (const seat of runner.seats) {
         const key = `${runner.id}:${seat.seatId}`; const before = this.seatStates.get(key); this.seatStates.set(key, seat.state);
@@ -126,6 +138,13 @@ export class TelegramNotifier {
     }
     const query = update.callback_query;
     if (!query) return;
+    const reset = RESET.exec(query.data ?? '');
+    if (reset && paired && String(query.message?.chat.id) === paired) {
+      let answer = 'Reset — the seat reacts to mentions again';
+      try { this.deps.office.org.resetWakeLimit(reset[1]!); } catch { answer = 'Seat not found'; }
+      await this.deps.client.call('answerCallbackQuery', { callback_query_id: query.id, text: answer });
+      return;
+    }
     const match = DECISION.exec(query.data ?? '');
     if (!paired || String(query.message?.chat.id) !== paired || !match) { await this.deps.client.call('answerCallbackQuery', { callback_query_id: query.id, text: 'Not allowed.' }); return; }
     let answer: string;

@@ -35,3 +35,18 @@ test('UserPromptSubmit telemetry (turn.start) resets the loop guard', async () =
   assert.equal((await (await fixture.agent(devLead, '/v1/wake?wait=0')).json() as Wake).wake, true);
   fixture.close();
 });
+
+test('the manager resets a wake-limited seat remotely and its waiting mention is delivered', async () => {
+  const fixture = createAppFixture({ maxAutoWakes: 1 });
+  const devBe = fixture.seatToken('dev-be');
+  await fixture.manager('/v1/channels/dev/messages', { body: { body: '@dev-be first' } });
+  assert.equal(((await (await fixture.agent(devBe, '/v1/wake?wait=0')).json()) as { wake: boolean }).wake, true);
+  await fixture.agent(fixture.seatToken('dev-fe'), '/v1/channels/dev/messages', { body: { body: '@dev-be second' } });
+  assert.equal(((await (await fixture.agent(devBe, '/v1/wake?wait=0')).json()) as { state: string }).state, 'wake_limit');
+  assert.equal(fixture.office.org.seat('dev-be').wakeState, 'wake_limited');
+  assert.equal((await fixture.agent(devBe, '/v1/seats/dev-be/reset-wakes', { body: {} })).status, 401, 'agents cannot reset');
+  assert.equal((await fixture.manager('/v1/seats/dev-be/reset-wakes', { body: {} })).status, 200);
+  const woke = await (await fixture.agent(devBe, '/v1/wake?wait=0')).json() as { wake: boolean; reason: string };
+  assert.equal(woke.wake, true); assert.match(woke.reason, /second/);
+  fixture.close();
+});
