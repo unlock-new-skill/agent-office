@@ -17,6 +17,9 @@ const PublicMapView = lazy(() => import('./views/public-map-view.js').then(modul
 const SetupView = lazy(() => import('./views/setup-view.js').then(module => ({ default: module.SetupView })));
 const TABS: Array<{ view: View; label: string }> = [{ view: 'chat', label: 'Chat' }, { view: 'map', label: 'Map' }, { view: 'org', label: 'Org' }, { view: 'machines', label: 'Machines' }, { view: 'requests', label: 'Requests' }];
 const DEFAULT_CHANNEL = 'leaders';
+/** Last opened chat room, per browser, so /chat and the Chat tab return to it. */
+const LAST_CHANNEL_KEY = 'agent-office.last-channel';
+const readLastChannel = (): string | null => { try { return localStorage.getItem(LAST_CHANNEL_KEY); } catch { return null; } };
 
 export function App(): ReactNode {
   const [csrfToken, setCsrfToken] = useState<string | null | undefined>(undefined); const [signingIn, setSigningIn] = useState(false);
@@ -37,7 +40,17 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
   const { route, navigate, link } = useRoute();
   // Normalise "/" and unknown paths to their canonical URL without adding a history entry.
   useEffect(() => { if (location.pathname !== routePath(route)) navigate(route, { replace: true }); }, [route, navigate]);
-  const channelId = route.channelId ?? DEFAULT_CHANNEL;
+  const [lastChannel, setLastChannel] = useState(readLastChannel);
+  useEffect(() => {
+    if (route.view !== 'chat' || !route.channelId) return;
+    setLastChannel(route.channelId);
+    try { localStorage.setItem(LAST_CHANNEL_KEY, route.channelId); } catch { /* storage blocked: only this visit remembers */ }
+  }, [route]);
+  const channels = office.state.org?.channels;
+  const rememberedChannel = lastChannel && (!channels || channels.some(channel => channel.id === lastChannel)) ? lastChannel : DEFAULT_CHANNEL;
+  const channelId = route.channelId ?? rememberedChannel;
+  // "/chat" opens the remembered room and shows it in the URL.
+  useEffect(() => { if (route.view === 'chat' && !route.channelId && channels) navigate({ view: 'chat', channelId: rememberedChannel }, { replace: true }); }, [route, channels, rememberedChannel, navigate]);
   const openRequests = Object.values(office.state.tasks).filter(task => task.requesterSeatId && task.status !== 'done').length;
   const [toast, setToast] = useState<string | null>(null);
   const notify = useCallback((text: string) => setToast(text), []);
@@ -50,7 +63,7 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
         <div className="brand"><span className="brand-mark" aria-hidden>◆</span>Agent Office</div>
         <nav className="view-tabs" aria-label="Views">
           {TABS.map(tab => (
-            <a key={tab.view} {...link(tab.view === 'chat' ? { view: 'chat', channelId: route.view === 'chat' ? route.channelId : null } : { view: tab.view, channelId: null })}
+            <a key={tab.view} {...link(tab.view === 'chat' ? { view: 'chat', channelId: route.view === 'chat' ? route.channelId : rememberedChannel } : { view: tab.view, channelId: null })}
               className={route.view === tab.view ? 'active' : ''} aria-current={route.view === tab.view ? 'page' : undefined}>
               {tab.label}{tab.view === 'requests' && openRequests > 0 ? ` (${openRequests})` : ''}
             </a>
