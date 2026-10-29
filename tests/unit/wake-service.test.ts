@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createSeededOffice, insertAgent, type Fixture } from '../helpers/office-fixture.js';
+import { WAKE_COOLDOWN_MS } from '../../src/server/collaboration/wake-service.js';
 
 const seat = (seatId: string) => ({ kind: 'seat' as const, seatId });
 const manager = { kind: 'manager' as const };
@@ -95,6 +96,33 @@ test('loop guard stops ping-pong at the limit; human prompt or manager message r
   assert.equal(org.seat('dev-lead').wakeState, 'wake_limited');
   messages.post(manager, 'dev', 'Manager: carry on');
   assert.equal(wake.check('dev-lead').wake, true);
+  fixture.close();
+});
+
+test('work tools re-arm the loop guard; chatter tools do not', () => {
+  const fixture = createSeededOffice({ maxAutoWakes: 2 }); const { org, messages, wake } = fixture.office; seatAll(fixture, ['dev-lead', 'dev-be']);
+  for (let round = 0; round < 2; round++) { messages.post(seat('dev-be'), 'dev', `@dev-lead r${round}`); wake.check('dev-lead'); }
+  assert.equal(org.seat('dev-lead').wakeState, 'wake_limited');
+  wake.noteToolUse('agent-dev-lead', 'mcp__agent-office__agent_office_send_message');
+  wake.noteToolUse('agent-dev-lead', 'ToolSearch');
+  assert.equal(org.seat('dev-lead').wakeState, 'wake_limited');
+  wake.noteToolUse('agent-dev-lead', 'Edit');
+  assert.equal(org.seat('dev-lead').consecutiveWakes, 0);
+  fixture.close();
+});
+
+test('a limited seat re-arms by itself after the cooldown and is stopped again by a new full budget', () => {
+  const fixture = createSeededOffice({ maxAutoWakes: 2 }); const { org, messages, wake } = fixture.office; seatAll(fixture, ['dev-lead', 'dev-be']);
+  for (let round = 0; round < 2; round++) { messages.post(seat('dev-be'), 'dev', `@dev-lead r${round}`); wake.check('dev-lead'); }
+  messages.post(seat('dev-be'), 'dev', '@dev-lead queued');
+  assert.deepEqual(wake.check('dev-lead'), { wake: false, state: 'wake_limit' });
+  fixture.db.raw.prepare('UPDATE seats SET last_wake_at=? WHERE id=?').run(Date.now() - WAKE_COOLDOWN_MS - 1000, 'dev-lead');
+  const released = wake.check('dev-lead');
+  assert.ok(released.wake && released.items.some(item => item.body.includes('queued')));
+  assert.equal(org.seat('dev-lead').consecutiveWakes, 1);
+  messages.post(seat('dev-be'), 'dev', '@dev-lead again'); wake.check('dev-lead');
+  messages.post(seat('dev-be'), 'dev', '@dev-lead blocked');
+  assert.deepEqual(wake.check('dev-lead'), { wake: false, state: 'wake_limit' });
   fixture.close();
 });
 

@@ -133,7 +133,7 @@ Tab **Tasks** ở panel phải: xem task của phòng, tạo task mới, đổi 
 | Xanh dương | đang làm | — |
 | Vàng | chờ duyệt quyền | bấm **Allow/Deny** ở khung nổi góc phải (nếu bật duyệt từ xa), hoặc vào terminal bấm duyệt |
 | Viền xanh rỗng | **idle — needs nudge**: session còn ghi nhận nhưng không nghe — connector cũ, hoặc session đã chết mà không báo thoát | chạy `update` rồi mở lại session; session chết thì Unassign |
-| Đỏ | **wake limit**: tự dậy liên tiếp 15 lần (chống 2 agent chat vô hạn) | gõ trong terminal hoặc manager nhắn vào kênh |
+| Đỏ | **wake limit**: 15 lượt tự dậy liên tiếp chỉ để chat (không Edit/Bash/Read…) — chống 2 agent chat vô hạn. Lượt có làm việc thật đưa bộ đếm về 0 | tự mở lại sau 15 phút; hoặc gõ trong terminal, manager nhắn vào kênh, nút Reset (web/Telegram) |
 | Viền nét đứt | ghế trống | gán session |
 | Xám | session đã tắt | mở lại hoặc gán session khác |
 

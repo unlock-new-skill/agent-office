@@ -61,7 +61,7 @@ export class TelegramNotifier {
       // Alert when a seat newly hits the auto-wake limit (usually two agents looping); the first view only seeds state.
       for (const seat of event.org.seats) {
         const limited = seat.wakeState === 'wake_limited';
-        if (limited && !this.wakeLimited.has(seat.id) && this.orgSeen) this.send(`⛔ @${seat.id} (${seat.title}) hit the auto-wake limit — agents may be looping. It stops reacting to mentions until reset.`, { inline_keyboard: [[{ text: '🔄 Reset', callback_data: `w:${seat.id}` }]] });
+        if (limited && !this.wakeLimited.has(seat.id) && this.orgSeen) this.send(`⛔ @${seat.id} (${seat.title}) hit the auto-wake limit — chat-only turns in a row, agents may be looping. Mentions wait; it resumes by itself after 15 min quiet, or reset now.`, { inline_keyboard: [[{ text: '🔄 Reset', callback_data: `w:${seat.id}` }]] });
         if (limited) this.wakeLimited.add(seat.id); else this.wakeLimited.delete(seat.id);
       }
       this.orgSeen = true;

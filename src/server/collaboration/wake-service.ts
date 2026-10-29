@@ -10,6 +10,11 @@ type Waiter = { seatId: string; finish: (result: WakeResult) => void; recheck: (
 const MAX_REASON = 4000; const MAX_ITEM = 400; const MAX_WAITERS = 64; const MAX_SCAN = 200;
 /** A leader quiet this long, and not parked waiting for work, is treated as unavailable so the deputy stands in. */
 const LEADER_IDLE_MS = 10 * 60_000;
+/** A seat stopped by the auto-wake limit re-arms by itself after this long without an automatic wake. */
+export const WAKE_COOLDOWN_MS = 15 * 60_000;
+/** Tools that only talk or keep notes: a turn using nothing else is chatter and counts toward the auto-wake limit. */
+const CHATTER_TOOLS = new Set(['ToolSearch', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'Skill', 'ListMcpResourcesTool', 'ReadMcpResourceTool']);
+export const isWorkTool = (tool: string): boolean => !tool.startsWith('mcp__agent-office__') && !CHATTER_TOOLS.has(tool);
 
 /**
  * Decides when a seated Claude session should be woken (Stop hook / wait_for_message) and hands it the unread items.
@@ -29,16 +34,18 @@ export class WakeService {
     if (!seat.agentId) return { wake: false, state: 'unseated' };
     if (this.agentEnded(seat.agentId)) return { wake: false, state: 'ended' };
     if (this.org.department(seat.departmentId).paused) return { wake: false, state: 'paused' };
-    if (seat.consecutiveWakes >= this.maxAutoWakes) return { wake: false, state: 'wake_limit' };
+    if (seat.consecutiveWakes >= this.maxAutoWakes && !this.cooledDown(seatId)) return { wake: false, state: 'wake_limit' };
     const pending = this.pending(seatId);
     if (pending.items.length === 0) return { wake: false, state: 'timeout' };
     const standIn = this.standingInFor(seatId);
     const count = this.db.transaction(() => {
       for (const [channelId, lastSeq] of pending.channelHighWater) this.messages.markRead(seatId, channelId, lastSeq);
-      this.db.raw.prepare('UPDATE seats SET consecutive_wakes=consecutive_wakes+1 WHERE id=?').run(seatId);
-      return seat.consecutiveWakes + 1;
+      // After a cooldown release the count starts over, so a real loop is stopped again after another full budget.
+      const before = seat.consecutiveWakes >= this.maxAutoWakes ? 0 : seat.consecutiveWakes;
+      this.db.raw.prepare('UPDATE seats SET consecutive_wakes=?,last_wake_at=? WHERE id=?').run(before + 1, Date.now(), seatId);
+      return before + 1;
     });
-    if (count >= this.maxAutoWakes) this.org.publish();
+    if (count >= this.maxAutoWakes || seat.consecutiveWakes >= this.maxAutoWakes) this.org.publish();
     return { wake: true, reason: this.formatReason(seatId, pending.items, pending.otherUnread, standIn), items: pending.items };
   }
 
@@ -83,6 +90,9 @@ export class WakeService {
     this.org.publish();
   }
 
+  /** A turn that does real work (edits, shell, reads…) is progress, not ping-pong: it re-arms the auto-wake budget. */
+  noteToolUse(agentId: string, tool: string): void { if (isWorkTool(tool)) this.resetGuardForAgent(agentId); }
+
   waiterCount(): number { return this.waiters.size; }
   close(): void { for (const waiter of [...this.waiters]) waiter.finish({ wake: false, state: 'shutdown' }); }
 
@@ -100,6 +110,11 @@ export class WakeService {
       items.push(...waking); channelHighWater.set(channel.id, channel.lastSeq); unreadInWokenChannels += channel.unread;
     }
     return { items, channelHighWater, otherUnread: Math.max(unreadInWokenChannels - items.length, 0) };
+  }
+
+  private cooledDown(seatId: string): boolean {
+    const row = this.db.raw.prepare('SELECT last_wake_at AS lastWakeAt FROM seats WHERE id=?').get(seatId) as { lastWakeAt: number | null } | undefined;
+    return !row?.lastWakeAt || Date.now() - row.lastWakeAt >= WAKE_COOLDOWN_MS;
   }
 
   /** A session that ended (SessionEnd) must not consume mentions meant for whoever takes the seat next. */

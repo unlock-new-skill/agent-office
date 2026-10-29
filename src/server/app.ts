@@ -132,6 +132,7 @@ export const createApp = (context: AppContext): Hono => {
       const event = context.events.append({ ...body, source: 'claude', producerId: credential.id, producerIncarnation: credential.incarnation, agentId: credential.agentId, sessionId: credential.sessionId, incarnation: credential.incarnation, project: credential.project });
       // A prompt written by Agent Office (runner wake) is not a human taking over: keep the auto-wake guard counting.
       if (body.kind === 'turn.start' && body.summary !== AUTO_TURN_SUMMARY) context.office.wake.resetGuardForAgent(credential.agentId);
+      if (body.kind === 'tool.start' && body.tool) context.office.wake.noteToolUse(credential.agentId, body.tool);
       if (body.kind === 'turn.start' || body.kind === 'session.end') context.office.permissions.settleForAgent(credential.agentId);
       if (body.kind === 'session.end') context.office.runners.clearTakeover(credential.agentId);
       if (model) context.db.raw.prepare('UPDATE agents SET model=? WHERE id=?').run(model, credential.agentId);

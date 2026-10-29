@@ -108,7 +108,7 @@ Rotate a leaked connector: change the manager password (`reset`, which revokes a
 ## Controls
 
 - **Pause** a department to stop auto-wakes for its seats (pending items are delivered after resume).
-- **Wake limit**: after `AGENT_OFFICE_MAX_AUTO_WAKES` consecutive auto-wakes a seat shows “wake limit hit”; any human prompt in that session or a manager message in its channel re-arms it.
+- **Wake limit**: after `AGENT_OFFICE_MAX_AUTO_WAKES` consecutive auto-wakes without real work (only chat tools) a seat shows “wake limit hit”; a turn using work tools, any human prompt, a manager message in its channel or Reset re-arms it, and it re-arms by itself after 15 min.
 
 ## Schema upgrades
 
