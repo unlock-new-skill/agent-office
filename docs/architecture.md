@@ -91,7 +91,7 @@ Schema v10. `POST /v1/machines` creates a runner row (`m-…`) before anything i
 
 ## Model and working time
 
-On Stop the hook reads the transcript tail (`transcript_path`) and sends the model of the latest non-synthetic assistant reply as `model` on `turn.stop`; the daemon stores it in `agents.model`. A turn starts at `turn.start`, or at its first `tool.start` when a Stop-hook wake skipped UserPromptSubmit; when it ends (`turn.stop`/`session.end`) its duration (capped at 6 h) is added to `seats.work_ms` of the seat the session sits in (schema v12). Both appear on the 3D desk plates, map tooltips and the public map.
+On Stop the hook reads the transcript tail (`transcript_path`) and sends the model of the latest non-synthetic assistant reply as `model` on `turn.stop`; the daemon stores it in `agents.model`. Working time is activity-based: every telemetry event adds the gap since the session's previous event (`agents.work_mark`, schema v14; at most 15 min per gap) to `seats.work_ms` of the seat the session sits in, unless that previous event was `turn.stop`, `session.end` or `permission.request`. Turns cut off without a stop (runner restart, crash) therefore still count, and idle time never does. Both appear on the 3D desk plates, map tooltips and the public map.
 
 ## Code map
 

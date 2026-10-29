@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -43,6 +43,7 @@ const V11_COLUMNS = 'ALTER TABLE agents ADD COLUMN dismissed_at INTEGER;';
 /** v12: total time each seat spent working (summed over its sessions' turns) and the model a session last answered with. */
 const V12_COLUMNS = 'ALTER TABLE seats ADD COLUMN work_ms INTEGER NOT NULL DEFAULT 0; ALTER TABLE agents ADD COLUMN model TEXT;';
 const V13_COLUMNS = 'ALTER TABLE seats ADD COLUMN last_wake_at INTEGER;';
+const V14_COLUMNS = 'ALTER TABLE agents ADD COLUMN work_mark INTEGER;';
 const THREAD_INDEX = 'CREATE INDEX messages_thread ON messages(channel_id, thread_seq);';
 
 /** v4 additions: seat handoff notes and remotely answerable permission prompts. */
@@ -126,6 +127,7 @@ export class Database {
         if (from < 11) this.raw.exec(V11_COLUMNS);
         if (from < 12) this.raw.exec(V12_COLUMNS);
         if (from < 13) this.raw.exec(V13_COLUMNS);
+        if (from < 14) this.raw.exec(V14_COLUMNS);
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
       return;
@@ -218,6 +220,7 @@ export class Database {
       ${V11_COLUMNS}
       ${V12_COLUMNS}
       ${V13_COLUMNS}
+      ${V14_COLUMNS}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

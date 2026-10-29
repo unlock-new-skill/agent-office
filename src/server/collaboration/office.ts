@@ -9,10 +9,12 @@ import { TaskService } from './task-service.js';
 import { StatusCheck, type StatusCheckOptions } from './status-check.js';
 import { WakeService } from './wake-service.js';
 
+/** Longest gap between two events of an active session that still counts as work. */
+export const WORK_GAP_MS = 15 * 60_000;
 export type OfficeOptions = { maxAutoWakes: number; emit: (event: CollabEvent) => void; remoteApproval?: boolean; statusCheck?: StatusCheckOptions | null };
 /** handoff = the seat's raw note; handoffBrief = note + open tasks + unread, ready to inject into a session's context. */
 export type WhoAmI = { agentId: string; seat: Seat | null; department: Department | null; channels: ChannelSummary[]; handoff: SeatHandoff | null; handoffBrief: string | null };
-export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; recordWork: (agentId: string, ms: number) => void; close: () => void };
+export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; trackWork: (agentId: string, kind: string, ts: string) => void; close: () => void };
 
 /** Wires the collaboration services around one database and one realtime emitter. */
 export const createOffice = (db: Database, options: OfficeOptions): Office => {
@@ -34,13 +36,23 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
     const self = { kind: 'seat', seatId: seat.id } as const;
     return { agentId, seat, department: org.department(seat.departmentId), channels: messages.channelsForSeat(seat.id), handoff: handoffs.get(self, seat.id), handoffBrief: handoffs.brief(seat.id, options) };
   };
-  /** Adds one finished turn to the working time of the seat the session sits in (bounded against clock skew). */
-  const recordWork = (agentId: string, ms: number): void => {
-    const seat = org.seatForAgent(agentId);
-    if (!seat || !Number.isFinite(ms) || ms <= 0) return;
-    db.raw.prepare('UPDATE seats SET work_ms=work_ms+? WHERE id=?').run(Math.min(Math.round(ms), 6 * 3_600_000), seat.id);
-    org.publish();
+  /**
+   * Working time of a seat = time its session is active. Every telemetry event adds the gap since the previous event of
+   * the same session (at most WORK_GAP_MS, so an idle or crashed session does not count), unless the previous event ended
+   * the turn or waits for a human (turn.stop, session.end, permission.request). Robust to turns that never send a stop.
+   */
+  const trackWork = (agentId: string, kind: string, ts: string): void => {
+    const at = Date.parse(ts); const seat = org.seatForAgent(agentId);
+    if (!Number.isFinite(at)) return;
+    const mark = (db.raw.prepare('SELECT work_mark AS mark FROM agents WHERE id=?').get(agentId) as { mark: number | null } | undefined)?.mark ?? null;
+    if (seat && mark !== null && at > mark) {
+      const before = Math.floor(seat.workMs / 60_000);
+      db.raw.prepare('UPDATE seats SET work_ms=work_ms+? WHERE id=?').run(Math.min(at - mark, WORK_GAP_MS), seat.id);
+      if (Math.floor((seat.workMs + Math.min(at - mark, WORK_GAP_MS)) / 60_000) !== before) org.publish();
+    }
+    const pauses = kind === 'turn.stop' || kind === 'session.end' || kind === 'permission.request';
+    db.raw.prepare('UPDATE agents SET work_mark=? WHERE id=?').run(pauses ? null : Math.max(mark ?? 0, at), agentId);
   };
   const touchAgent = (agentId: string): void => { db.raw.prepare('UPDATE agents SET last_contact_at=? WHERE id=?').run(Date.now(), agentId); };
-  return { org, messages, wake: wakeService, tasks, handoffs, permissions, runners, whoami, touchAgent, recordWork, close: () => { clearInterval(sweep); if (statusTimer) clearInterval(statusTimer); wakeService.close(); permissions.close(); runners.close(); } };
+  return { org, messages, wake: wakeService, tasks, handoffs, permissions, runners, whoami, touchAgent, trackWork, close: () => { clearInterval(sweep); if (statusTimer) clearInterval(statusTimer); wakeService.close(); permissions.close(); runners.close(); } };
 };
