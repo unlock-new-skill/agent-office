@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { errorText } from '../api/http.js';
 import { Composer } from '../components/composer.js';
 import { MembersPanel } from '../components/members-panel.js';
@@ -10,13 +10,37 @@ import type { ChatMessage } from '../../shared/contracts.js';
 import { threadKey } from '../state/office-store.js';
 import type { OfficeHandle } from '../state/use-office.js';
 
+/** Last open thread (`<channel>:<seq>`), per browser, reopened when coming back to that room. */
+const THREAD_KEY = 'agent-office.last-thread';
+type OpenThread = { channelId: string; seq: number };
+const readThread = (channelId: string): OpenThread | null => {
+  const fromUrl = Number(new URLSearchParams(location.search).get('thread'));
+  if (Number.isInteger(fromUrl) && fromUrl > 0) return { channelId, seq: fromUrl };
+  try {
+    const [channel, seq] = (localStorage.getItem(THREAD_KEY) ?? '').split(':');
+    return channel === channelId && Number.isInteger(Number(seq)) && Number(seq) > 0 ? { channelId, seq: Number(seq) } : null;
+  } catch { return null; }
+};
+
 type Props = { office: OfficeHandle; channelId: string; onSelectChannel: (channelId: string) => void; notify: (text: string) => void };
 
 export function ChatView({ office, channelId, onSelectChannel, notify }: Props): ReactNode {
   const { state, api, loadHistory, loadOlder, markRead, loadThread } = office;
   const [panel, setPanel] = useState<'members' | 'tasks' | null>(null);
-  const [threadSeq, setThreadSeq] = useState<number | null>(null);
-  useEffect(() => setThreadSeq(null), [channelId]);
+  const [thread, setThread] = useState<OpenThread | null>(() => readThread(channelId));
+  useEffect(() => { setThread(current => current?.channelId === channelId ? current : readThread(channelId)); }, [channelId]);
+  const threadSeq = thread?.channelId === channelId ? thread.seq : null;
+  const setThreadSeq = (seq: number | null): void => setThread(seq === null ? null : { channelId, seq });
+  // The open thread lives in the URL (?thread=<seq>) and in storage, so reloads and links reopen it.
+  useEffect(() => {
+    const url = new URL(location.href);
+    if (threadSeq !== null) url.searchParams.set('thread', String(threadSeq)); else url.searchParams.delete('thread');
+    if (url.href !== location.href) history.replaceState(history.state, '', url);
+    try {
+      if (threadSeq !== null) localStorage.setItem(THREAD_KEY, `${channelId}:${threadSeq}`);
+      else if (localStorage.getItem(THREAD_KEY)?.startsWith(`${channelId}:`)) localStorage.removeItem(THREAD_KEY);
+    } catch { /* storage blocked: the URL still carries the thread */ }
+  }, [channelId, threadSeq]);
   useEffect(() => {
     if (!panel) return;
     const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') setPanel(null); };
@@ -28,6 +52,14 @@ export function ChatView({ office, channelId, onSelectChannel, notify }: Props):
 
   useEffect(() => { if (channel && !messages) void loadHistory(channelId).catch(error => notify(errorText(error))); }, [channel, channelId, messages, loadHistory, notify]);
   useEffect(() => { if (channel) markRead(channelId, channel.lastSeq); }, [channel, channelId, markRead]);
+  const threadLoaded = threadSeq !== null && Boolean(state.threads[threadKey(channelId, threadSeq)]);
+  const requestedThread = useRef<string | null>(null);
+  useEffect(() => {
+    if (!channel || threadSeq === null || threadLoaded || requestedThread.current === threadKey(channelId, threadSeq)) return;
+    requestedThread.current = threadKey(channelId, threadSeq);
+    // A thread that no longer exists (deleted, wrong link) just closes.
+    loadThread(channelId, threadSeq).catch(() => setThread(null));
+  }, [channel, channelId, threadSeq, threadLoaded, loadThread]);
 
   if (!state.org) return <div className="loading">Loading office…</div>;
   if (!channel) return <div className="chat-layout"><Sidebar state={state} channelId={channelId} onSelect={onSelectChannel} /><main className="chat-main"><p className="empty">Channel not found.</p></main></div>;
@@ -40,7 +72,7 @@ export function ChatView({ office, channelId, onSelectChannel, notify }: Props):
   const send = async (body: string, inThread?: number): Promise<void> => {
     try { await api.send('POST', `${path}/messages`, inThread ? { body, threadSeq: inThread } : { body }); } catch (error) { notify(errorText(error)); throw error; }
   };
-  const openThread = (message: ChatMessage): void => { setThreadSeq(message.seq); loadThread(channelId, message.seq).catch(error => notify(errorText(error))); };
+  const openThread = (message: ChatMessage): void => setThreadSeq(message.seq);
   const subtitle = channel.kind === 'leaders' ? 'All department leaders' : `${department?.name ?? ''} department${department?.paused ? ' · paused' : ''}`;
 
   return (

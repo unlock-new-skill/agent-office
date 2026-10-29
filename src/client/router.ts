@@ -25,7 +25,10 @@ export const useRoute = (): { route: Route; navigate: (route: Route, options?: {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
   const navigate = useCallback((next: Route, options: { replace?: boolean } = {}) => {
-    const url = `${routePath(next)}${location.search}`;
+    // A thread belongs to one room: leaving the page drops ?thread=, other query params (e.g. ?hour=) stay.
+    const params = new URLSearchParams(location.search);
+    if (routePath(next) !== location.pathname) params.delete('thread');
+    const query = params.toString(); const url = `${routePath(next)}${query ? `?${query}` : ''}`;
     if (url !== `${location.pathname}${location.search}`) history[options.replace ? 'replaceState' : 'pushState'](null, '', url);
     setRoute(next);
   }, []);
