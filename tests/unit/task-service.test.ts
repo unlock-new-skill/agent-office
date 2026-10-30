@@ -109,3 +109,20 @@ test('after a member finishes its own task, its runner seat compacts when the tu
   assert.equal(runners.commands('dev-lead').length, 0, 'leaders keep their context');
   fixture.close();
 });
+
+test('what happens after a task follows the seat setting, else the office default', () => {
+  const fixture = createSeededOffice({ afterTask: 'compact' }); const office = fixture.office; seatAll(fixture, ['dev-lead', 'dev-be', 'dev-fe']);
+  const idle = (seatId: string) => ({ seatId, state: 'idle' as const, sessionId: null, restarts: 0, permissionMode: 'bypassPermissions' as const, detail: '' });
+  office.runners.register('runner-1', 'mac', [idle('dev-be'), idle('dev-fe')]);
+  const finish = (seatId: string): void => {
+    const task = office.tasks.create(seat('dev-lead'), { title: `Work ${seatId}`, body: REQ, assigneeSeatId: seatId });
+    office.tasks.update(seat(seatId), task.id, { status: 'done' }); office.onTurnStop(`agent-${seatId}`);
+  };
+  office.org.setAfterTask('dev-be', 'off');
+  assert.equal(office.setAfterTaskDefault('clear'), 'clear');
+  finish('dev-be'); finish('dev-fe');
+  assert.equal(office.runners.commands('dev-be').length, 0, 'seat set to off');
+  assert.equal(office.runners.commands('dev-fe')[0]?.kind, 'fresh', 'office default clear');
+  assert.equal(office.setAfterTaskDefault(null), 'compact', 'clearing the setting falls back to the env default');
+  fixture.close();
+});

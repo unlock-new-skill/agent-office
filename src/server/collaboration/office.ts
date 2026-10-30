@@ -1,5 +1,5 @@
 import type { Database } from '../db/database.js';
-import type { CollabEvent, Department, Seat, SeatHandoff, Task } from '../../shared/contracts.js';
+import type { AfterTask, CollabEvent, Department, Seat, SeatHandoff, Task } from '../../shared/contracts.js';
 import { HandoffService } from './handoff-service.js';
 import { PermissionService } from './permission-service.js';
 import { RunnerService } from './runner-service.js';
@@ -12,11 +12,13 @@ import { WakeService } from './wake-service.js';
 /** Longest gap between two events of an active session that still counts as work. */
 export const WORK_GAP_MS = 15 * 60_000;
 export type OfficeOptions = { maxAutoWakes: number; emit: (event: CollabEvent) => void; remoteApproval?: boolean; statusCheck?: StatusCheckOptions | null; coordinatorSeatId?: string | null; afterTask?: AfterTask };
-/** What a member's runner seat does with its context once it finishes a task: compact it, start a new session, or nothing. */
-export type AfterTask = 'compact' | 'clear' | 'off';
+export type { AfterTask };
+const AFTER_TASK_KEY = 'after_task.default';
 /** handoff = the seat's raw note; handoffBrief = note + open tasks + unread, ready to inject into a session's context. */
 export type WhoAmI = { agentId: string; seat: Seat | null; department: Department | null; channels: ChannelSummary[]; handoff: SeatHandoff | null; handoffBrief: string | null };
-export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; trackWork: (agentId: string, kind: string, ts: string) => void; onTurnStop: (agentId: string) => void; close: () => void };
+export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; trackWork: (agentId: string, kind: string, ts: string) => void; onTurnStop: (agentId: string) => void;
+  /** Office-wide default for what members do after a task (manager setting, else the env default). */
+  afterTaskDefault: () => AfterTask; setAfterTaskDefault: (mode: AfterTask | null) => AfterTask; close: () => void };
 
 /** Wires the collaboration services around one database and one realtime emitter. */
 export const createOffice = (db: Database, options: OfficeOptions): Office => {
@@ -30,12 +32,18 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
    * its runner seat compacts (`/compact`, keeping a summary) or restarts in a new session (handoff note, tasks and unread
    * messages carry over) as soon as that turn ends. Seats run from a terminal, or with another task in progress, are left alone.
    */
-  const afterTask = options.afterTask ?? 'off';
+  const afterTaskDefault = (): AfterTask => ((db.raw.prepare('SELECT value FROM app_settings WHERE key=?').get(AFTER_TASK_KEY) as { value: AfterTask } | undefined)?.value ?? options.afterTask ?? 'off');
+  const setAfterTaskDefault = (mode: AfterTask | null): AfterTask => {
+    if (mode) db.raw.prepare('INSERT INTO app_settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(AFTER_TASK_KEY, mode);
+    else db.raw.prepare('DELETE FROM app_settings WHERE key=?').run(AFTER_TASK_KEY);
+    return afterTaskDefault();
+  };
+  const afterTaskOf = (seat: Seat): AfterTask => seat.afterTask ?? afterTaskDefault();
   const clearPending = new Map<string, string>();
   const markForClear = (task: Task): void => {
-    if (afterTask === 'off' || !task.assigneeSeatId) return;
+    if (!task.assigneeSeatId) return;
     const seat = org.seat(task.assigneeSeatId);
-    if (seat.role === 'leader' || org.department(seat.departmentId).deputySeatId === seat.id) return;
+    if (afterTaskOf(seat) === 'off' || seat.role === 'leader' || org.department(seat.departmentId).deputySeatId === seat.id) return;
     clearPending.set(seat.id, task.id);
   };
   const tasks = new TaskService(db, org, messages, options.emit, options.coordinatorSeatId ?? null, markForClear);
@@ -74,8 +82,9 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
     clearPending.delete(seat.id);
     if (db.raw.prepare("SELECT 1 FROM tasks WHERE assignee_seat_id=? AND status='doing'").get(seat.id)) return;
     const focus = `/compact Task ${done} is done. Keep: who you are (seat @${seat.id}), your open tasks and their state, decisions, file paths and commits the next task needs. Drop the finished task's step-by-step work, tool output and logs.`;
-    try { runners.enqueue(seat.id, afterTask === 'clear' ? 'fresh' : 'prompt', afterTask === 'clear' ? null : focus, `auto: ${done} done`); } catch { /* not run by an online runner: keep the session */ }
+    const mode = afterTaskOf(seat); if (mode === 'off') return;
+    try { runners.enqueue(seat.id, mode === 'clear' ? 'fresh' : 'prompt', mode === 'clear' ? null : focus, `auto: ${done} done`); } catch { /* not run by an online runner: keep the session */ }
   };
   const touchAgent = (agentId: string): void => { db.raw.prepare('UPDATE agents SET last_contact_at=? WHERE id=?').run(Date.now(), agentId); };
-  return { org, messages, wake: wakeService, tasks, handoffs, permissions, runners, whoami, touchAgent, trackWork, onTurnStop, close: () => { clearInterval(sweep); if (statusTimer) clearInterval(statusTimer); wakeService.close(); permissions.close(); runners.close(); } };
+  return { org, messages, wake: wakeService, tasks, handoffs, permissions, runners, whoami, touchAgent, trackWork, onTurnStop, afterTaskDefault, setAfterTaskDefault, close: () => { clearInterval(sweep); if (statusTimer) clearInterval(statusTimer); wakeService.close(); permissions.close(); runners.close(); } };
 };

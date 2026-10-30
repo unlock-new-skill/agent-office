@@ -13,7 +13,7 @@ export const publicMap = (org: OrgView, agents: AgentSnapshot[], now = Date.now(
   return {
     org: {
       departments: org.departments.map(department => ({ ...department, deputySeatId: null })),
-      seats: org.seats.map(seat => ({ ...seat, description: '', agentId: seat.agentId ? alias(seat.agentId) : null })),
+      seats: org.seats.map(seat => ({ ...seat, description: '', afterTask: null, agentId: seat.agentId ? alias(seat.agentId) : null })),
       channels: [],
     },
     agents: visible.map(agent => ({

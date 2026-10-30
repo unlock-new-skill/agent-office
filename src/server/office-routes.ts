@@ -51,6 +51,10 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
   app.patch('/v1/seats/:id', c => managerOnly(c, async () => c.json(office.org.updateSeat(c.req.param('id'), SeatInputSchema.omit({ id: true }).partial().strict().parse(await c.req.json())))));
   app.delete('/v1/seats/:id', c => managerOnly(c, () => { office.org.deleteSeat(c.req.param('id')); return c.json({ ok: true }); }));
 
+  const AfterTaskSchema = z.enum(['compact', 'clear', 'off']);
+  app.put('/v1/seats/:id/after-task', c => managerOnly(c, async () => c.json(office.org.setAfterTask(c.req.param('id'), z.object({ mode: AfterTaskSchema.nullable() }).strict().parse(await c.req.json()).mode))));
+  app.get('/v1/settings/after-task', c => managerOnly(c, () => c.json({ mode: office.afterTaskDefault() })));
+  app.put('/v1/settings/after-task', c => managerOnly(c, async () => c.json({ mode: office.setAfterTaskDefault(z.object({ mode: AfterTaskSchema.nullable() }).strict().parse(await c.req.json()).mode) })));
   app.post('/v1/seats/:id/reset-wakes', c => managerOnly(c, () => c.json(office.org.resetWakeLimit(c.req.param('id')))));
   app.put('/v1/seats/:id/agent', c => managerOnly(c, async () => {
     const { agentId } = z.object({ agentId: z.string().min(1).max(128).nullable() }).strict().parse(await c.req.json());

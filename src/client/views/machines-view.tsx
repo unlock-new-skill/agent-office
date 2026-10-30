@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import type { MachineSeat, MachineSession, RunnerCommandKind, RunnerView } from '../../shared/contracts.js';
+import type { AfterTask, MachineSeat, MachineSession, RunnerCommandKind, RunnerView } from '../../shared/contracts.js';
 import { errorText, type Api } from '../api/http.js';
 import { CommandRow } from '../components/command-row.js';
 import type { OfficeState } from '../state/office-store.js';
@@ -14,6 +14,12 @@ const MODES: Array<{ value: MachineSeat['permissionMode']; label: string }> = [
 /** Suggestions only; any model name the machine's Claude Code (or its proxy) accepts can be typed. */
 const MODELS = ['claude-opus-5-5', 'gpt-6-astra', 'opus', 'sonnet'];
 const STATE_LABEL: Record<string, string> = { starting: 'starting', running: 'working', idle: 'listening', stopped: 'stopped', failed: 'failed' };
+const AFTER_TASK: Array<{ value: AfterTask; label: string; hint: string }> = [
+  { value: 'compact', label: 'Compact', hint: 'nén context, giữ tóm tắt' },
+  { value: 'clear', label: 'Clear', hint: 'mở session mới, chỉ giữ ghi chú bàn giao + task + tin nhắn' },
+  { value: 'off', label: 'Không làm gì', hint: 'giữ nguyên context' },
+];
+const afterTaskLabel = (mode: AfterTask): string => AFTER_TASK.find(option => option.value === mode)?.label ?? mode;
 const shortPath = (value: string): string => value.split(/[\\/]/).filter(Boolean).slice(-2).join('/') || value;
 const ago = (ts: number): string => { const minutes = Math.round((Date.now() - ts) / 60_000); return minutes < 1 ? 'vừa xong' : minutes < 60 ? `${minutes} phút trước` : `${Math.round(minutes / 60)} giờ trước`; };
 
@@ -34,6 +40,11 @@ function ConfirmButton({ label, confirm, title, disabled, onConfirm }: { label: 
  */
 export function MachinesView({ state, api, notify }: Props): ReactNode {
   const [label, setLabel] = useState('');
+  const [afterTask, setAfterTask] = useState<AfterTask | null>(null);
+  useEffect(() => { api.get<{ mode: AfterTask }>('/v1/settings/after-task').then(result => setAfterTask(result.mode)).catch(() => undefined); }, [api]);
+  const changeAfterTask = (mode: AfterTask): void => {
+    api.send<{ mode: AfterTask }>('PUT', '/v1/settings/after-task', { mode }).then(result => { setAfterTask(result.mode); notify(`Mặc định sau khi xong task: ${afterTaskLabel(result.mode)}.`); }).catch(error => notify(errorText(error)));
+  };
   const add = (event: FormEvent): void => {
     event.preventDefault();
     if (!label.trim()) return;
@@ -49,13 +60,20 @@ export function MachinesView({ state, api, notify }: Props): ReactNode {
           <button type="submit" className="btn btn-small btn-primary" disabled={!label.trim()}>Thêm máy</button>
         </form>
       </header>
+      <div className="after-task-default">
+        <label htmlFor="after-task-default">Khi agent thành viên xong task</label>
+        <select id="after-task-default" value={afterTask ?? ''} disabled={!afterTask} onChange={event => changeAfterTask(event.target.value as AfterTask)}>
+          {AFTER_TASK.map(option => <option key={option.value} value={option.value}>{option.label} — {option.hint}</option>)}
+        </select>
+        <span className="muted">Mặc định cho mọi ghế chạy bằng runner; chỉnh riêng từng ghế ở cột "Sau task". Lead / deputy không áp dụng.</span>
+      </div>
       {state.runners.length === 0 && <p className="muted">Chưa có máy nào. Thêm máy, bấm "Lệnh cài", chạy lệnh đó trên máy là xong.</p>}
-      <div className="machine-list">{state.runners.map(runner => <MachineCard key={runner.id} runner={runner} state={state} api={api} notify={notify} />)}</div>
+      <div className="machine-list">{state.runners.map(runner => <MachineCard key={runner.id} runner={runner} state={state} api={api} notify={notify} afterTaskDefault={afterTask} />)}</div>
     </div>
   );
 }
 
-function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state: OfficeState; api: Api; notify: (text: string) => void }): ReactNode {
+function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner: RunnerView; state: OfficeState; api: Api; notify: (text: string) => void; afterTaskDefault: AfterTask | null }): ReactNode {
   const [draft, setDraft] = useState<MachineSeat[]>(runner.config.seats);
   const [dirty, setDirty] = useState(false); const [saving, setSaving] = useState(false);
   const [install, setInstall] = useState<Install | null>(null); const [os, setOs] = useState<'unix' | 'windows'>(() => navigator.userAgent.includes('Windows') ? 'windows' : 'unix');
@@ -96,6 +114,13 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
       notify(failed ? `Khởi động lại ${runningSeats.length - failed}/${runningSeats.length} ghế; ${failed} ghế lỗi.` : `Đang khởi động lại ${runningSeats.length} ghế.`);
     });
   };
+  const setSeatAfterTask = (seatId: string, mode: AfterTask | null): void => {
+    api.send('PUT', `/v1/seats/${seatId}/after-task`, { mode }).then(() => notify(`@${seatId} sau task: ${mode ? afterTaskLabel(mode) : 'theo mặc định'}.`)).catch(error => notify(errorText(error)));
+  };
+  const leadLike = (seatId: string): boolean => {
+    const seat = orgSeats.find(candidate => candidate.id === seatId);
+    return !seat || seat.role === 'leader' || state.org?.departments.some(department => department.deputySeatId === seatId) === true;
+  };
   const name = runner.label ?? (runner.machine || runner.id);
   const presence = runner.lastSeenAt === 0 ? 'chưa cài' : runner.online ? 'online' : `offline · ${ago(runner.lastSeenAt)}`;
 
@@ -122,9 +147,9 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
       )}
 
       <table className="machine-seats">
-        <thead><tr><th>Ghế</th><th>Thư mục repo</th><th>Model</th><th>Quyền</th><th>Session</th><th>Tự chạy</th><th title="Mở cửa sổ Terminal trên máy để xem session trực tiếp">Cửa sổ</th><th>Trạng thái</th><th>Điều khiển</th><th><span className="sr-only">Xoá</span></th></tr></thead>
+        <thead><tr><th>Ghế</th><th>Thư mục repo</th><th>Model</th><th>Quyền</th><th>Session</th><th>Tự chạy</th><th title="Mở cửa sổ Terminal trên máy để xem session trực tiếp">Cửa sổ</th><th title="Khi agent thành viên tự đánh dấu xong task">Sau task</th><th>Trạng thái</th><th>Điều khiển</th><th><span className="sr-only">Xoá</span></th></tr></thead>
         <tbody>
-          {draft.length === 0 && <tr><td colSpan={10} className="muted">Chưa có ghế. Bấm "+ Thêm ghế".</td></tr>}
+          {draft.length === 0 && <tr><td colSpan={11} className="muted">Chưa có ghế. Bấm "+ Thêm ghế".</td></tr>}
           {draft.map((seat, index) => {
             const live = status(seat.seatId); const chosen = sessions.find(session => session.sessionId === seat.sessionId);
             return (
@@ -149,6 +174,12 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
                 </td>
                 <td data-label="Tự chạy"><input type="checkbox" aria-label="Tự chạy khi runner khởi động" checked={seat.autoStart} onChange={event => edit(index, { autoStart: event.target.checked })} /></td>
                 <td data-label="Cửa sổ"><input type="checkbox" aria-label="Mở cửa sổ theo dõi session trên desktop của máy" checked={seat.showWindow !== false} onChange={event => edit(index, { showWindow: event.target.checked })} /></td>
+                <td data-label="Sau task">{leadLike(seat.seatId)
+                  ? <span className="muted" title="Lead và deputy giữ nguyên context">Lead — không áp dụng</span>
+                  : <select aria-label={`Sau khi @${seat.seatId} xong task`} value={orgSeats.find(candidate => candidate.id === seat.seatId)?.afterTask ?? ''} onChange={event => setSeatAfterTask(seat.seatId, (event.target.value || null) as AfterTask | null)}>
+                      <option value="">Mặc định{afterTaskDefault ? ` (${afterTaskLabel(afterTaskDefault)})` : ''}</option>
+                      {AFTER_TASK.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>}</td>
                 <td data-label="Trạng thái" className={`runner-state state-${live?.state ?? 'stopped'}`}>{live ? STATE_LABEL[live.state] ?? live.state : '—'}{live?.state === 'failed' && live.detail ? <span className="machine-detail muted">{live.detail}</span> : null}</td>
                 <td data-label="Điều khiển"><span className="machine-actions">
                   <ConfirmButton label="Restart" confirm="Xác nhận restart" title="Dừng rồi chạy lại Claude, tiếp tục đúng session hiện tại (giữ context)" disabled={!runner.online || !live} onConfirm={() => run(seat.seatId, 'restart')} />

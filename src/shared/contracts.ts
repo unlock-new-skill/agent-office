@@ -46,7 +46,10 @@ export type WakeState = 'idle' | 'listening' | 'wake_limited';
 /** deputySeatId: member seat that stands in for the leader (joins #leaders, woken with the leader's items while the leader is unavailable). */
 export type Department = { id: string; name: string; color: string; sort: number; paused: boolean; deputySeatId: string | null };
 /** workMs: total time this seat's sessions spent in turns (working), across sessions and machines. */
-export type Seat = { id: string; departmentId: string; title: string; description: string; role: SeatRole; sort: number; agentId: string | null; consecutiveWakes: number; wakeState: WakeState; workMs: number };
+export type Seat = { id: string; departmentId: string; title: string; description: string; role: SeatRole; sort: number; agentId: string | null; consecutiveWakes: number; wakeState: WakeState; workMs: number;
+  /** After this member finishes a task: compact, clear (new session) or nothing; null = the office default. */
+  afterTask: AfterTask | null };
+export type AfterTask = 'compact' | 'clear' | 'off';
 export type ChannelKind = 'department' | 'leaders';
 export type Channel = { id: string; name: string; kind: ChannelKind; departmentId: string | null; memberSeatIds: string[]; lastSeq: number };
 export type OrgView = { departments: Department[]; seats: Seat[]; channels: Channel[] };

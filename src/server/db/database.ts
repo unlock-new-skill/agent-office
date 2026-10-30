@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -56,6 +56,8 @@ DROP TABLE runner_commands;
 ALTER TABLE runner_commands_v16 RENAME TO runner_commands;
 CREATE INDEX runner_commands_runner ON runner_commands(runner_id, status);
 CREATE INDEX runner_commands_seat ON runner_commands(seat_id, created_at);`;
+/** v17: per-seat choice of what happens to a member's context after it finishes a task (null = office default). */
+const V17_COLUMNS = "ALTER TABLE seats ADD COLUMN after_task TEXT CHECK(after_task IN ('compact','clear','off'));";
 const V15_COLUMNS = "ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER; ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';";
 const THREAD_INDEX = 'CREATE INDEX messages_thread ON messages(channel_id, thread_seq);';
 
@@ -143,6 +145,7 @@ export class Database {
         if (from < 14) this.raw.exec(V14_COLUMNS);
         if (from < 15) this.raw.exec(V15_COLUMNS);
         if (from < 16) this.raw.exec(V16_TABLES);
+        if (from < 17) this.raw.exec(V17_COLUMNS);
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
       return;
@@ -238,6 +241,7 @@ export class Database {
       ${V14_COLUMNS}
       ${V15_COLUMNS}
       ${V16_TABLES}
+      ${V17_COLUMNS}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

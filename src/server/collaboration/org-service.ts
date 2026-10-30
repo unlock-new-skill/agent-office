@@ -1,10 +1,10 @@
 import type { Database } from '../db/database.js';
-import type { Channel, CollabEvent, Department, OfficeConfig, OrgView, Seat, SeatRole } from '../../shared/contracts.js';
+import type { AfterTask, Channel, CollabEvent, Department, OfficeConfig, OrgView, Seat, SeatRole } from '../../shared/contracts.js';
 import { conflict, invalid, notFound, slugify } from './office-error.js';
 
 export const LEADERS_CHANNEL_ID = 'leaders';
 type SeatRow = Omit<Seat, 'wakeState'>;
-const SEAT_COLUMNS = 'id,department_id AS departmentId,title,description,role,sort,agent_id AS agentId,consecutive_wakes AS consecutiveWakes,work_ms AS workMs';
+const SEAT_COLUMNS = 'id,department_id AS departmentId,title,description,role,sort,agent_id AS agentId,consecutive_wakes AS consecutiveWakes,work_ms AS workMs,after_task AS afterTask';
 
 /** Departments, seats and channel membership. Membership is always derived: department channel = its seats, leaders channel = all leader seats. */
 /**
@@ -113,6 +113,12 @@ export class OrgService {
     const current = this.seat(id);
     if (patch.role === 'leader' && current.role !== 'leader') this.assertNoLeader(current.departmentId);
     this.mutate(() => this.db.raw.prepare('UPDATE seats SET title=?,description=?,role=? WHERE id=?').run(patch.title ?? current.title, patch.description ?? current.description, patch.role ?? current.role, id));
+    return this.seat(id);
+  }
+
+  setAfterTask(id: string, mode: AfterTask | null): Seat {
+    this.seat(id);
+    this.mutate(() => this.db.raw.prepare('UPDATE seats SET after_task=? WHERE id=?').run(mode, id));
     return this.seat(id);
   }
 
