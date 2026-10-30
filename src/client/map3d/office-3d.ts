@@ -75,7 +75,8 @@ const label = (text: string, color = '#e2e8f0'): THREE.Sprite => {
  * inside a building with windowed outer walls, pillars, a pantry, a lounge, plants and pendant lamps. Daylight follows
  * the local clock (sun path, sky through the windows, lamps at night). Voxel agents show their live status through
  * screen glow, pose and a floating icon. Rebuilds geometry only when the org layout changes; status changes just
- * restyle existing actors. Orbit (drag), zoom (wheel) and pan (right drag); hover/click pick seats and lobby agents.
+ * restyle existing actors. Orbit (drag), zoom (wheel), pan (right drag or arrow keys) and double-click to move the orbit
+ * centre there (zooming in); hover/click pick seats and lobby agents.
  */
 export class Office3D {
   private readonly renderer: THREE.WebGLRenderer;
@@ -95,6 +96,10 @@ export class Office3D {
   private signs: Array<{ sprite: THREE.Sprite; roomId: string; name: string; color: string; paused: boolean }> = [];
   private structure = '';
   private span = 20;
+  /** Camera glide in progress (double-click focus or reset view); any user drag cancels it. */
+  private glide: { target: THREE.Vector3; position: THREE.Vector3 | null; zoom: number } | null = null;
+  private home: { target: THREE.Vector3; position: THREE.Vector3 } | null = null;
+  private readonly floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.2);
   private frame = 0;
   private hovered: string | null = null;
   private selected: string | null = null;
@@ -130,11 +135,13 @@ export class Office3D {
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), this.ground);
     ground.rotation.x = -Math.PI / 2; ground.position.y = -0.06; ground.receiveShadow = true; this.scene.add(ground);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true; this.controls.minPolarAngle = 0.35; this.controls.maxPolarAngle = 1.25; this.controls.minZoom = 0.5; this.controls.maxZoom = 4; this.controls.screenSpacePanning = true;
+    this.controls.enableDamping = true; this.controls.minPolarAngle = 0.35; this.controls.maxPolarAngle = 1.25; this.controls.minZoom = 0.5; this.controls.maxZoom = 8; this.controls.screenSpacePanning = true;
     this.renderer.domElement.addEventListener('pointermove', this.onPointerMove);
     this.renderer.domElement.addEventListener('pointerleave', this.onPointerLeave);
     this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.addEventListener('click', this.onClick);
+    this.renderer.domElement.addEventListener('dblclick', this.onDoubleClick);
+    this.controls.keyPanSpeed = 24; this.controls.listenToKeyEvents(window);
     this.observer = new ResizeObserver(() => this.resize()); this.observer.observe(host);
     this.resize();
     this.frame = requestAnimationFrame(this.tick);
@@ -182,6 +189,8 @@ export class Office3D {
     this.renderer.domElement.removeEventListener('pointerleave', this.onPointerLeave);
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.removeEventListener('click', this.onClick);
+    this.renderer.domElement.removeEventListener('dblclick', this.onDoubleClick);
+    this.controls.stopListenToKeyEvents();
     this.clearWorld(); for (const texture of this.floors.values()) texture.dispose(); this.ground.dispose(); this.grass.dispose();
     this.moon.group.traverse(object => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); for (const material of this.moon.materials) { if ('map' in material) material.map?.dispose(); material.dispose(); } this.renderer.dispose(); this.renderer.domElement.remove();
   }
@@ -353,6 +362,7 @@ export class Office3D {
     this.span = (width + depth) * 0.35 + 6;
     center.y = 1.2; this.controls.target.copy(center);
     this.camera.position.set(center.x + 40, center.y + 42, center.z + 40); this.camera.zoom = 1; this.camera.lookAt(center);
+    this.home = { target: center.clone(), position: this.camera.position.clone() }; this.glide = null;
     const reach = this.reach;
     const shadow = this.sun.shadow.camera; shadow.left = -reach; shadow.right = reach; shadow.top = reach; shadow.bottom = -reach; shadow.near = 1; shadow.far = reach * 4 + 80; shadow.updateProjectionMatrix();
     this.resize(); this.controls.update();
@@ -484,9 +494,31 @@ export class Office3D {
       patron.head.rotation.y = sip > 0 ? 0 : Math.sin((t + patron.phase) * 0.9) * 0.55;
     }
     if (t - this.lightingCheckedAt > 60) { this.lightingCheckedAt = t; this.applyLighting(); }
+    this.stepGlide();
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   };
+
+  /** Moves the orbit centre to a point (keeping the viewing angle) and zooms in to at least `zoom`. */
+  focusOn(point: THREE.Vector3, zoom = 2.2): void {
+    this.glide = { target: new THREE.Vector3(point.x, 1.2, point.z), position: null, zoom: Math.min(Math.max(this.camera.zoom, zoom), this.controls.maxZoom) };
+  }
+
+  /** Back to the framing of the whole office: centre, angle and zoom. */
+  resetView(): void {
+    if (this.home) this.glide = { target: this.home.target.clone(), position: this.home.position.clone(), zoom: 1 };
+  }
+
+  private stepGlide(): void {
+    const glide = this.glide; if (!glide) return;
+    const k = 0.16;
+    const move = glide.target.clone().sub(this.controls.target).multiplyScalar(k);
+    this.controls.target.add(move);
+    if (glide.position) this.camera.position.lerp(glide.position, k); else this.camera.position.add(move);
+    this.camera.zoom += (glide.zoom - this.camera.zoom) * k; this.camera.updateProjectionMatrix();
+    const done = this.controls.target.distanceTo(glide.target) < 0.01 && Math.abs(this.camera.zoom - glide.zoom) < 0.005 && (!glide.position || this.camera.position.distanceTo(glide.position) < 0.01);
+    if (done) this.glide = null;
+  }
 
   private pick(event: MouseEvent): Target3D | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
@@ -503,7 +535,16 @@ export class Office3D {
     this.handlers.onHover(this.pick(event), event.clientX - rect.left, event.clientY - rect.top);
   };
   private readonly onPointerLeave = (): void => { this.handlers.onHover(null, 0, 0); };
-  private readonly onPointerDown = (event: PointerEvent): void => { this.downAt = { x: event.clientX, y: event.clientY }; };
+  private readonly onPointerDown = (event: PointerEvent): void => { this.downAt = { x: event.clientX, y: event.clientY }; this.glide = null; };
+  private readonly onDoubleClick = (event: MouseEvent): void => {
+    // Centre on the desk or agent under the pointer, else on the floor point.
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hit = this.raycaster.intersectObjects(this.hitBoxes, false)[0];
+    const point = hit ? hit.object.getWorldPosition(new THREE.Vector3()) : this.raycaster.ray.intersectPlane(this.floor, new THREE.Vector3());
+    if (point) this.focusOn(point);
+  };
   private readonly onClick = (event: MouseEvent): void => {
     // A click that ends a camera drag is not a selection.
     if (this.downAt && Math.hypot(event.clientX - this.downAt.x, event.clientY - this.downAt.y) > 5) return;

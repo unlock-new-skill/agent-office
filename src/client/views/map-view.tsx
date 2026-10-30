@@ -46,6 +46,7 @@ export function MapView({ state, notify, publicView = false, onDismiss, onResetW
   const scale = width >= 1200 ? 3 : 2;
   const [mode, setModeState] = useState<Mode>(savedMode);
   const [timeOfDay, setTimeState] = useState<TimeOfDay>(savedTime);
+  const [resetView, setResetView] = useState(0);
   const setTimeOfDay = (next: TimeOfDay): void => { setTimeState(next); try { localStorage.setItem(TIME_KEY, next); } catch { /* preference is optional */ } };
   const setMode = (next: Mode): void => { setModeState(next); setHover(null); try { localStorage.setItem(MODE_KEY, next); } catch { /* preference is optional */ } };
 
@@ -137,11 +138,12 @@ export function MapView({ state, notify, publicView = false, onDismiss, onResetW
         {mode === '3d' && <span className="map-mode" role="group" aria-label="Time of day">
           {TIMES.map(time => <button key={time.value} type="button" title={time.title} className={timeOfDay === time.value ? 'active' : ''} aria-pressed={timeOfDay === time.value} onClick={() => setTimeOfDay(time.value)}>{time.label}</button>)}
         </span>}
-        {mode === '3d' && <span className="muted map-hint">drag: rotate · wheel: zoom · right-drag: pan</span>}
+        {mode === '3d' && <button type="button" className="btn btn-small" title="Back to the whole office" onClick={() => setResetView(count => count + 1)}>⟲ Reset view</button>}
+        {mode === '3d' && <span className="muted map-hint">double-click: center there · drag: rotate · wheel: zoom · right-drag / arrows: pan</span>}
       </div>
       <div className={`map-stage ${mode === '3d' ? 'is-3d' : ''}`} ref={host} onMouseLeave={() => setHover(null)}>
         {mode === '3d'
-          ? <Map3DStage layout={layout} seats={sprites} leaders={leaders} lobbyLabels={lobbyLabels} hovered={keyOf(hover?.target ?? null)} selected={keyOf(selected)} timeOfDay={timeOfDay}
+          ? <Map3DStage layout={layout} seats={sprites} leaders={leaders} lobbyLabels={lobbyLabels} hovered={keyOf(hover?.target ?? null)} selected={keyOf(selected)} timeOfDay={timeOfDay} resetView={resetView}
               onHover={(target, x, y) => setHover(target ? { target, x, y } : null)} onSelect={setSelected} onUnavailable={() => { setMode('2d'); notify('3D is not available in this browser; showing the 2D map.'); }} />
           : <canvas ref={canvas} className="map-canvas" role="img" aria-label={`Office map: ${counts.filter(([, count]) => count > 0).map(([status, count]) => `${count} ${SEAT_STATUS_LABEL[status]}`).join(', ')}`}
           onMouseMove={onMove} onClick={event => setSelected(targetAt(event))} style={{ cursor: hover ? 'pointer' : 'default' }} />}
