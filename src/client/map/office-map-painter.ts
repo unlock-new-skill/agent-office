@@ -1,8 +1,11 @@
 import type { SeatStatus } from '../state/office-store.js';
 import { CELL_H, CELL_W, TILE, seatHash, type DeskSpot, type Lobby, type MapLayout, type Room } from './office-map-layout.js';
 
-/** detail: second label line under the desk (model in use, total working time). */
-export type SeatSprite = { title: string; status: SeatStatus; detail?: string };
+/**
+ * detail: second label line under the desk (model in use, total working time). task: the task in progress (blocked when
+ * it waits); queue: the rest of the seat's open tasks. The 3D desk plate shows all of them, the 2D map only detail.
+ */
+export type SeatSprite = { title: string; status: SeatStatus; detail?: string; task?: { text: string; blocked: boolean }; queue?: string };
 export type PaintInput = { layout: MapLayout; seats: Map<string, SeatSprite>; lobbyLabels: Map<string, string>; hovered: string | null; selected: string | null; time: number };
 
 const SKIN = ['#f1c27d', '#e0ac69', '#c68642', '#8d5524', '#ffdbac'];

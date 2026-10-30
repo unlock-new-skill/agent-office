@@ -384,3 +384,14 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 @media (max-width: 600px) { .landing-hero { padding-top: 44px; } }
 .landing a.btn, .public-map a.btn { color: var(--text); text-decoration: none; display: inline-flex; align-items: center; }
 .landing a.btn.btn-primary { color: #0e1020; }
+
+/* Map detail: the selected seat's open tasks */
+.map-tasks { display: grid; gap: 6px; margin-top: 4px; }
+.map-tasks h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
+.map-tasks ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 40vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+.map-task { display: grid; gap: 2px; padding: 6px 8px; border-radius: 6px; background: var(--panel-2); border-left: 3px solid var(--line); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+.map-task.status-doing { border-left-color: var(--ok); } .map-task.status-blocked { border-left-color: var(--warn); }
+.map-task-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.map-task-status { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
+.map-task.status-doing .map-task-status { color: var(--ok); } .map-task.status-blocked .map-task-status { color: var(--warn); }
+.map-task-title { color: var(--text); }

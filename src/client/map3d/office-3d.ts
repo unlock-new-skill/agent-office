@@ -33,7 +33,12 @@ const textTexture = (lines: Array<{ text: string; font: string; color: string }>
   const context = canvas.getContext('2d')!;
   if (background) { context.fillStyle = background; context.beginPath(); context.roundRect(2, 2, width - 4, height - 4, radius); context.fill(); }
   context.textAlign = 'center'; context.textBaseline = 'middle';
-  lines.forEach((line, index) => { context.font = line.font; context.fillStyle = line.color; context.fillText(line.text, width / 2, (height / (lines.length + 1)) * (index + 1)); });
+  lines.forEach((line, index) => {
+    context.font = line.font; context.fillStyle = line.color;
+    // Trim with an ellipsis until the line fits inside the plate's rounded edges.
+    let text = line.text; while (text.length > 2 && context.measureText(text).width > width - 28) text = `${text.slice(0, -2)}…`;
+    context.fillText(text, width / 2, (height / (lines.length + 1)) * (index + 1));
+  });
   const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 4;
   return texture;
 };
@@ -44,11 +49,23 @@ const iconTexture = (status: SeatStatus): THREE.CanvasTexture | null => {
   if (!texture) { texture = textTexture([{ text: icon.text, font: 'bold 76px system-ui, sans-serif', color: icon.fg }], 128, 128, icon.bg, 40); iconTextures.set(status, texture); }
   return texture;
 };
-/** Desk name plate: seat title and, below it, the model in use and total working time. */
-const deskPlate = (title: string, detail: string | undefined): THREE.CanvasTexture => textTexture([
-  { text: title.length > 22 ? `${title.slice(0, 21)}…` : title, font: '600 34px system-ui, sans-serif', color: '#e2e8f0' },
-  ...(detail ? [{ text: detail.length > 30 ? `${detail.slice(0, 29)}…` : detail, font: '500 26px system-ui, sans-serif', color: '#93c5fd' }] : []),
-], 384, detail ? 104 : 64, 'rgba(15,23,42,0.72)', 26);
+const clip = (text: string, max: number): string => text.length > max ? `${text.slice(0, max - 1)}…` : text;
+/** Desk name plate: seat title, then model and working time, the task in progress and the rest of the seat's queue. */
+const plateLines = (title: string, sprite: SeatSprite | undefined): Array<{ text: string; font: string; color: string }> => [
+  { text: clip(title, 22), font: '600 34px system-ui, sans-serif', color: '#e2e8f0' },
+  ...(sprite?.detail ? [{ text: clip(sprite.detail, 30), font: '500 26px system-ui, sans-serif', color: '#93c5fd' }] : []),
+  ...(sprite?.task ? [{ text: clip(sprite.task.text, 32), font: '600 25px system-ui, sans-serif', color: sprite.task.blocked ? '#fbbf24' : '#86efac' }] : []),
+  ...(sprite?.queue ? [{ text: clip(sprite.queue, 34), font: '500 23px system-ui, sans-serif', color: '#cbd5e1' }] : []),
+];
+const PLATE_WIDTH = 384; const PLATE_UNITS = 2.7;
+const plateHeight = (lines: number): number => 64 + (lines - 1) * 40;
+const deskPlate = (lines: ReturnType<typeof plateLines>): THREE.CanvasTexture => textTexture(lines, PLATE_WIDTH, plateHeight(lines.length), 'rgba(15,23,42,0.78)', 26);
+const plateKey = (title: string | undefined, sprite: SeatSprite | undefined): string => JSON.stringify([title, sprite?.detail, sprite?.task, sprite?.queue]);
+/** Sizes the plate sprite to its texture and keeps its bottom edge in place as lines are added. */
+const fitPlate = (plate: THREE.Sprite, lines: number): void => {
+  const height = PLATE_UNITS * plateHeight(lines) / PLATE_WIDTH;
+  plate.scale.set(PLATE_UNITS, height, 1); plate.position.set(0, 0.3 + (height - 0.45) / 2, 1.5);
+};
 const label = (text: string, color = '#e2e8f0'): THREE.Sprite => {
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: textTexture([{ text: text.length > 22 ? `${text.slice(0, 21)}…` : text, font: '600 34px system-ui, sans-serif', color }], 384, 64, 'rgba(15,23,42,0.72)', 26), depthWrite: false }));
   sprite.scale.set(2.4, 0.4, 1); return sprite;
@@ -140,11 +157,11 @@ export class Office3D {
 
   private refreshPlates(model: Office3DModel): void {
     for (const [seatId, plate] of this.plates) {
-      const sprite = model.seats.get(seatId); const text = `${sprite?.title}|${sprite?.detail ?? ''}`;
+      const sprite = model.seats.get(seatId); const text = plateKey(sprite?.title, sprite);
       if (plate.userData.text === text) continue;
+      const lines = plateLines(sprite?.title ?? seatId, sprite);
       plate.userData.text = text; plate.material.map?.dispose();
-      plate.material.map = deskPlate(sprite?.title ?? seatId, sprite?.detail); plate.material.needsUpdate = true;
-      plate.scale.set(2.7, sprite?.detail ? 0.73 : 0.45, 1);
+      plate.material.map = deskPlate(lines); plate.material.needsUpdate = true; fitPlate(plate, lines.length);
     }
   }
 
@@ -361,8 +378,9 @@ export class Office3D {
     const chair = shared(0x374151);
     cube(chair, [0.7, 0.1, 0.65], [0, 0.48, 0.55], root); cube(chair, [0.7, 0.7, 0.1], [0, 0.85, 0.9], root); cube(metal, [0.08, 0.42, 0.08], [0, 0.24, 0.55], root);
     const sprite = model.seats.get(seatId);
-    const label3d = new THREE.Sprite(new THREE.SpriteMaterial({ map: deskPlate(sprite?.title ?? seatId, sprite?.detail), depthWrite: false }));
-    label3d.userData.text = `${sprite?.title}|${sprite?.detail ?? ''}`; label3d.position.set(0, 0.3, 1.5); label3d.scale.set(2.7, sprite?.detail ? 0.73 : 0.45, 1); root.add(label3d);
+    const lines = plateLines(sprite?.title ?? seatId, sprite);
+    const label3d = new THREE.Sprite(new THREE.SpriteMaterial({ map: deskPlate(lines), depthWrite: false }));
+    label3d.userData.text = plateKey(sprite?.title, sprite); fitPlate(label3d, lines.length); root.add(label3d);
     this.plates.set(seatId, label3d);
     const person = this.makePerson(seatId, leader, false); person.group.position.set(0, 0.52, 0.55); root.add(person.group);
     this.registerActor(seatId, root, person, screen, false);

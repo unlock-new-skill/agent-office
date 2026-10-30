@@ -151,6 +151,8 @@ Nút **Tasks** ở đầu kênh: xem task của phòng, tạo task mới, đổi
 
 **Giới thiệu:** `https://my-studio.victorpham.dev/about` (người chưa đăng nhập vào `/` cũng thấy trang này) — tính năng, cách bắt đầu, số liệu trực tiếp.
 
+**Task trên map:** biển tên mỗi bàn có thêm dòng task đang làm (▶ xanh; ⏸ vàng nếu đang blocked) và dòng hàng chờ (số task todo / blocked, tổng estimate còn lại). Rê chuột thấy "Working on: …"; bấm vào bàn thấy danh sách task đang mở của ghế (trạng thái, estimate, chờ task nào). Map công khai không hiện task.
+
 **Model và giờ làm việc:** dưới tên mỗi bàn trên map 3D có model session đang dùng và tổng thời gian ghế đã làm việc (cộng dồn mọi lúc agent đang hoạt động, qua mọi session; nghỉ quá 15 phút giữa 2 hành động, lúc chờ duyệt quyền hay giữa các lượt không tính); xem cả trong tooltip/panel chi tiết.
 
 **Map công khai:** ai mở `https://my-studio.victorpham.dev/map` cũng xem được, không cần đăng nhập — chỉ phòng ban, ghế và trạng thái (không có tên session, đường dẫn, tin nhắn hay nút thao tác). Lobby chỉ hiện session còn sống (liên lạc trong 5 phút); bấm ✕ ở Org hoặc **Dismiss** trên map để ẩn một session cho tới khi nó mở lại. Mỗi ghế ở Machines có ô **Model** (vd `claude-opus-5-5`, `gpt-6-astra`; trống = mặc định của máy), truyền vào `claude --model`.

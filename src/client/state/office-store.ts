@@ -125,7 +125,7 @@ export const workLabel = (ms: number): string => {
   if (minutes < 1) return '<1m';
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
-  return hours < 24 ? `${hours}h ${minutes % 60}m` : `${Math.floor(hours / 24)}d ${hours % 24}h`;
+  return hours < 24 ? `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ''}` : `${Math.floor(hours / 24)}d${hours % 24 ? ` ${hours % 24}h` : ''}`;
 };
 
 export const unassignedAgents = (state: OfficeState): AgentSnapshot[] => {

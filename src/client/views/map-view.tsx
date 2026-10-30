@@ -7,12 +7,26 @@ import { hitTest, layoutOffice } from '../map/office-map-layout.js';
 import { paintOffice, type PaintInput, type SeatSprite } from '../map/office-map-painter.js';
 import { SEAT_STATUS_LABEL, seatStatus, unassignedAgents, workLabel, type OfficeState, type SeatStatus } from '../state/office-store.js';
 import type { TimeOfDay } from '../map3d/day-night.js';
+import type { Task } from '../../shared/contracts.js';
 import { Map3DStage } from './map-3d-stage.js';
 
 /** publicView: the anonymous /map (no session names, no actions). onDismiss hides a lobby session. */
 type Props = { state: OfficeState; notify: (text: string) => void; publicView?: boolean; onDismiss?: (agentId: string) => Promise<void>; onResetWakes?: (seatId: string) => Promise<void> };
 type Target = { seatId: string } | { agentId: string };
 const LEGEND: SeatStatus[] = ['working', 'listening', 'blocked', 'idle', 'wake_limited', 'offline', 'vacant'];
+const STATUS_ORDER: Record<Task['status'], number> = { doing: 0, blocked: 1, todo: 2, done: 3 };
+const taskLine = (task: Task): string => `${task.id} ${task.title}`;
+/** Open tasks of a seat, in progress first; the current one is the latest doing (or blocked) task. */
+const seatTasks = (tasks: Record<string, Task>, seatId: string): Task[] => Object.values(tasks)
+  .filter(task => task.assigneeSeatId === seatId && task.status !== 'done')
+  .sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.updatedAt - a.updatedAt);
+const queueLabel = (open: Task[], current: Task | undefined): string | undefined => {
+  const rest = open.filter(task => task !== current);
+  if (rest.length === 0) return undefined;
+  const count = (status: Task['status']): number => rest.filter(task => task.status === status).length;
+  const minutes = open.reduce((total, task) => total + (task.estimateMinutes ?? 0), 0);
+  return [count('todo') && `${count('todo')} todo`, count('blocked') && `${count('blocked')} blocked`, count('doing') && `${count('doing')} more doing`, minutes > 0 && `⏱ ${workLabel(minutes * 60_000)} left`].filter(Boolean).join(' · ');
+};
 const keyOf = (target: Target | null): string | null => target ? ('seatId' in target ? target.seatId : target.agentId) : null;
 /** 3D rooms are laid out on a fixed-width grid (about three rooms per row, three tiles apart); the camera does the fitting. */
 const LAYOUT_WIDTH_3D = 760; const ROOM_GAP_3D = 48;
@@ -49,8 +63,12 @@ export function MapView({ state, notify, publicView = false, onDismiss, onResetW
   const sprites = useMemo(() => new Map<string, SeatSprite>(seats.map(seat => {
     const model = state.agents.find(agent => agent.id === seat.agentId)?.model;
     const detail = [model, seat.workMs > 0 ? workLabel(seat.workMs) : null].filter(Boolean).join(' · ');
-    return [seat.id, { title: seat.title, status: seatStatus(seat, state.agents), ...(detail ? { detail } : {}) }];
-  })), [seats, state.agents]);
+    // Task titles stay off the public map.
+    const open = publicView ? [] : seatTasks(state.tasks, seat.id); const current = open.find(task => task.status === 'doing' || task.status === 'blocked');
+    const queue = queueLabel(open, current);
+    return [seat.id, { title: seat.title, status: seatStatus(seat, state.agents), ...(detail ? { detail } : {}),
+      ...(current ? { task: { text: `${current.status === 'blocked' ? '⏸' : '▶'} ${taskLine(current)}`, blocked: current.status === 'blocked' } } : {}), ...(queue ? { queue } : {}) }];
+  })), [seats, state.agents, state.tasks, publicView]);
   const lobbyLabels = useMemo(() => new Map(lobbyAgents.map(agent => [agent.id, publicView ? 'Claude session' : sessionLabel(agent)])), [lobbyAgents, publicView]);
 
   // The animation loop reads the latest frame input from a ref so React renders never restart it.
@@ -84,7 +102,7 @@ export function MapView({ state, notify, publicView = false, onDismiss, onResetW
     setHover(target && box ? { target, x: event.clientX - box.left + host.current!.scrollLeft, y: event.clientY - box.top + host.current!.scrollTop } : null);
   };
 
-  const describe = (target: Target): { title: string; lines: string[]; status: SeatStatus | null; seat: { id: string; title: string } | null } => {
+  const describe = (target: Target): { title: string; lines: string[]; status: SeatStatus | null; seat: { id: string; title: string } | null; tasks?: Task[] } => {
     if ('agentId' in target) {
       const agent = state.agents.find(candidate => candidate.id === target.agentId);
       if (publicView) return { title: 'Claude session', status: null, seat: null, lines: [`Waiting for a seat · ${agent?.state ?? 'unknown'}`] };
@@ -94,9 +112,10 @@ export function MapView({ state, notify, publicView = false, onDismiss, onResetW
     if (!seat) return { title: target.seatId, lines: [], status: null, seat: null };
     const agent = state.agents.find(candidate => candidate.id === seat.agentId); const status = seatStatus(seat, state.agents);
     const department = state.org?.departments.find(candidate => candidate.id === seat.departmentId);
+    const open = publicView ? [] : seatTasks(state.tasks, seat.id); const current = open.find(task => task.status === 'doing' || task.status === 'blocked');
     return {
-      title: seat.title, status, seat,
-      lines: [`@${seat.id} · ${seat.role} of ${department?.name ?? seat.departmentId}`, `Status: ${SEAT_STATUS_LABEL[status]}`, ...(agent?.model ? [`Model: ${agent.model}`] : []), `Worked: ${seat.workMs > 0 ? workLabel(seat.workMs) : '—'}`, agent ? (publicView ? `Agent active${agent.currentTool ? ` · running ${agent.currentTool}` : ''}` : `Session: ${sessionLabel(agent)}${agent.currentTool ? ` · running ${agent.currentTool}` : ''}`) : 'No session', ...(seat.description ? [seat.description] : [])],
+      title: seat.title, status, seat, tasks: open,
+      lines: [`@${seat.id} · ${seat.role} of ${department?.name ?? seat.departmentId}`, `Status: ${SEAT_STATUS_LABEL[status]}`, ...(current ? [`${current.status === 'blocked' ? 'Blocked on' : 'Working on'}: ${taskLine(current)}`] : []), ...(agent?.model ? [`Model: ${agent.model}`] : []), `Worked: ${seat.workMs > 0 ? workLabel(seat.workMs) : '—'}`, agent ? (publicView ? `Agent active${agent.currentTool ? ` · running ${agent.currentTool}` : ''}` : `Session: ${sessionLabel(agent)}${agent.currentTool ? ` · running ${agent.currentTool}` : ''}`) : 'No session', ...(seat.description ? [seat.description] : [])],
     };
   };
   const detail = selected ? describe(selected) : null; const tip = hover ? describe(hover.target) : null;
@@ -132,6 +151,16 @@ export function MapView({ state, notify, publicView = false, onDismiss, onResetW
         <aside className="map-detail" aria-label="Selected seat">
           <header>{detail.status && <StatusDot status={detail.status} />}<strong>{detail.title}</strong><span className="spacer" /><button type="button" className="icon-btn" aria-label="Close" onClick={() => setSelected(null)}>✕</button></header>
           {detail.lines.map(line => <p key={line}>{line}</p>)}
+          {detail.tasks && detail.tasks.length > 0 && <section className="map-tasks" aria-label="Open tasks">
+            <h3>Tasks <span className="muted">{detail.tasks.length} open</span></h3>
+            <ul>{detail.tasks.map(task => (
+              <li key={task.id} className={`map-task status-${task.status}`}>
+                <span className="map-task-head"><span className="map-task-status">{task.status}</span><code>{task.id}</code>{task.estimateMinutes !== null ? <span className="muted">⏱ {workLabel(task.estimateMinutes * 60_000)}</span> : <span className="task-no-estimate">no estimate</span>}</span>
+                <span className="map-task-title">{task.title}</span>
+                {task.dependsOn.length > 0 && <span className="muted">after {task.dependsOn.join(', ')}</span>}
+              </li>))}
+            </ul>
+          </section>}
           {detail.seat && !publicView && <div className="row-actions">
             <button type="button" className="btn btn-small" onClick={() => copyJoin(detail.seat!)}>Copy join</button>
             {detail.status === 'wake_limited' && onResetWakes && <button type="button" className="btn btn-small btn-warn" onClick={() => { const seatId = detail.seat!.id; onResetWakes(seatId).then(() => notify(`@${seatId} can be woken again.`)).catch(error => notify(errorText(error))); }}>Reset wake limit</button>}
