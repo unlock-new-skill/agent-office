@@ -94,6 +94,11 @@ Output: <what is delivered, where (path, branch, URL)>
 Acceptance: <checks that prove it is done>
 \`\`\`
 
+**Members: finishing a task trims your context.** When you (not a leader) move your own task to \`done\`, a runner
+seat compacts its conversation as soon as that turn ends (or starts a new session, per the manager's setting). Before
+\`done\`: put the result in the task note and keep your handoff note (\`agent_office_save_handoff\`) current with what
+the next task needs — that is what survives.
+
 **Estimates are required.** When a task reaches you, set \`estimateMinutes\` right away (before or together with
 \`doing\`), and re-estimate if the scope changes — the PM plans the whole flow from these numbers.
 

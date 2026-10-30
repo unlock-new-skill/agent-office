@@ -136,6 +136,7 @@ export const createApp = (context: AppContext): Hono => {
       if (body.kind === 'session.end') context.office.runners.clearTakeover(credential.agentId);
       if (model) context.db.raw.prepare('UPDATE agents SET model=? WHERE id=?').run(model, credential.agentId);
       context.office.trackWork(credential.agentId, body.kind, body.ts);
+      if (body.kind === 'turn.stop') context.office.onTurnStop(credential.agentId);
       return c.json(event, 201);
     } catch (error) {
       if (error instanceof z.ZodError || error instanceof SyntaxError) return jsonError('invalid_request', 400);

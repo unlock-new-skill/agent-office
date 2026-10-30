@@ -13,6 +13,8 @@ export type AppConfig = {
   sessionTtlSeconds: number;
   containerMode: boolean;
   maxAutoWakes: number;
+  /** After a member finishes a task its runner seat compacts (default), restarts clean, or keeps its context. */
+  afterTask: 'compact' | 'clear' | 'off';
   /** Coordinator seat (the PM): leader rights over every department's tasks; '' = none. */
   coordinatorSeatId: string | null;
   /** Coordinator is asked in #leaders to collect reports when a department with work in progress goes quiet; null = off. */
@@ -45,6 +47,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => (
   sessionTtlSeconds: positiveInteger(env.AGENT_OFFICE_SESSION_TTL_SECONDS, 43_200),
   containerMode: env.AGENT_OFFICE_CONTAINER_MODE === 'true',
   maxAutoWakes: positiveInteger(env.AGENT_OFFICE_MAX_AUTO_WAKES, 15),
+  afterTask: env.AGENT_OFFICE_AFTER_TASK === 'clear' || env.AGENT_OFFICE_AFTER_TASK === 'off' ? env.AGENT_OFFICE_AFTER_TASK : 'compact',
   coordinatorSeatId: env.AGENT_OFFICE_COORDINATOR_SEAT === '' ? null : env.AGENT_OFFICE_COORDINATOR_SEAT ?? 'pm',
   statusCheck: env.AGENT_OFFICE_STATUS_CHECK_MINUTES === '0' || env.AGENT_OFFICE_COORDINATOR_SEAT === '' ? null
     : { seatId: env.AGENT_OFFICE_COORDINATOR_SEAT ?? 'pm', silentMs: positiveInteger(env.AGENT_OFFICE_STATUS_CHECK_MINUTES, 45) * 60_000 },

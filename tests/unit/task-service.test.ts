@@ -90,3 +90,22 @@ test('estimates and dependencies: no start before dependencies are done, then th
   assert.equal(tasks.list(seat('ops-lead'), {}).length, 2, 'the coordinator lists every department');
   fixture.close();
 });
+
+test('after a member finishes its own task, its runner seat compacts when the turn ends; leaders are left alone', () => {
+  const fixture = createSeededOffice({ afterTask: 'compact' }); const { tasks, runners, onTurnStop } = fixture.office; seatAll(fixture, ['dev-lead', 'dev-be']);
+  const idle = (seatId: string) => ({ seatId, state: 'idle' as const, sessionId: null, restarts: 0, permissionMode: 'bypassPermissions' as const, detail: '' });
+  runners.register('runner-1', 'mac', [idle('dev-be'), idle('dev-lead')]);
+  const queued = () => [...runners.commands('dev-be'), ...runners.commands('dev-lead')];
+  const member = tasks.create(seat('dev-lead'), { title: 'API', body: REQ, assigneeSeatId: 'dev-be' });
+  const lead = tasks.create(manager, { title: 'Review', body: REQ, assigneeSeatId: 'dev-lead' });
+  tasks.update(seat('dev-be'), member.id, { status: 'done' });
+  assert.equal(queued().length, 0, 'nothing happens mid-turn');
+  onTurnStop('agent-dev-be');
+  const [compact] = runners.commands('dev-be');
+  assert.equal(compact?.kind, 'prompt'); assert.match(compact?.text ?? '', /^\/compact Task t-dev-1 is done/);
+  onTurnStop('agent-dev-be');
+  assert.equal(runners.commands('dev-be').length, 1, 'once per finished task');
+  tasks.update(seat('dev-lead'), lead.id, { status: 'done' }); onTurnStop('agent-dev-lead');
+  assert.equal(runners.commands('dev-lead').length, 0, 'leaders keep their context');
+  fixture.close();
+});

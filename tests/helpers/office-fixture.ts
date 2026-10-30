@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AuthService } from '../../src/server/auth/auth-service.js';
 import { createApp } from '../../src/server/app.js';
-import { createOffice, type Office } from '../../src/server/collaboration/office.js';
+import { createOffice, type AfterTask, type Office } from '../../src/server/collaboration/office.js';
 import { parseOfficeConfig } from '../../src/server/collaboration/seed.js';
 import { loadConfig } from '../../src/server/config.js';
 import { Database } from '../../src/server/db/database.js';
@@ -19,9 +19,9 @@ export const ORIGIN = `http://${HOST}`;
 export type Fixture = { db: Database; office: Office; emitted: CollabEvent[]; close: () => void };
 
 /** In-memory office seeded from office.example.yaml. */
-export const createSeededOffice = (options: { maxAutoWakes?: number; remoteApproval?: boolean; coordinatorSeatId?: string } = {}): Fixture => {
+export const createSeededOffice = (options: { maxAutoWakes?: number; remoteApproval?: boolean; coordinatorSeatId?: string; afterTask?: AfterTask } = {}): Fixture => {
   const db = new Database({ filename: ':memory:' }); const emitted: CollabEvent[] = [];
-  const office = createOffice(db, { maxAutoWakes: options.maxAutoWakes ?? 15, emit: event => emitted.push(event), remoteApproval: options.remoteApproval ?? false, coordinatorSeatId: options.coordinatorSeatId ?? null });
+  const office = createOffice(db, { maxAutoWakes: options.maxAutoWakes ?? 15, emit: event => emitted.push(event), remoteApproval: options.remoteApproval ?? false, coordinatorSeatId: options.coordinatorSeatId ?? null, afterTask: options.afterTask ?? 'off' });
   office.org.seed(parseOfficeConfig(exampleOfficeYaml()));
   return { db, office, emitted, close: () => { office.close(); db.close(); } };
 };

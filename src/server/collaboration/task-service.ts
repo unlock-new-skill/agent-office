@@ -26,7 +26,7 @@ const actorLabel = (actor: Actor): string => actor.kind === 'manager' ? 'manager
  * seat (the PM) has leader rights over the tasks of every department so it can order the work across teams.
  */
 export class TaskService {
-  constructor(private readonly db: Database, private readonly org: OrgService, private readonly messages: MessageService, private readonly emit: (event: CollabEvent) => void, private readonly coordinatorSeatId: string | null = null) {}
+  constructor(private readonly db: Database, private readonly org: OrgService, private readonly messages: MessageService, private readonly emit: (event: CollabEvent) => void, private readonly coordinatorSeatId: string | null = null, private readonly onDoneByAssignee: (task: Task) => void = () => undefined) {}
 
   list(actor: Actor, filter: TaskFilter): Task[] {
     let departmentId = filter.departmentId;
@@ -114,7 +114,10 @@ export class TaskService {
     const change = status !== task.status ? `${task.status} → ${status}` : 'updated';
     const reassigned = assignee && assignee.id !== task.assigneeSeatId ? ` Reassigned to @${assignee.id}.` : '';
     this.announce(updated, `Task ${task.id} "${task.title}" ${change} by ${actorLabel(actor)}.${reassigned}${replanned ? this.planLine(updated) : ''}${note ? ` Note: ${note}` : ''}`, [...mentions]);
-    if (status === 'done' && task.status !== 'done') this.releaseDependents(updated);
+    if (status === 'done' && task.status !== 'done') {
+      this.releaseDependents(updated);
+      if (actor.kind === 'seat' && actor.seatId === updated.assigneeSeatId) this.onDoneByAssignee(updated);
+    }
     // Close the loop for cross-department requests without the serving leader having to relay it.
     if (updated.requesterSeatId && (status === 'blocked' || status === 'done') && status !== task.status) {
       this.messages.postSystem(LEADERS_CHANNEL_ID, `@${updated.requesterSeatId} your request ${task.id} "${task.title}" is ${status}${note ? `: ${note}` : '.'}`.slice(0, 16_000), [updated.requesterSeatId]);
