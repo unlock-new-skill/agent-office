@@ -85,7 +85,8 @@ export type MachineConfig = { version: number; seats: MachineSeat[] };
 export type MachineSession = { agentId: string; sessionId: string; project: string; ended: boolean; seatId: string | null; lastContactAt: number | null };
 /** label: name given on the web; machine: the hostname the runner reports. config is the web-managed seat list. */
 export type RunnerView = { id: string; label: string | null; machine: string; online: boolean; lastSeenAt: number; seats: RunnerSeat[]; config: MachineConfig };
-export const RUNNER_COMMAND_KINDS = ['start', 'stop', 'restart', 'interrupt', 'prompt'] as const;
+/** fresh = restart the seat in a new Claude session (drops the one it would resume). */
+export const RUNNER_COMMAND_KINDS = ['start', 'stop', 'restart', 'fresh', 'interrupt', 'prompt'] as const;
 export type RunnerCommandKind = typeof RUNNER_COMMAND_KINDS[number];
 export type RunnerCommandStatus = 'queued' | 'sent' | 'done' | 'failed' | 'expired';
 export type RunnerCommand = { id: string; runnerId: string; seatId: string; kind: RunnerCommandKind; text: string | null; status: RunnerCommandStatus; result: string | null; requestedBy: string; createdAt: number; doneAt: number | null };

@@ -44,6 +44,9 @@ export class SeatWorker {
     return { ok: true, message: this.sessionId ? `started (resuming ${this.sessionId.slice(0, 8)})` : 'started (new session)' };
   }
 
+  /** Next start opens a new Claude session instead of resuming the current one. */
+  forgetSession(): void { this.sessionId = null; this.deps.state.setSessionId(this.seat.seatId, null); }
+
   async stop(): Promise<CommandResult> {
     const process = this.process;
     if (!process) { this.setStatus('stopped', 'stopped'); return { ok: true, message: 'already stopped' }; }

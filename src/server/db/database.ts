@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -44,6 +44,18 @@ const V11_COLUMNS = 'ALTER TABLE agents ADD COLUMN dismissed_at INTEGER;';
 const V12_COLUMNS = 'ALTER TABLE seats ADD COLUMN work_ms INTEGER NOT NULL DEFAULT 0; ALTER TABLE agents ADD COLUMN model TEXT;';
 const V13_COLUMNS = 'ALTER TABLE seats ADD COLUMN last_wake_at INTEGER;';
 const V14_COLUMNS = 'ALTER TABLE agents ADD COLUMN work_mark INTEGER;';
+/** v16: runner command 'fresh' (restart a seat in a new session); SQLite needs the table rebuilt to widen the CHECK. */
+const V16_TABLES = `CREATE TABLE runner_commands_v16(
+  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL, seat_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('start','stop','restart','fresh','interrupt','prompt')), text TEXT,
+  status TEXT NOT NULL CHECK(status IN ('queued','sent','done','failed','expired')), result TEXT,
+  requested_by TEXT NOT NULL, created_at INTEGER NOT NULL, done_at INTEGER
+) STRICT;
+INSERT INTO runner_commands_v16 SELECT id,runner_id,seat_id,kind,text,status,result,requested_by,created_at,done_at FROM runner_commands;
+DROP TABLE runner_commands;
+ALTER TABLE runner_commands_v16 RENAME TO runner_commands;
+CREATE INDEX runner_commands_runner ON runner_commands(runner_id, status);
+CREATE INDEX runner_commands_seat ON runner_commands(seat_id, created_at);`;
 const V15_COLUMNS = "ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER; ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';";
 const THREAD_INDEX = 'CREATE INDEX messages_thread ON messages(channel_id, thread_seq);';
 
@@ -130,6 +142,7 @@ export class Database {
         if (from < 13) this.raw.exec(V13_COLUMNS);
         if (from < 14) this.raw.exec(V14_COLUMNS);
         if (from < 15) this.raw.exec(V15_COLUMNS);
+        if (from < 16) this.raw.exec(V16_TABLES);
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
       return;
@@ -224,6 +237,7 @@ export class Database {
       ${V13_COLUMNS}
       ${V14_COLUMNS}
       ${V15_COLUMNS}
+      ${V16_TABLES}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

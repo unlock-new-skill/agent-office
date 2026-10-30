@@ -170,6 +170,7 @@ export class Runner {
       case 'start': return this.startSeat(worker);
       case 'stop': this.launches.set(command.seatId, (this.launches.get(command.seatId) ?? 0) + 1); return worker.stop();
       case 'restart': await worker.stop(); return this.startSeat(worker);
+      case 'fresh': await worker.stop(); worker.forgetSession(); return this.startSeat(worker);
       case 'interrupt': return worker.interrupt();
       case 'prompt': return command.text?.trim() ? worker.prompt(command.text) : { ok: false, message: 'empty prompt' };
       default: return { ok: false, message: 'unknown command' };

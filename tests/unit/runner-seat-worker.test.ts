@@ -53,6 +53,15 @@ test('a new seat starts a session, remembers its id, and resumes it after a rest
   assert.equal(spawns[1]!.resume, 'sess-a'); assert.match(spawns[1]!.sent[0]!, /restarted this session/);
 });
 
+test('forgetting the session makes the next start a new session', async () => {
+  const { worker, spawns, store } = harness();
+  worker.start(); spawns[0]!.emit({ kind: 'init', sessionId: 'sess-a' });
+  await worker.stop(); worker.forgetSession();
+  assert.equal(new RunnerState(store).sessionId('dev-be'), null);
+  worker.start();
+  assert.equal(spawns[1]!.resume, null);
+});
+
 test('a finished turn listens for a wake and hands the reason to Claude as the next turn', async () => {
   let calls = 0;
   const { worker, spawns, statuses } = harness(async () => (++calls === 1 ? '[Agent Office] 1 new item(s) for @dev-be' : null));

@@ -163,6 +163,8 @@ export class RunnerService {
     const changed = this.db.raw.prepare("UPDATE runner_commands SET status=?,result=?,done_at=? WHERE id=? AND runner_id=? AND status='sent'").run(ok ? 'done' : 'failed', message.slice(0, 500), Date.now(), commandId, runnerId);
     const command = this.command(commandId);
     if (changed.changes === 0 && command.runnerId !== runnerId) throw notFound('command');
+    // The runner dropped the old session: free the seat so the new session can take it instead of waiting for the old one to time out.
+    if (changed.changes > 0 && ok && command.kind === 'fresh' && this.org.seat(command.seatId).agentId) this.org.assignAgent(command.seatId, null);
     this.emit({ type: 'collab', kind: 'runner-command', command });
     return command;
   }

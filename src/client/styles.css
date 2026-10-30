@@ -338,6 +338,8 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .machine-seats td { padding: 6px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 .machine-seats select, .machine-seats input:not([type=checkbox]) { width: 100%; min-width: 0; }
 .machine-seats td[data-label="Thư mục repo"] { min-width: 220px; }
+.machine-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.machine-actions .btn { white-space: nowrap; }
 .machine-warn { display: block; color: var(--warn); font-size: 11px; margin-top: 4px; }
 .machine-detail { display: block; font-size: 11px; font-weight: 400; overflow-wrap: anywhere; }
 @media (max-width: 860px) {

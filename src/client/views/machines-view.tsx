@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import type { MachineSeat, MachineSession, RunnerView } from '../../shared/contracts.js';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import type { MachineSeat, MachineSession, RunnerCommandKind, RunnerView } from '../../shared/contracts.js';
 import { errorText, type Api } from '../api/http.js';
 import { CommandRow } from '../components/command-row.js';
 import type { OfficeState } from '../state/office-store.js';
@@ -16,6 +16,17 @@ const MODELS = ['claude-opus-5-5', 'gpt-6-astra', 'opus', 'sonnet'];
 const STATE_LABEL: Record<string, string> = { starting: 'starting', running: 'working', idle: 'listening', stopped: 'stopped', failed: 'failed' };
 const shortPath = (value: string): string => value.split(/[\\/]/).filter(Boolean).slice(-2).join('/') || value;
 const ago = (ts: number): string => { const minutes = Math.round((Date.now() - ts) / 60_000); return minutes < 1 ? 'vừa xong' : minutes < 60 ? `${minutes} phút trước` : `${Math.round(minutes / 60)} giờ trước`; };
+
+/** A button that needs a second click within 4 s; for actions that cut a running session. */
+function ConfirmButton({ label, confirm, title, disabled, onConfirm }: { label: string; confirm: string; title: string; disabled?: boolean; onConfirm: () => void }): ReactNode {
+  const [armed, setArmed] = useState(false); const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const click = (): void => {
+    if (armed) { setArmed(false); onConfirm(); return; }
+    setArmed(true); if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(() => setArmed(false), 4000);
+  };
+  return <button type="button" className={`btn btn-small ${armed ? 'btn-warn' : ''}`} title={title} disabled={disabled} onClick={click}>{armed ? confirm : label}</button>;
+}
 
 /**
  * Machines that run seats headless. Each machine's seat list (repo folder, permissions, session to resume) is edited
@@ -74,6 +85,17 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
     if (!confirmDelete) { setConfirmDelete(true); setTimeout(() => setConfirmDelete(false), 4000); return; }
     api.send('DELETE', `/v1/machines/${runner.id}`).then(() => notify('Đã xoá máy và thu hồi quyền kết nối của nó.')).catch(error => notify(errorText(error)));
   };
+  const command = (seatId: string, kind: RunnerCommandKind): Promise<void> => api.send('POST', `/v1/seats/${seatId}/runner-commands`, { kind }).then(() => undefined);
+  const run = (seatId: string, kind: RunnerCommandKind): void => {
+    command(seatId, kind).then(() => notify(kind === 'fresh' ? `@${seatId}: đang mở session mới.` : `@${seatId}: đang khởi động lại session.`)).catch(error => notify(errorText(error)));
+  };
+  const runningSeats = runner.seats.filter(seat => runner.config.seats.some(row => row.seatId === seat.seatId)).map(seat => seat.seatId);
+  const restartAll = (): void => {
+    Promise.allSettled(runningSeats.map(seatId => command(seatId, 'restart'))).then(results => {
+      const failed = results.filter(result => result.status === 'rejected').length;
+      notify(failed ? `Khởi động lại ${runningSeats.length - failed}/${runningSeats.length} ghế; ${failed} ghế lỗi.` : `Đang khởi động lại ${runningSeats.length} ghế.`);
+    });
+  };
   const name = runner.label ?? (runner.machine || runner.id);
   const presence = runner.lastSeenAt === 0 ? 'chưa cài' : runner.online ? 'online' : `offline · ${ago(runner.lastSeenAt)}`;
 
@@ -83,6 +105,7 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
         <span className={`machine-dot ${runner.online ? 'on' : ''}`} aria-hidden="true" />
         <div className="machine-title"><strong>{name}</strong><span className="muted">{runner.machine && runner.label ? `${runner.machine} · ` : ''}{presence}</span></div>
         <span className="spacer" />
+        <ConfirmButton label="Restart tất cả" confirm={`Xác nhận restart ${runningSeats.length} ghế`} title="Khởi động lại session của mọi ghế trên máy này (tiếp tục đúng session cũ)" disabled={!runner.online || runningSeats.length === 0} onConfirm={restartAll} />
         <button type="button" className="btn btn-small btn-primary" onClick={getInstall}>Lệnh cài</button>
         <button type="button" className={`btn btn-small ${confirmDelete ? 'btn-warn' : ''}`} onClick={remove}>{confirmDelete ? 'Xác nhận xoá' : 'Xoá'}</button>
       </header>
@@ -99,9 +122,9 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
       )}
 
       <table className="machine-seats">
-        <thead><tr><th>Ghế</th><th>Thư mục repo</th><th>Model</th><th>Quyền</th><th>Session</th><th>Tự chạy</th><th title="Mở cửa sổ Terminal trên máy để xem session trực tiếp">Cửa sổ</th><th>Trạng thái</th><th><span className="sr-only">Xoá</span></th></tr></thead>
+        <thead><tr><th>Ghế</th><th>Thư mục repo</th><th>Model</th><th>Quyền</th><th>Session</th><th>Tự chạy</th><th title="Mở cửa sổ Terminal trên máy để xem session trực tiếp">Cửa sổ</th><th>Trạng thái</th><th>Điều khiển</th><th><span className="sr-only">Xoá</span></th></tr></thead>
         <tbody>
-          {draft.length === 0 && <tr><td colSpan={9} className="muted">Chưa có ghế. Bấm "+ Thêm ghế".</td></tr>}
+          {draft.length === 0 && <tr><td colSpan={10} className="muted">Chưa có ghế. Bấm "+ Thêm ghế".</td></tr>}
           {draft.map((seat, index) => {
             const live = status(seat.seatId); const chosen = sessions.find(session => session.sessionId === seat.sessionId);
             return (
@@ -127,6 +150,10 @@ function MachineCard({ runner, state, api, notify }: { runner: RunnerView; state
                 <td data-label="Tự chạy"><input type="checkbox" aria-label="Tự chạy khi runner khởi động" checked={seat.autoStart} onChange={event => edit(index, { autoStart: event.target.checked })} /></td>
                 <td data-label="Cửa sổ"><input type="checkbox" aria-label="Mở cửa sổ theo dõi session trên desktop của máy" checked={seat.showWindow !== false} onChange={event => edit(index, { showWindow: event.target.checked })} /></td>
                 <td data-label="Trạng thái" className={`runner-state state-${live?.state ?? 'stopped'}`}>{live ? STATE_LABEL[live.state] ?? live.state : '—'}{live?.state === 'failed' && live.detail ? <span className="machine-detail muted">{live.detail}</span> : null}</td>
+                <td data-label="Điều khiển"><span className="machine-actions">
+                  <ConfirmButton label="Restart" confirm="Xác nhận restart" title="Dừng rồi chạy lại Claude, tiếp tục đúng session hiện tại (giữ context)" disabled={!runner.online || !live} onConfirm={() => run(seat.seatId, 'restart')} />
+                  <ConfirmButton label="Session mới" confirm="Xác nhận session mới" title="Dừng session hiện tại và mở một session Claude mới cho ghế này (mất context cũ; ghi chú bàn giao và task vẫn còn)" disabled={!runner.online || !live} onConfirm={() => run(seat.seatId, 'fresh')} />
+                </span></td>
                 <td><button type="button" className="icon-btn" aria-label={`Bỏ ghế ${seat.seatId} khỏi máy này`} onClick={() => { setDraft(draft.filter((_, at) => at !== index)); setDirty(true); }}>✕</button></td>
               </tr>
             );

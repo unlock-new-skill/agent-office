@@ -7,7 +7,7 @@ import type { ClaudeEvent } from '../../src/connector/runner/claude-process.js';
 import { Runner } from '../../src/connector/runner/runner.js';
 import { SessionStore } from '../../src/connector/session-store.js';
 import type { RunnerCommand, RunnerView } from '../../src/shared/contracts.js';
-import { createAppFixture, HOST } from '../helpers/office-fixture.js';
+import { createAppFixture, HOST, insertAgent } from '../helpers/office-fixture.js';
 
 const seat = (seatId: string) => ({ seatId, state: 'idle', sessionId: null, restarts: 0, permissionMode: 'acceptEdits', detail: '' });
 
@@ -38,6 +38,13 @@ test('runner API: register (unknown seats refused), manager command round trip, 
   await runner('/v1/runners/me/log', { body: { entries: [{ seatId: 'dev-be', ts: 1, kind: 'text', summary: 'hello' }, { seatId: 'dev-fe', ts: 1, kind: 'text', summary: 'x' }] } });
   assert.deepEqual((await (await fixture.manager('/v1/seats/dev-be/runner-log')).json() as { entries: unknown[] }).entries.length, 1);
   assert.deepEqual(fixture.office.runners.log('dev-fe'), []);
+
+  // A finished "fresh" frees the seat so the new session can take it.
+  fixture.office.org.assignAgent('dev-be', insertAgent(fixture.db, 'agent-old'));
+  const fresh = fixture.office.runners.enqueue('dev-be', 'fresh', null, 'manager');
+  await runner('/v1/runners/me/commands?wait=0');
+  await runner(`/v1/runners/me/commands/${fresh.id}/result`, { body: { ok: true, message: 'starting' } });
+  assert.equal(fixture.office.org.seat('dev-be').agentId, null);
 
   // Stale commands expire instead of firing late.
   const late = fixture.office.runners.enqueue('dev-be', 'restart', null, 'manager');
