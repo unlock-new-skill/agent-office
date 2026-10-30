@@ -139,7 +139,12 @@ export function MapView({ state, notify, publicView = false, onDismiss, onResetW
           {TIMES.map(time => <button key={time.value} type="button" title={time.title} className={timeOfDay === time.value ? 'active' : ''} aria-pressed={timeOfDay === time.value} onClick={() => setTimeOfDay(time.value)}>{time.label}</button>)}
         </span>}
         {mode === '3d' && <button type="button" className="btn btn-small" title="Back to the whole office" onClick={() => setResetView(count => count + 1)}>⟲ Reset view</button>}
-        {mode === '3d' && <span className="muted map-hint">double-click: center there · drag: rotate · wheel: zoom · right-drag / arrows: pan</span>}
+        {mode === '3d' && <span className="map-help">
+          <button type="button" className="icon-btn map-help-btn" aria-label="Map controls" aria-describedby="map-help-tip">?</button>
+          <span id="map-help-tip" role="tooltip" className="map-help-tip">
+            <span><kbd>Double-click</kbd> center there</span><span><kbd>Drag</kbd> rotate</span><span><kbd>Wheel</kbd> zoom</span><span><kbd>Right-drag</kbd> / <kbd>Arrows</kbd> pan</span>
+          </span>
+        </span>}
       </div>
       <div className={`map-stage ${mode === '3d' ? 'is-3d' : ''}`} ref={host} onMouseLeave={() => setHover(null)}>
         {mode === '3d'
