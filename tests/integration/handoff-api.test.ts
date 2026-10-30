@@ -13,7 +13,7 @@ type Me = { seat: { id: string } | null; handoff: SeatHandoff | null; handoffBri
 test('handoff survives a seat changing sessions: next session gets note, open tasks and unread in /v1/me', async () => {
   const fixture = createAppFixture();
   const devLead = fixture.seatToken('dev-lead'); const first = fixture.seatToken('dev-be');
-  assert.equal((await fixture.agent(devLead, '/v1/tasks', { body: { title: 'Login API', assigneeSeatId: 'dev-be' } })).status, 201);
+  assert.equal((await fixture.agent(devLead, '/v1/tasks', { body: { title: 'Login API', body: 'Goal, inputs, expected output and acceptance criteria.', assigneeSeatId: 'dev-be' } })).status, 201);
   assert.equal((await fixture.agent(first, '/v1/seats/dev-be/handoff', { method: 'PUT', body: { body: 'JWT done; refresh token next. Branch feat/login.' } })).status, 200);
   fixture.office.org.assignAgent('dev-be', null);
   const second = fixture.auth.registerSession({ sessionId: 'session-dev-be-2', project: 'other-machine' });

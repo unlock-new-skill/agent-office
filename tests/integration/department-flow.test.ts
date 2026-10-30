@@ -37,7 +37,7 @@ test('manager → Dev Lead → task for Dev BE → done → Dev Lead reports to 
   assert.match(unseated.reason ?? '', /Still listening/, 'an unseated session only gets the keep-alive, never items');
 
   // 2. Lead delegates a task; Dev BE is woken with it.
-  const task = await as<Task>('s-dev-lead', '/v1/tasks', { body: { title: 'Login API', body: 'JWT + refresh', assigneeSeatId: 'dev-be' } });
+  const task = await as<Task>('s-dev-lead', '/v1/tasks', { body: { title: 'Login API', body: 'JWT + refresh tokens; acceptance: login works', assigneeSeatId: 'dev-be' } });
   const memberWake = await hook('s-dev-be', 'Stop') as { decision?: string; reason?: string };
   assert.equal(memberWake.decision, 'block'); assert.match(memberWake.reason ?? '', new RegExp(task.id));
 

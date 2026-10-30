@@ -8,9 +8,9 @@ type Me = { handoffBrief: string | null };
 
 test('a request accepted with requestedBy reports back to the asking leader on blocked and done', async () => {
   const fixture = createAppFixture(); const devLead = fixture.seatToken('dev-lead'); const designLead = fixture.seatToken('design-lead'); const atom = fixture.seatToken('design-atom');
-  assert.equal((await fixture.agent(designLead, '/v1/tasks', { body: { title: 'x', assigneeSeatId: 'design-atom', requestedBy: 'design-atom' } })).status, 400, 'requester must be a leader');
-  assert.equal((await fixture.agent(designLead, '/v1/tasks', { body: { title: 'x', assigneeSeatId: 'design-atom', requestedBy: 'design-lead' } })).status, 400, 'requester must be another department');
-  const created = await fixture.agent(designLead, '/v1/tasks', { body: { title: 'Login icons', body: 'spec: docs/login.md', assigneeSeatId: 'design-atom', requestedBy: '@dev-lead' } });
+  assert.equal((await fixture.agent(designLead, '/v1/tasks', { body: { title: 'x', body: 'Goal, inputs, expected output and acceptance criteria.', assigneeSeatId: 'design-atom', requestedBy: 'design-atom' } })).status, 400, 'requester must be a leader');
+  assert.equal((await fixture.agent(designLead, '/v1/tasks', { body: { title: 'x', body: 'Goal, inputs, expected output and acceptance criteria.', assigneeSeatId: 'design-atom', requestedBy: 'design-lead' } })).status, 400, 'requester must be another department');
+  const created = await fixture.agent(designLead, '/v1/tasks', { body: { title: 'Login icons', body: 'spec: docs/login.md, deliver PNG icons', assigneeSeatId: 'design-atom', requestedBy: '@dev-lead' } });
   assert.equal(created.status, 201);
   const task = await created.json() as Task;
   assert.equal(task.requesterSeatId, 'dev-lead');
@@ -27,7 +27,7 @@ test('a request accepted with requestedBy reports back to the asking leader on b
 
 test('handoff brief of a leader lists requests served and requests still open elsewhere', async () => {
   const fixture = createAppFixture(); const devLead = fixture.seatToken('dev-lead'); const designLead = fixture.seatToken('design-lead');
-  await fixture.agent(designLead, '/v1/tasks', { body: { title: 'Login icons', assigneeSeatId: 'design-atom', requestedBy: 'dev-lead' } });
+  await fixture.agent(designLead, '/v1/tasks', { body: { title: 'Login icons', body: 'Goal, inputs, expected output and acceptance criteria.', assigneeSeatId: 'design-atom', requestedBy: 'dev-lead' } });
   const design = await (await fixture.agent(designLead, '/v1/me')).json() as Me;
   assert.match(design.handoffBrief ?? '', /serving:\n- t-design-1 \[todo\] Login icons ← @dev-lead/);
   const dev = await (await fixture.agent(devLead, '/v1/me')).json() as Me;
@@ -41,7 +41,7 @@ test('deputy joins #leaders, can create tasks, and is woken for the leader only 
   assert.equal((await fixture.manager('/v1/departments/design', { method: 'PATCH', body: { deputySeatId: 'dev-be' } })).status, 400, 'other department');
   assert.equal((await fixture.manager('/v1/departments/design', { method: 'PATCH', body: { deputySeatId: 'design-atom' } })).status, 200);
   assert.equal((await fixture.agent(atom, '/v1/channels/leaders/messages', { body: { body: 'deputy here' } })).status, 201, 'deputy may post in #leaders');
-  assert.equal((await fixture.agent(atom, '/v1/tasks', { body: { title: 'Map pass', assigneeSeatId: 'design-map' } })).status, 201, 'deputy may create tasks');
+  assert.equal((await fixture.agent(atom, '/v1/tasks', { body: { title: 'Map pass', body: 'Goal, inputs, expected output and acceptance criteria.', assigneeSeatId: 'design-map' } })).status, 201, 'deputy may create tasks');
   // Leader seat is vacant → unavailable → deputy is woken by a mention of the leader.
   await fixture.agent(devLead, '/v1/channels/leaders/messages', { body: { body: '@design-lead need icons' } });
   const stoodIn = await (await fixture.agent(atom, '/v1/wake?wait=0')).json() as Wake;

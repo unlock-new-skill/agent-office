@@ -15,7 +15,7 @@ const RequestsView = lazy(() => import('./views/requests-view.js').then(module =
 const LandingView = lazy(() => import('./views/landing-view.js').then(module => ({ default: module.LandingView })));
 const PublicMapView = lazy(() => import('./views/public-map-view.js').then(module => ({ default: module.PublicMapView })));
 const SetupView = lazy(() => import('./views/setup-view.js').then(module => ({ default: module.SetupView })));
-const TABS: Array<{ view: View; label: string }> = [{ view: 'chat', label: 'Chat' }, { view: 'map', label: 'Map' }, { view: 'org', label: 'Org' }, { view: 'machines', label: 'Machines' }, { view: 'requests', label: 'Requests' }];
+const TABS: Array<{ view: View; label: string }> = [{ view: 'chat', label: 'Chat' }, { view: 'map', label: 'Map' }, { view: 'org', label: 'Org' }, { view: 'machines', label: 'Machines' }, { view: 'requests', label: 'Tasks' }];
 const DEFAULT_CHANNEL = 'leaders';
 /** Last opened chat room, per browser, so /chat and the Chat tab return to it. */
 const LAST_CHANNEL_KEY = 'agent-office.last-channel';
@@ -51,7 +51,7 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
   const channelId = route.channelId ?? rememberedChannel;
   // "/chat" opens the remembered room and shows it in the URL.
   useEffect(() => { if (route.view === 'chat' && !route.channelId && channels) navigate({ view: 'chat', channelId: rememberedChannel }, { replace: true }); }, [route, channels, rememberedChannel, navigate]);
-  const openRequests = Object.values(office.state.tasks).filter(task => task.requesterSeatId && task.status !== 'done').length;
+  const openTasks = Object.values(office.state.tasks).filter(task => task.status !== 'done').length;
   const [toast, setToast] = useState<string | null>(null);
   const notify = useCallback((text: string) => setToast(text), []);
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(null), 5000); return () => clearTimeout(timer); }, [toast]);
@@ -65,7 +65,7 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
           {TABS.map(tab => (
             <a key={tab.view} {...link(tab.view === 'chat' ? { view: 'chat', channelId: route.view === 'chat' ? route.channelId : rememberedChannel } : { view: tab.view, channelId: null })}
               className={route.view === tab.view ? 'active' : ''} aria-current={route.view === tab.view ? 'page' : undefined}>
-              {tab.label}{tab.view === 'requests' && openRequests > 0 ? ` (${openRequests})` : ''}
+              {tab.label}{tab.view === 'requests' && openTasks > 0 ? ` (${openTasks})` : ''}
             </a>
           ))}
         </nav>

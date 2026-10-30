@@ -39,7 +39,7 @@ export function TasksPanel({ state, channel, api, notify }: Props): ReactNode {
             </select></label>
             <label>Estimate (hours)<input type="number" min="0.25" step="0.25" value={estimate} onChange={event => setEstimate(event.target.value)} placeholder="e.g. 1.5" /></label>
             <label>Waits for (task ids)<input value={dependsOn} onChange={event => setDependsOn(event.target.value)} placeholder="t-design-3, t-dev-2" /></label>
-            <label>Details<textarea value={body} onChange={event => setBody(event.target.value)} rows={3} maxLength={8000} /></label>
+            <label>Requirement<textarea value={body} onChange={event => setBody(event.target.value)} rows={5} maxLength={8000} required placeholder={'Goal:\nInput:\nOutput:\nAcceptance:'} /></label>
             <div className="row-actions"><button type="submit" className="btn btn-primary">Create task</button><button type="button" className="btn" onClick={() => setOpen(false)}>Cancel</button></div>
           </form>
         : <button type="button" className="btn btn-block" onClick={() => setOpen(true)}>+ New task</button>}

@@ -10,6 +10,8 @@ type TaskPlan = { estimateMinutes?: number | null | undefined; dependsOn?: strin
 const TASK_COLUMNS = 'id,department_id AS departmentId,number,assignee_seat_id AS assigneeSeatId,requester_seat_id AS requesterSeatId,created_by_kind AS createdByKind,created_by_id AS createdById,title,body,status,created_at AS createdAt,updated_at AS updatedAt,estimate_minutes AS estimateMinutes,depends_on AS dependsOn';
 const toTask = (row: Omit<Task, 'dependsOn'> & { dependsOn: string }): Task => ({ ...row, dependsOn: JSON.parse(row.dependsOn) as string[] });
 const MAX_ESTIMATE = 7 * 24 * 60; const MAX_DEPENDENCIES = 20;
+/** Agents must write what the task needs (goal, inputs, expected output, acceptance) so the manager can follow it. */
+const MIN_REQUIREMENT = 20;
 /** Short human estimate for system lines: 45m, 2h, 1h 30m. */
 export const estimateLabel = (minutes: number): string => minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ''}`;
 const actorId = (actor: Actor): string => actor.kind === 'manager' ? 'manager' : actor.seatId;
@@ -60,6 +62,7 @@ export class TaskService {
       if (creator.role !== 'leader' && !this.isDeputy(creator)) throw forbidden('leader_only');
       departmentId = creator.departmentId;
     }
+    if (actor.kind === 'seat' && input.body.trim().length < MIN_REQUIREMENT) throw invalid('requirement_required: write the requirement in body (goal, inputs, expected output, acceptance criteria)');
     if (assignee.departmentId !== departmentId) throw forbidden('assignee_outside_department');
     // A cross-department request is tracked by naming the asking leader; the result is reported back to them.
     const requester = input.requestedBy ? this.org.seat(input.requestedBy.replace(/^@/, '')) : null;

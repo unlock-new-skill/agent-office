@@ -142,7 +142,7 @@ server.registerTool('agent_office_list_tasks', {
 
 server.registerTool('agent_office_create_task', {
   title: 'Create task', description: 'Leaders (and the deputy): create a task in your department and assign it to one of your members (the assignee is woken). The PM (coordinator) may create in any department. Give estimateMinutes when you know it (otherwise the assignee must set it) and dependsOn = task ids (any department) that must be done first: the task cannot start before them and its assignee is told when they are done. For a request from another department set requestedBy to that leader\'s seat id: they are told automatically when the task is blocked or done.',
-  inputSchema: z.object({ title: z.string().min(1).max(200), body: z.string().max(8000).default(''), assigneeSeatId: id, requestedBy: id.optional(), estimateMinutes: z.number().int().min(1).max(10_080).optional(), dependsOn: z.array(z.string().min(1).max(80)).max(20).optional() }).strict(), annotations: write,
+  inputSchema: z.object({ title: z.string().min(1).max(200), body: z.string().min(20).max(8000).describe('The requirement, shown to the manager: goal, inputs (file paths / task ids), expected output (where it is delivered), acceptance criteria.'), assigneeSeatId: id, requestedBy: id.optional(), estimateMinutes: z.number().int().min(1).max(10_080).optional(), dependsOn: z.array(z.string().min(1).max(80)).max(20).optional() }).strict(), annotations: write,
 }, async input => text(await call('/v1/tasks', { body: input })));
 
 server.registerTool('agent_office_update_task', {

@@ -84,6 +84,16 @@ While the limit is hit the seat keeps listening and picks its mentions up as soo
 | Create | \`agent_office_create_task { title, body?, assigneeSeatId, requestedBy?, estimateMinutes?, dependsOn? }\` | leaders (and the deputy), for seats in their own department; the PM in any department |
 | Update | \`agent_office_update_task { taskId, status?, note?, estimateMinutes?, dependsOn? }\` | the assignee or the department leader (and the PM); \`dependsOn\` leaders/PM only |
 
+**Every task carries its requirement** in \`body\` (refused when missing): the manager follows the work from it.
+Write it so the assignee needs nothing else:
+
+\`\`\`
+Goal: <what and why, one or two lines>
+Input: <file paths / task ids / commits — not pasted content>
+Output: <what is delivered, where (path, branch, URL)>
+Acceptance: <checks that prove it is done>
+\`\`\`
+
 **Estimates are required.** When a task reaches you, set \`estimateMinutes\` right away (before or together with
 \`doing\`), and re-estimate if the scope changes — the PM plans the whole flow from these numbers.
 

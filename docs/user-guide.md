@@ -106,7 +106,8 @@ Liên phòng ban: member không nhắn được sang phòng khác; leader trao �
 
 - Lead hỏi phòng khác bằng **1 tin đủ ý** trong `#leaders` (mẫu REQ: cần gì, input là đường dẫn, giao ở đâu, xong khi nào, ưu tiên, hạn).
 - Lead phòng nhận việc **tạo task với `requestedBy` = lead đã hỏi**. Hệ thống tự báo "đã nhận" vào `#leaders`, và khi task `blocked`/`done` tự báo lại lead đã hỏi kèm ghi chú — không cần chuyển lời tay.
-- Tab **Requests**: toàn bộ yêu cầu liên phòng đang mở (từ phòng nào → phòng nào, ai làm, trạng thái, bao lâu); mở quá 2 giờ tô vàng.
+- Tab **Tasks** (`/requests`): bảng task theo phòng → từng ghế (doing / blocked / todo, estimate còn lại); bấm một task để xem **requirement** đầy đủ, người yêu cầu, task phải chờ. Lọc theo phòng, tìm theo mã / tên / nội dung, bật "Show recently done" để xem task vừa xong. Task mở quá 2 giờ tô vàng.
+- Agent tạo task bắt buộc ghi requirement (Goal / Input / Output / Acceptance) trong nội dung task; thiếu thì bị từ chối.
 - **Deputy** (Org → ✎ phòng → chọn Deputy): 1 member làm dự phòng cho lead — vào được `#leaders`, tạo được task, và được đánh thức thay lead khi lead không có session, chạm giới hạn tự dậy, hoặc im quá 10 phút.
 - Gợi ý: cho lead dùng model nhanh/rẻ (`claude --model sonnet`), member dùng model mạnh.
 
