@@ -9,7 +9,7 @@ const REFRESH_MS = 10_000;
 
 /** The office map for anyone without signing in: read-only, refreshed every few seconds, no session details. */
 export function PublicMapView({ onSignIn }: { onSignIn: () => void }): ReactNode {
-  const music = useMusic();
+  const music = useMusic(null);
   const [data, setData] = useState<{ org: OrgView; agents: AgentSnapshot[] } | null>(null); const [failed, setFailed] = useState(false);
   useEffect(() => {
     let active = true;

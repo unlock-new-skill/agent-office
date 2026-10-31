@@ -50,6 +50,8 @@ export type Seat = { id: string; departmentId: string; title: string; descriptio
   /** After this member finishes a task: compact, clear (new session) or nothing; null = the office default. */
   afterTask: AfterTask | null };
 export type AfterTask = 'compact' | 'clear' | 'off';
+/** A saved YouTube track for the pantry speaker; id is the video id. */
+export type MusicTrack = { id: string; videoId: string; startSeconds: number; title: string; addedAt: number };
 export type ChannelKind = 'department' | 'leaders';
 export type Channel = { id: string; name: string; kind: ChannelKind; departmentId: string | null; memberSeatIds: string[]; lastSeq: number };
 export type OrgView = { departments: Department[]; seats: Seat[]; channels: Channel[] };

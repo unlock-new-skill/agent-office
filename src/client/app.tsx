@@ -38,7 +38,7 @@ export function App(): ReactNode {
 function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut: () => void }): ReactNode {
   const api = useMemo(() => createApi(csrfToken, onSignedOut), [csrfToken, onSignedOut]);
   const office = useOffice(api);
-  const music = useMusic();
+  const music = useMusic(api);
   const { route, navigate, link } = useRoute();
   // Normalise "/" and unknown paths to their canonical URL without adding a history entry.
   useEffect(() => { if (location.pathname !== routePath(route)) navigate(route, { replace: true }); }, [route, navigate]);

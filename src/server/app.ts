@@ -14,6 +14,7 @@ import { publicMap } from './public-map.js';
 import { registerNotifyRoutes } from './notify/notify-routes.js';
 import type { TelegramNotifier } from './notify/telegram-notifier.js';
 import { registerInstallRoutes } from './install-routes.js';
+import { registerMusicRoutes } from './music-routes.js';
 import { logger } from './logger.js';
 import { allowedHostsAndOrigins, isHttpsPublic, securityHeaders } from './http-policy.js';
 
@@ -95,6 +96,7 @@ export const createApp = (context: AppContext): Hono => {
   registerInstallRoutes(app, { auth: context.auth, manager, publicOrigin: context.config.publicOrigin });
   registerRunnerRoutes(app, { auth: context.auth, office: context.office, manager, publicOrigin: context.config.publicOrigin });
   registerNotifyRoutes(app, { manager, notifier: context.notifier ?? null });
+  registerMusicRoutes(app, { db: context.db, manager });
 
   app.post('/v1/agents/enrollment', async c => {
     if (!manager(c.req.raw)) return jsonError('unauthorized', 401);
