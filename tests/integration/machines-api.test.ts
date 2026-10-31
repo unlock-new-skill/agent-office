@@ -54,12 +54,12 @@ test('runner applies the web config live: add, restart on change, refuse folders
   const machine = fixture.office.runners.createMachine('Test box');
   const store = new SessionStore(mkdtempSync(path.join(tmpdir(), 'ao-machine-')));
   store.saveConnector({ daemonUrl: `http://${HOST}`, token: fixture.auth.createConnectorCredential(machine.id).token });
-  const spawned: Array<{ seatId: string; cwd: string; resume: string | null; closed: boolean }> = [];
+  const spawned: Array<{ seatId: string; cwd: string; resume: string | null; model: string | undefined; closed: boolean }> = [];
   const runner = new Runner({
     store, fetch: appFetch, out: () => undefined, config: { seats: [] }, sleep: () => new Promise(resolve => setTimeout(resolve, 5)),
     checkCwd: cwd => cwd.startsWith('/allowed/') ? null : `outside the folders this machine allows (/allowed)`,
     spawn: (seat, resume, onEvent) => {
-      const record = { seatId: seat.seatId, cwd: seat.cwd, resume, closed: false }; spawned.push(record);
+      const record = { seatId: seat.seatId, cwd: seat.cwd, resume, model: seat.model, closed: false }; spawned.push(record);
       return { send: () => undefined, interrupt: () => undefined, close: () => { record.closed = true; onEvent({ kind: 'exit', code: 0, stderr: '' }); }, kill: () => undefined };
     },
   });
@@ -84,8 +84,14 @@ test('runner applies the web config live: add, restart on change, refuse folders
   assert.equal(spawned[1]!.cwd, '/allowed/game-v2');
   await until(() => !seats().some(seat => seat.seatId === 'dev-fe'));
 
+  // A new model restarts the seat on the same session with --model.
+  fixture.office.runners.setConfig(machine.id, [{ seatId: 'dev-be', cwd: '/allowed/game-v2', permissionMode: 'acceptEdits', sessionId: 'sess-from-terminal', autoStart: true, showWindow: false, model: 'gemini-3.8-flash-high' }]);
+  await until(() => spawned.length === 3);
+  assert.equal(spawned[1]!.closed, true);
+  assert.deepEqual([spawned[2]!.model, spawned[2]!.resume], ['gemini-3.8-flash-high', 'sess-from-terminal']);
+
   fixture.office.runners.setConfig(machine.id, []);
-  await until(() => spawned[1]!.closed && seats().length === 0);
+  await until(() => spawned[2]!.closed && seats().length === 0);
   await runner.close(); fixture.office.runners.close(); await running;
   fixture.close();
 });

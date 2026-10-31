@@ -13,6 +13,8 @@ const MODES: Array<{ value: MachineSeat['permissionMode']; label: string }> = [
 ];
 /** Suggestions only; any model name the machine's Claude Code (or its proxy) accepts can be typed. */
 const MODELS = ['claude-opus-5-5', 'gpt-6-astra', 'opus', 'sonnet'];
+/** Same rule as the server: letters, digits and . _ : @ - / [ ] only, up to 80 characters. */
+const MODEL_NAME = /^[A-Za-z0-9._:@\-/[\]]{0,80}$/;
 const STATE_LABEL: Record<string, string> = { starting: 'starting', running: 'working', idle: 'listening', stopped: 'stopped', failed: 'failed' };
 const AFTER_TASK: Array<{ value: AfterTask; label: string; hint: string }> = [
   { value: 'compact', label: 'Compact', hint: 'nén context, giữ tóm tắt' },
@@ -91,11 +93,25 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
     if (!free) { notify('Không còn ghế trống để thêm.'); return; }
     setDraft([...draft, { seatId: free.id, cwd: '', permissionMode: 'bypassPermissions', sessionId: null, autoStart: true, showWindow: true }]); setDirty(true);
   };
+  const invalid = (seats: MachineSeat[]): string | null => {
+    if (seats.some(seat => !seat.cwd.trim())) return 'Điền thư mục repo cho mọi ghế.';
+    const badModel = seats.find(seat => seat.model && !MODEL_NAME.test(seat.model));
+    return badModel ? `Tên model "${badModel.model}" có ký tự không hợp lệ (chỉ chữ, số và . _ : @ - / [ ]).` : null;
+  };
+  /** Saves just this row on top of the saved config: the machine restarts that seat on its current session with the new values. */
+  const applyRow = (seat: MachineSeat): void => {
+    const seats = runner.config.seats.some(row => row.seatId === seat.seatId) ? runner.config.seats.map(row => row.seatId === seat.seatId ? seat : row) : [...runner.config.seats, seat];
+    const problem = invalid([seat]); if (problem) { notify(problem); return; }
+    setSaving(true);
+    api.send('PUT', `/v1/machines/${runner.id}/config`, { seats: seats.map(row => ({ ...row, cwd: row.cwd.trim() })) })
+      .then(() => { if (draft.every(row => row.seatId === seat.seatId || !unsaved(row))) setDirty(false); notify(`@${seat.seatId}: đã áp dụng — ghế khởi động lại trên session hiện tại với cấu hình mới.`); })
+      .catch(error => notify(errorText(error))).finally(() => setSaving(false));
+  };
   const save = (): void => {
-    if (draft.some(seat => !seat.cwd.trim())) { notify('Điền thư mục repo cho mọi ghế.'); return; }
+    const problem = invalid(draft); if (problem) { notify(problem); return; }
     setSaving(true);
     api.send('PUT', `/v1/machines/${runner.id}/config`, { seats: draft.map(seat => ({ ...seat, cwd: seat.cwd.trim() })) })
-      .then(() => { setDirty(false); notify(runner.online ? 'Đã lưu — máy đang áp dụng.' : 'Đã lưu — máy sẽ áp dụng khi runner kết nối.'); })
+      .then(() => { setDirty(false); notify(runner.online ? 'Đã lưu — máy đang áp dụng; ghế có thay đổi sẽ khởi động lại với cấu hình mới.' : 'Đã lưu — máy sẽ áp dụng khi runner kết nối.'); })
       .catch(error => notify(errorText(error))).finally(() => setSaving(false));
   };
   const getInstall = (): void => { api.send<Install>('POST', `/v1/machines/${runner.id}/install-code`).then(setInstall).catch(error => notify(errorText(error))); };
@@ -121,6 +137,11 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
     const seat = orgSeats.find(candidate => candidate.id === seatId);
     return !seat || seat.role === 'leader' || state.org?.departments.some(department => department.deputySeatId === seatId) === true;
   };
+  // A row whose repo, model, permissions or session differ from the saved config: the machine still runs the old values.
+  const unsaved = (seat: MachineSeat): boolean => {
+    const saved = runner.config.seats.find(row => row.seatId === seat.seatId);
+    return !saved || saved.cwd !== seat.cwd || (saved.model ?? null) !== (seat.model ?? null) || saved.permissionMode !== seat.permissionMode || saved.sessionId !== seat.sessionId || saved.autoStart !== seat.autoStart || saved.showWindow !== seat.showWindow;
+  };
   const name = runner.label ?? (runner.machine || runner.id);
   const presence = runner.lastSeenAt === 0 ? 'chưa cài' : runner.online ? 'online' : `offline · ${ago(runner.lastSeenAt)}`;
 
@@ -130,7 +151,7 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
         <span className={`machine-dot ${runner.online ? 'on' : ''}`} aria-hidden="true" />
         <div className="machine-title"><strong>{name}</strong><span className="muted">{runner.machine && runner.label ? `${runner.machine} · ` : ''}{presence}</span></div>
         <span className="spacer" />
-        <ConfirmButton label="Restart tất cả" confirm={`Xác nhận restart ${runningSeats.length} ghế`} title="Khởi động lại session của mọi ghế trên máy này (tiếp tục đúng session cũ)" disabled={!runner.online || runningSeats.length === 0} onConfirm={restartAll} />
+        <ConfirmButton label="Restart tất cả" confirm={`Xác nhận restart ${runningSeats.length} ghế`} title="Khởi động lại session của mọi ghế trên máy này (tiếp tục đúng session cũ)" disabled={!runner.online || runningSeats.length === 0 || dirty} onConfirm={restartAll} />
         <button type="button" className="btn btn-small btn-primary" onClick={getInstall}>Lệnh cài</button>
         <button type="button" className={`btn btn-small ${confirmDelete ? 'btn-warn' : ''}`} onClick={remove}>{confirmDelete ? 'Xác nhận xoá' : 'Xoá'}</button>
       </header>
@@ -146,19 +167,25 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
         </div>
       )}
 
+      {dirty && <div className="machine-unsaved" role="status">
+        <span><strong>Có thay đổi chưa lưu.</strong> Máy vẫn chạy cấu hình cũ cho tới khi bấm Lưu; ghế đổi repo, model, quyền hoặc session sẽ tự khởi động lại với cấu hình mới.</span>
+        <button type="button" className="btn btn-small" onClick={() => { setDraft(runner.config.seats); setDirty(false); }}>Huỷ</button>
+        <button type="button" className="btn btn-small btn-primary" disabled={saving} onClick={save}>{saving ? 'Đang lưu…' : 'Lưu & áp dụng'}</button>
+      </div>}
       <table className="machine-seats">
         <thead><tr><th>Ghế</th><th>Thư mục repo</th><th>Model</th><th>Quyền</th><th>Session</th><th>Tự chạy</th><th title="Mở cửa sổ Terminal trên máy để xem session trực tiếp">Cửa sổ</th><th title="Khi agent thành viên tự đánh dấu xong task">Sau task</th><th>Trạng thái</th><th>Điều khiển</th><th><span className="sr-only">Xoá</span></th></tr></thead>
         <tbody>
           {draft.length === 0 && <tr><td colSpan={11} className="muted">Chưa có ghế. Bấm "+ Thêm ghế".</td></tr>}
           {draft.map((seat, index) => {
-            const live = status(seat.seatId); const chosen = sessions.find(session => session.sessionId === seat.sessionId);
+            const live = status(seat.seatId); const chosen = sessions.find(session => session.sessionId === seat.sessionId); const changed = unsaved(seat);
             return (
-              <tr key={index}>
+              <tr key={index} className={changed ? 'row-unsaved' : undefined}>
                 <td data-label="Ghế"><select aria-label="Ghế" value={seat.seatId} onChange={event => edit(index, { seatId: event.target.value })}>
                   {orgSeats.map(option => <option key={option.id} value={option.id} disabled={seatsElsewhere.has(option.id) || (option.id !== seat.seatId && draft.some(row => row.seatId === option.id))}>{option.title} (@{option.id})</option>)}
                 </select></td>
                 <td data-label="Thư mục repo"><input aria-label="Thư mục repo (đường dẫn tuyệt đối)" value={seat.cwd} placeholder="/Users/me/projects/game" list={`cwd-${runner.id}`} onChange={event => edit(index, { cwd: event.target.value })} /></td>
-                <td data-label="Model"><input aria-label="Model (trống = mặc định của máy)" list="runner-models" value={seat.model ?? ''} placeholder="mặc định" maxLength={80} onChange={event => edit(index, { model: event.target.value.trim() || null })} /></td>
+                <td data-label="Model"><input aria-label="Model (trống = mặc định của máy; gõ tên bất kỳ)" list="runner-models" value={seat.model ?? ''} placeholder="mặc định · gõ tên bất kỳ" maxLength={80} aria-invalid={Boolean(seat.model && !MODEL_NAME.test(seat.model))} onChange={event => edit(index, { model: event.target.value.trim() || null })} />
+                  {seat.model && !MODEL_NAME.test(seat.model) && <span className="machine-warn">Chỉ dùng chữ, số và . _ : @ - / [ ]</span>}</td>
                 <td data-label="Quyền"><select aria-label="Quyền" value={seat.permissionMode} onChange={event => edit(index, { permissionMode: event.target.value as MachineSeat['permissionMode'] })}>
                   {MODES.map(mode => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
                 </select></td>
@@ -181,10 +208,13 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
                       {AFTER_TASK.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                     </select>}</td>
                 <td data-label="Trạng thái" className={`runner-state state-${live?.state ?? 'stopped'}`}>{live ? STATE_LABEL[live.state] ?? live.state : '—'}{live?.state === 'failed' && live.detail ? <span className="machine-detail muted">{live.detail}</span> : null}</td>
-                <td data-label="Điều khiển"><span className="machine-actions">
+                <td data-label="Điều khiển">{changed ? <span className="machine-actions">
+                  <button type="button" className="btn btn-small btn-primary" disabled={saving} title="Lưu riêng ghế này và khởi động lại nó trên session đang chạy với cấu hình mới" onClick={() => applyRow(seat)}>Áp dụng</button>
+                  <span className="machine-warn">Chưa lưu</span>
+                </span> : <span className="machine-actions">
                   <ConfirmButton label="Restart" confirm="Xác nhận restart" title="Dừng rồi chạy lại Claude, tiếp tục đúng session hiện tại (giữ context)" disabled={!runner.online || !live} onConfirm={() => run(seat.seatId, 'restart')} />
                   <ConfirmButton label="Session mới" confirm="Xác nhận session mới" title="Dừng session hiện tại và mở một session Claude mới cho ghế này (mất context cũ; ghi chú bàn giao và task vẫn còn)" disabled={!runner.online || !live} onConfirm={() => run(seat.seatId, 'fresh')} />
-                </span></td>
+                </span>}</td>
                 <td><button type="button" className="icon-btn" aria-label={`Bỏ ghế ${seat.seatId} khỏi máy này`} onClick={() => { setDraft(draft.filter((_, at) => at !== index)); setDirty(true); }}>✕</button></td>
               </tr>
             );
@@ -198,7 +228,7 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
         <button type="button" className="btn btn-small" onClick={addSeat}>+ Thêm ghế</button>
         <span className="spacer" />
         {dirty && <button type="button" className="btn btn-small" onClick={() => { setDraft(runner.config.seats); setDirty(false); }}>Huỷ thay đổi</button>}
-        <button type="button" className="btn btn-small btn-primary" disabled={!dirty || saving} onClick={save}>{saving ? 'Đang lưu…' : 'Lưu'}</button>
+        <button type="button" className="btn btn-small btn-primary" disabled={!dirty || saving} onClick={save}>{saving ? 'Đang lưu…' : dirty ? 'Lưu & áp dụng' : 'Đã lưu'}</button>
       </div>
     </section>
   );

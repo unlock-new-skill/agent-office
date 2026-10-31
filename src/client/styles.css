@@ -342,6 +342,11 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .machine-seats td { padding: 6px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 .machine-seats select, .machine-seats input:not([type=checkbox]) { width: 100%; min-width: 0; }
 .machine-seats td[data-label="Thư mục repo"] { min-width: 220px; }
+.machine-seats td[data-label="Model"] { min-width: 190px; }
+.machine-unsaved { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 8px; padding: 8px 10px; border: 1px solid var(--warn); border-radius: var(--radius); background: #f59e0b14; font-size: 13px; }
+.machine-unsaved span { flex: 1 1 320px; }
+.machine-seats tr.row-unsaved td { background: #f59e0b0d; }
+.machine-seats tr.row-unsaved td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .machine-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .machine-actions .btn { white-space: nowrap; }
 .machine-warn { display: block; color: var(--warn); font-size: 11px; margin-top: 4px; }
