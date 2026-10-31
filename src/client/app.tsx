@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createApi, currentSession } from './api/http.js';
 import { ApprovalsBar } from './components/approvals-bar.js';
+import { MusicDock, useMusic } from './components/music-dock.js';
 import { Toast } from './components/toast.js';
 import { routePath, useRoute, type View } from './router.js';
 import { useOffice } from './state/use-office.js';
@@ -37,6 +38,7 @@ export function App(): ReactNode {
 function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut: () => void }): ReactNode {
   const api = useMemo(() => createApi(csrfToken, onSignedOut), [csrfToken, onSignedOut]);
   const office = useOffice(api);
+  const music = useMusic();
   const { route, navigate, link } = useRoute();
   // Normalise "/" and unknown paths to their canonical URL without adding a history entry.
   useEffect(() => { if (location.pathname !== routePath(route)) navigate(route, { replace: true }); }, [route, navigate]);
@@ -78,12 +80,13 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
       <ApprovalsBar pending={office.state.permissions} api={api} notify={notify} />
       <Suspense fallback={<div className="loading">Loading…</div>}>
         {route.view === 'chat' && <ChatView office={office} channelId={channelId} onSelectChannel={id => navigate({ view: 'chat', channelId: id })} notify={notify} />}
-        {route.view === 'map' && <MapView state={office.state} notify={notify} onDismiss={office.dismissAgent} onResetWakes={seatId => api.send('POST', `/v1/seats/${seatId}/reset-wakes`).then(() => undefined)} />}
+        {route.view === 'map' && <MapView state={office.state} notify={notify} onDismiss={office.dismissAgent} onResetWakes={seatId => api.send('POST', `/v1/seats/${seatId}/reset-wakes`).then(() => undefined)} music={music} />}
         {route.view === 'org' && <OrgView state={office.state} api={api} notify={notify} onDismiss={office.dismissAgent} />}
         {route.view === 'machines' && <MachinesView state={office.state} api={api} notify={notify} />}
         {route.view === 'requests' && <RequestsView state={office.state} />}
         {route.view === 'setup' && <SetupView state={office.state} api={api} notify={notify} />}
       </Suspense>
+      <MusicDock music={music} />
       <Toast text={toast} onClose={() => setToast(null)} />
     </div>
   );

@@ -7,7 +7,8 @@ import { buildStreet, streetBand, type Patron } from './office-3d-street.js';
 import { box, cube, floorTexture, grassTexture, makeBush, makeCoffeeTable, makeFlowers, makeMoon, makeOutdoorTree, makePantry, makePendantLamp, makePlant, makeSofa, shared, ZONE_FLOORS, type FloorKind } from './office-3d-props.js';
 import type { SeatSprite } from '../map/office-map-painter.js';
 
-export type Target3D = { seatId: string } | { agentId: string };
+/** Something the pointer can hover or click: a desk, a lobby agent, or the pantry speaker (music on/off). */
+export type Target3D = { seatId: string } | { agentId: string } | { object: 'speaker' };
 export type Office3DModel = { layout: MapLayout; seats: Map<string, SeatSprite>; leaders: Set<string>; lobbyLabels: Map<string, string> };
 type Handlers = { onHover: (target: Target3D | null, x: number, y: number) => void; onSelect: (target: Target3D | null) => void };
 type Actor = {
@@ -113,6 +114,9 @@ export class Office3D {
   private bulbs: THREE.MeshStandardMaterial[] = [];
   private lamps: THREE.PointLight[] = [];
   private patrons: Patron[] = [];
+  /** Pantry speaker: its LED and the notes that float up while music plays. */
+  private speaker: { led: THREE.MeshStandardMaterial; notes: THREE.Sprite[]; cones: THREE.Mesh[] } | null = null;
+  private musicOn = false;
   private timeOfDay: TimeOfDay = 'auto';
   private center = new THREE.Vector3();
   private reach = 20;
@@ -173,6 +177,9 @@ export class Office3D {
   }
 
   /** Follow the clock, or pin the scene to day or night; relit on the next frame. */
+  /** Music state drives the speaker: LED on, cones pulsing, notes floating up. */
+  setMusic(on: boolean): void { this.musicOn = on; this.styleSpeaker(); }
+
   setTimeOfDay(mode: TimeOfDay): void { this.timeOfDay = mode; this.lightingCheckedAt = -Infinity; }
 
   setHighlight(hovered: string | null, selected: string | null): void {
@@ -203,6 +210,35 @@ export class Office3D {
     this.camera.updateProjectionMatrix();
   }
 
+  /** A bookshelf speaker on the pantry counter; clicking it toggles the office music. */
+  private addSpeaker(x: number, z: number): void {
+    const root = new THREE.Group(); root.position.set(x, 1.02, z); root.scale.setScalar(1.6); this.world.add(root);
+    const body = cube(new THREE.MeshStandardMaterial({ color: 0x3f2a1d, roughness: 0.6 }), [0.5, 0.72, 0.42], [0, 0.36, 0], root);
+    body.userData = { speaker: true, ownMaterial: true }; this.hitBoxes.push(body);
+    cube(shared(0x111827, { roughness: 0.9 }), [0.44, 0.66, 0.02], [0, 0.36, 0.215], root, false);
+    const coneMaterial = shared(0x1f2937, { roughness: 0.5, metalness: 0.2 });
+    const cones = [[0.12, 0.47], [0.17, 0.2]].map(([radius, y]) => {
+      const cone = new THREE.Mesh(new THREE.CylinderGeometry(radius!, radius! * 0.8, 0.05, 20), coneMaterial);
+      cone.rotation.x = Math.PI / 2; cone.position.set(0, y!, 0.235); root.add(cone); return cone;
+    });
+    const led = new THREE.MeshStandardMaterial({ color: 0x14532d, emissive: 0x22c55e, emissiveIntensity: 0 });
+    const ledMesh = cube(led, [0.05, 0.05, 0.02], [0.17, 0.66, 0.235], root, false); ledMesh.userData.ownMaterial = true;
+    const noteTexture = textTexture([{ text: '♪', font: 'bold 96px system-ui, sans-serif', color: '#fbbf24' }], 128, 128, null);
+    const notes = [0, 1, 2].map(index => {
+      const note = new THREE.Sprite(new THREE.SpriteMaterial({ map: noteTexture, transparent: true, depthWrite: false }));
+      note.userData = { phase: index / 3, sharedMap: index > 0 }; note.scale.set(0.45, 0.45, 1); note.visible = false; root.add(note); return note;
+    });
+    this.speaker = { led, notes, cones };
+    this.styleSpeaker();
+  }
+
+  private styleSpeaker(): void {
+    if (!this.speaker) return;
+    this.speaker.led.emissiveIntensity = this.musicOn ? 2.2 : 0;
+    for (const note of this.speaker.notes) note.visible = this.musicOn;
+    if (!this.musicOn) for (const cone of this.speaker.cones) cone.scale.set(1, 1, 1);
+  }
+
   private clearWorld(): void {
     this.world.traverse(object => {
       if (object instanceof THREE.Sprite) { if (!object.userData.sharedMap) object.material.map?.dispose(); object.material.dispose(); }
@@ -211,7 +247,7 @@ export class Office3D {
     });
     // Icon textures are shared across rebuilds; sprites above only disposed their own label maps.
     for (const lamp of this.lamps) lamp.dispose();
-    this.world.clear(); this.actors.clear(); this.hitBoxes = []; this.signs = []; this.plates.clear(); this.bulbs = []; this.lamps = []; this.patrons = []; this.glass = null;
+    this.world.clear(); this.actors.clear(); this.hitBoxes = []; this.signs = []; this.plates.clear(); this.bulbs = []; this.lamps = []; this.patrons = []; this.glass = null; this.speaker = null;
   }
 
   private floorFor(kind: FloorKind): THREE.CanvasTexture {
@@ -272,6 +308,7 @@ export class Office3D {
     const px = layout.width * U + 0.5;
     this.slab('tile', 0xf1f5f9, px, z0 + 1, 7, 6, 0.06);
     makePantry(this.world, px + 0.6, z0 + 1.2);
+    this.addSpeaker(px + 3.3, z0 + 1.6);
     const pantrySign = label('Pantry'); pantrySign.position.set(px + 3.5, 3.2, z0 + 1.6); pantrySign.scale.set(2.6, 0.55, 1); this.world.add(pantrySign);
     this.bulbs.push(makePendantLamp(this.world, px + 2.2, z0 + 3.8), makePendantLamp(this.world, px + 4.8, z0 + 3.8));
     this.addLampLight(px + 3.5, z0 + 4, 8);
@@ -486,6 +523,16 @@ export class Office3D {
         actor.icon.material.opacity = actor.status === 'blocked' ? 0.55 + Math.abs(Math.sin(phase * 4)) * 0.45 : 1;
       }
     }
+    if (this.speaker && this.musicOn) {
+      // Notes drift up and fade every ~2.4 s; cones thump on the beat.
+      for (const note of this.speaker.notes) {
+        const cycle = ((t / 2.4) + (note.userData.phase as number)) % 1;
+        note.position.set(Math.sin((cycle + (note.userData.phase as number)) * 6) * 0.25, 0.85 + cycle * 1.2, 0.1);
+        note.material.opacity = 1 - cycle;
+      }
+      const thump = 1 + Math.max(0, Math.sin(t * 9.5)) * 0.08;
+      for (const cone of this.speaker.cones) cone.scale.set(thump, 1, thump);
+    }
     for (const patron of this.patrons) {
       // Every ~9 s each customer sips (arm up, head back); otherwise they chat, turning to their neighbours.
       const cycle = (t + patron.phase) % 9; const sip = cycle < 1.6 ? Math.sin((Math.PI * cycle) / 1.6) : 0;
@@ -526,7 +573,8 @@ export class Office3D {
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const hit = this.raycaster.intersectObjects(this.hitBoxes, false)[0];
     if (!hit) return null;
-    const data = hit.object.userData as { seatId?: string; agentId?: string };
+    const data = hit.object.userData as { seatId?: string; agentId?: string; speaker?: boolean };
+    if (data.speaker) return { object: 'speaker' };
     return data.seatId ? { seatId: data.seatId } : data.agentId ? { agentId: data.agentId } : null;
   }
 
@@ -547,6 +595,8 @@ export class Office3D {
   };
   private readonly onClick = (event: MouseEvent): void => {
     // A click that ends a camera drag is not a selection.
+    // The second click of a double-click (camera focus) must not toggle or reselect what the first click did.
+    if (event.detail > 1) return;
     if (this.downAt && Math.hypot(event.clientX - this.downAt.x, event.clientY - this.downAt.y) > 5) return;
     this.handlers.onSelect(this.pick(event));
   };

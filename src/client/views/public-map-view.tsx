@@ -3,11 +3,13 @@ import type { AgentSnapshot, OrgView } from '../../shared/contracts.js';
 import { publicMap } from '../api/http.js';
 import { initialOfficeState, type OfficeState } from '../state/office-store.js';
 import { MapView } from './map-view.js';
+import { MusicDock, useMusic } from '../components/music-dock.js';
 
 const REFRESH_MS = 10_000;
 
 /** The office map for anyone without signing in: read-only, refreshed every few seconds, no session details. */
 export function PublicMapView({ onSignIn }: { onSignIn: () => void }): ReactNode {
+  const music = useMusic();
   const [data, setData] = useState<{ org: OrgView; agents: AgentSnapshot[] } | null>(null); const [failed, setFailed] = useState(false);
   useEffect(() => {
     let active = true;
@@ -27,7 +29,8 @@ export function PublicMapView({ onSignIn }: { onSignIn: () => void }): ReactNode
         <a className="btn btn-small" href="/about">Giới thiệu</a>
         <button type="button" className="btn btn-small" onClick={onSignIn}>Sign in</button>
       </header>
-      {data ? <MapView state={state} notify={() => undefined} publicView /> : <div className="loading">Loading map…</div>}
+      {data ? <MapView state={state} notify={() => undefined} publicView music={music} /> : <div className="loading">Loading map…</div>}
+      <MusicDock music={music} />
     </div>
   );
 }
