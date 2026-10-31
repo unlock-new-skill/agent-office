@@ -3,18 +3,19 @@ import type { MapLayout } from '../map/office-map-layout.js';
 import type { SeatSprite } from '../map/office-map-painter.js';
 import type { TimeOfDay } from '../map3d/day-night.js';
 import type { Office3D, Target3D } from '../map3d/office-3d.js';
+import type { MusicProgress } from '../components/music-dock.js';
 
 type Props = {
   layout: MapLayout; seats: Map<string, SeatSprite>; leaders: Set<string>; lobbyLabels: Map<string, string>;
   hovered: string | null; selected: string | null; timeOfDay: TimeOfDay;
   /** Bumped by the Reset view button: glides back to the whole office. */
   resetView: number;
-  musicOn: boolean;
+  musicOn: boolean; musicProgress: MusicProgress | null;
   onHover: (target: Target3D | null, x: number, y: number) => void; onSelect: (target: Target3D | null) => void; onUnavailable: () => void;
 };
 
 /** Hosts the Three.js office. The 3D module (and three itself) is loaded only when this stage mounts. */
-export function Map3DStage({ layout, seats, leaders, lobbyLabels, hovered, selected, timeOfDay, resetView, musicOn, onHover, onSelect, onUnavailable }: Props): ReactNode {
+export function Map3DStage({ layout, seats, leaders, lobbyLabels, hovered, selected, timeOfDay, resetView, musicOn, musicProgress, onHover, onSelect, onUnavailable }: Props): ReactNode {
   const host = useRef<HTMLDivElement>(null); const office = useRef<Office3D | null>(null);
   const [loading, setLoading] = useState(true);
   const latest = useRef({ layout, seats, leaders, lobbyLabels, hovered, selected, timeOfDay, onHover, onSelect, onUnavailable });
@@ -41,7 +42,7 @@ export function Map3DStage({ layout, seats, leaders, lobbyLabels, hovered, selec
   useEffect(() => { office.current?.setHighlight(hovered, selected); }, [hovered, selected]);
   useEffect(() => { office.current?.setTimeOfDay(timeOfDay); }, [timeOfDay]);
   useEffect(() => { if (resetView > 0) office.current?.resetView(); }, [resetView]);
-  useEffect(() => { office.current?.setMusic(musicOn); }, [musicOn, loading]);
+  useEffect(() => { office.current?.setMusic(musicOn, musicProgress); }, [musicOn, musicProgress, loading]);
 
   return <div className="map-3d" ref={host}>{loading && <p className="map-3d-loading muted">Loading 3D office…</p>}</div>;
 }

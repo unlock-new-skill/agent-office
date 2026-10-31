@@ -9,7 +9,7 @@ import { SEAT_STATUS_LABEL, seatStatus, unassignedAgents, workLabel, type Office
 import type { TimeOfDay } from '../map3d/day-night.js';
 import type { Task } from '../../shared/contracts.js';
 import { Map3DStage } from './map-3d-stage.js';
-import type { Music } from '../components/music-dock.js';
+import { clock, type Music } from '../components/music-dock.js';
 
 /** publicView: the anonymous /map (no session names, no actions). onDismiss hides a lobby session. */
 type Props = { state: OfficeState; notify: (text: string) => void; publicView?: boolean; onDismiss?: (agentId: string) => Promise<void>; onResetWakes?: (seatId: string) => Promise<void>; music?: Music };
@@ -105,7 +105,7 @@ export function MapView({ state, notify, publicView = false, onDismiss, onResetW
   };
 
   const describe = (target: Target): { title: string; lines: string[]; status: SeatStatus | null; seat: { id: string; title: string } | null; tasks?: Task[] } => {
-    if ('object' in target) return { title: 'Pantry speaker', status: null, seat: null, lines: [music?.on ? '♪ Music is playing' : 'Music is off', `Click to turn it ${music?.on ? 'off' : 'on'}`] };
+    if ('object' in target) return { title: 'Pantry speaker', status: null, seat: null, lines: [music?.on ? `♪ ${music.progress?.title ?? 'Playing'}` : 'Music is off', `Click to turn it ${music?.on ? 'off' : 'on'}`] };
     if ('agentId' in target) {
       const agent = state.agents.find(candidate => candidate.id === target.agentId);
       if (publicView) return { title: 'Claude session', status: null, seat: null, lines: [`Waiting for a seat · ${agent?.state ?? 'unknown'}`] };
@@ -140,7 +140,7 @@ export function MapView({ state, notify, publicView = false, onDismiss, onResetW
         {mode === '3d' && <span className="map-mode" role="group" aria-label="Time of day">
           {TIMES.map(time => <button key={time.value} type="button" title={time.title} className={timeOfDay === time.value ? 'active' : ''} aria-pressed={timeOfDay === time.value} onClick={() => setTimeOfDay(time.value)}>{time.label}</button>)}
         </span>}
-        {music && <button type="button" className={`btn btn-small ${music.on ? 'active' : ''}`} aria-pressed={music.on} title="Pantry speaker: office music on/off" onClick={music.toggle}>{music.on ? '♪ Music on' : '♪ Music'}</button>}
+        {music && <button type="button" className={`btn btn-small ${music.on ? 'active' : ''}`} aria-pressed={music.on} title="Pantry speaker: office music on/off" onClick={music.toggle}>{music.on ? `♪ ${music.progress ? `${clock(music.progress.current)} / ${clock(music.progress.duration)}` : 'Loading…'}` : '♪ Music'}</button>}
         {mode === '3d' && <button type="button" className="btn btn-small" title="Back to the whole office" onClick={() => setResetView(count => count + 1)}>⟲ Reset view</button>}
         {mode === '3d' && <span className="map-help">
           <button type="button" className="icon-btn map-help-btn" aria-label="Map controls" aria-describedby="map-help-tip">?</button>
@@ -152,7 +152,7 @@ export function MapView({ state, notify, publicView = false, onDismiss, onResetW
       <div className={`map-stage ${mode === '3d' ? 'is-3d' : ''}`} ref={host} onMouseLeave={() => setHover(null)}>
         {mode === '3d'
           ? <Map3DStage layout={layout} seats={sprites} leaders={leaders} lobbyLabels={lobbyLabels} hovered={keyOf(hover?.target ?? null)} selected={keyOf(selected)} timeOfDay={timeOfDay} resetView={resetView}
-              onHover={(target, x, y) => setHover(target ? { target, x, y } : null)} onSelect={target => { if (target && 'object' in target) { music?.toggle(); return; } setSelected(target); }} musicOn={music?.on ?? false} onUnavailable={() => { setMode('2d'); notify('3D is not available in this browser; showing the 2D map.'); }} />
+              onHover={(target, x, y) => setHover(target ? { target, x, y } : null)} onSelect={target => { if (target && 'object' in target) { music?.toggle(); return; } setSelected(target); }} musicOn={music?.on ?? false} musicProgress={music?.progress ?? null} onUnavailable={() => { setMode('2d'); notify('3D is not available in this browser; showing the 2D map.'); }} />
           : <canvas ref={canvas} className="map-canvas" role="img" aria-label={`Office map: ${counts.filter(([, count]) => count > 0).map(([status, count]) => `${count} ${SEAT_STATUS_LABEL[status]}`).join(', ')}`}
           onMouseMove={onMove} onClick={event => setSelected(targetAt(event))} style={{ cursor: hover ? 'pointer' : 'default' }} />}
         {tip && hover && !selected && <div className="map-tooltip" style={{ left: hover.x + 14, top: hover.y + 14 }}><strong>{tip.title}</strong>{tip.lines.slice(0, 3).map(line => <span key={line}>{line}</span>)}</div>}

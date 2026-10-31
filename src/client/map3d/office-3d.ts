@@ -6,6 +6,7 @@ import { hourFor, lightingAt, type TimeOfDay } from './day-night.js';
 import { buildStreet, streetBand, type Patron } from './office-3d-street.js';
 import { box, cube, floorTexture, grassTexture, makeBush, makeCoffeeTable, makeFlowers, makeMoon, makeOutdoorTree, makePantry, makePendantLamp, makePlant, makeSofa, shared, ZONE_FLOORS, type FloorKind } from './office-3d-props.js';
 import type { SeatSprite } from '../map/office-map-painter.js';
+import { clock, type MusicProgress } from '../components/music-dock.js';
 
 /** Something the pointer can hover or click: a desk, a lobby agent, or the pantry speaker (music on/off). */
 export type Target3D = { seatId: string } | { agentId: string } | { object: 'speaker' };
@@ -115,8 +116,8 @@ export class Office3D {
   private lamps: THREE.PointLight[] = [];
   private patrons: Patron[] = [];
   /** Pantry speaker: its LED and the notes that float up while music plays. */
-  private speaker: { led: THREE.MeshStandardMaterial; notes: THREE.Sprite[]; cones: THREE.Mesh[] } | null = null;
-  private musicOn = false;
+  private speaker: { led: THREE.MeshStandardMaterial; notes: THREE.Sprite[]; cones: THREE.Mesh[]; bar: THREE.Sprite } | null = null;
+  private musicOn = false; private musicProgress: MusicProgress | null = null; private barKey = '';
   private timeOfDay: TimeOfDay = 'auto';
   private center = new THREE.Vector3();
   private reach = 20;
@@ -178,7 +179,7 @@ export class Office3D {
 
   /** Follow the clock, or pin the scene to day or night; relit on the next frame. */
   /** Music state drives the speaker: LED on, cones pulsing, notes floating up. */
-  setMusic(on: boolean): void { this.musicOn = on; this.styleSpeaker(); }
+  setMusic(on: boolean, progress: MusicProgress | null = null): void { this.musicOn = on; this.musicProgress = progress; this.styleSpeaker(); }
 
   setTimeOfDay(mode: TimeOfDay): void { this.timeOfDay = mode; this.lightingCheckedAt = -Infinity; }
 
@@ -228,7 +229,9 @@ export class Office3D {
       const note = new THREE.Sprite(new THREE.SpriteMaterial({ map: noteTexture, transparent: true, depthWrite: false }));
       note.userData = { phase: index / 3, sharedMap: index > 0 }; note.scale.set(0.45, 0.45, 1); note.visible = false; root.add(note); return note;
     });
-    this.speaker = { led, notes, cones };
+    const bar = new THREE.Sprite(new THREE.SpriteMaterial({ depthWrite: false, depthTest: false, transparent: true }));
+    bar.position.set(0, 1.7, 0.1); bar.scale.set(2.8, 0.56, 1); bar.renderOrder = 10; bar.visible = false; root.add(bar);
+    this.speaker = { led, notes, cones, bar }; this.barKey = '';
     this.styleSpeaker();
   }
 
@@ -236,7 +239,33 @@ export class Office3D {
     if (!this.speaker) return;
     this.speaker.led.emissiveIntensity = this.musicOn ? 2.2 : 0;
     for (const note of this.speaker.notes) note.visible = this.musicOn;
+    this.drawMusicBar();
     if (!this.musicOn) for (const cone of this.speaker.cones) cone.scale.set(1, 1, 1);
+  }
+
+  /** Track title, progress bar and time above the speaker; redrawn only when the shown second or title changes. */
+  private drawMusicBar(): void {
+    const bar = this.speaker?.bar; if (!bar) return;
+    bar.visible = this.musicOn;
+    if (!this.musicOn) return;
+    const progress = this.musicProgress;
+    const key = progress ? `${progress.title}|${Math.floor(progress.current)}|${Math.floor(progress.duration)}` : 'loading';
+    if (key === this.barKey) return;
+    this.barKey = key;
+    const width = 512; const height = 102; const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = 'rgba(15,23,42,0.86)'; context.beginPath(); context.roundRect(2, 2, width - 4, height - 4, 22); context.fill();
+    context.font = '600 26px system-ui, sans-serif'; context.fillStyle = '#e2e8f0'; context.textBaseline = 'middle';
+    let title = progress?.title ? `♪ ${progress.title}` : '♪ Loading…';
+    while (title.length > 3 && context.measureText(title).width > width - 40) title = `${title.slice(0, -2)}…`;
+    context.fillText(title, 20, 32);
+    const share = progress && progress.duration > 0 ? Math.min(progress.current / progress.duration, 1) : 0;
+    context.fillStyle = 'rgba(148,163,184,0.35)'; context.beginPath(); context.roundRect(20, 62, 330, 10, 5); context.fill();
+    context.fillStyle = '#fbbf24'; context.beginPath(); context.roundRect(20, 62, Math.max(330 * share, 10), 10, 5); context.fill();
+    context.font = '500 22px ui-monospace, Menlo, monospace'; context.fillStyle = '#cbd5e1'; context.textAlign = 'right';
+    context.fillText(progress ? `${clock(progress.current)} / ${clock(progress.duration)}` : '--:--', width - 20, 68);
+    const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
+    bar.material.map?.dispose(); bar.material.map = texture; bar.material.needsUpdate = true;
   }
 
   private clearWorld(): void {

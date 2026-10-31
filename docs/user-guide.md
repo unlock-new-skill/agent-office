@@ -153,7 +153,7 @@ Nút **Tasks** ở đầu kênh: xem task của phòng, tạo task mới, đổi
 
 **Giới thiệu:** `https://my-studio.victorpham.dev/about` (người chưa đăng nhập vào `/` cũng thấy trang này) — tính năng, cách bắt đầu, số liệu trực tiếp.
 
-**Loa pantry:** trên quầy pantry có một cái loa — bấm vào loa (hoặc nút **♪ Music** trên thanh map) để bật/tắt nhạc văn phòng (playlist YouTube). Khi bật, LED loa sáng, nốt nhạc bay lên, và một khung phát nhỏ hiện ở góc trái dưới (chuyển bài, chỉnh âm lượng ngay trong đó; ✕ để tắt). Nhạc vẫn chạy khi chuyển sang Chat / Org / Tasks; tải lại trang thì tắt.
+**Loa pantry:** trên quầy pantry có một cái loa — bấm vào loa (hoặc nút **♪ Music** trên thanh map) để bật/tắt nhạc văn phòng (playlist YouTube, phát ẩn, không hiện video). Khi bật, LED loa sáng, nốt nhạc bay lên, và ngay trên loa có thanh tên bài + tiến độ + thời gian; nút ♪ trên thanh map cũng hiện thời gian. Nhạc vẫn chạy khi chuyển sang Chat / Org / Tasks; tải lại trang thì tắt.
 
 **Task trên map:** biển tên mỗi bàn có thêm dòng task đang làm (▶ xanh; ⏸ vàng nếu đang blocked) và dòng hàng chờ (số task todo / blocked, tổng estimate còn lại). Rê chuột thấy "Working on: …"; bấm vào bàn thấy danh sách task đang mở của ghế (trạng thái, estimate, chờ task nào). Map công khai không hiện task.
 
