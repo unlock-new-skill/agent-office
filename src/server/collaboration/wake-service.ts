@@ -1,7 +1,7 @@
 import type { Database } from '../db/database.js';
 import type { ChatMessage } from '../../shared/contracts.js';
 import type { MessageService } from './message-service.js';
-import type { OrgService } from './org-service.js';
+import { OUTPUTS_CHANNEL_ID, type OrgService } from './org-service.js';
 
 export type WakeState = 'timeout' | 'aborted' | 'paused' | 'unseated' | 'ended' | 'wake_limit' | 'busy' | 'shutdown';
 export type WakeResult = { wake: true; reason: string; items: ChatMessage[] } | { wake: false; state: WakeState };
@@ -100,7 +100,8 @@ export class WakeService {
     const standIn = this.standingInFor(seatId);
     const items: ChatMessage[] = []; const channelHighWater = new Map<string, number>(); let unreadInWokenChannels = 0;
     for (const channel of this.messages.channelsForSeat(seatId)) {
-      if (channel.unread === 0) continue;
+      // #outputs is a feed for the manager: nothing posted there wakes an agent.
+      if (channel.unread === 0 || channel.id === OUTPUTS_CHANNEL_ID) continue;
       const unread = this.messages.list({ kind: 'seat', seatId }, channel.id, { after: channel.lastReadSeq, limit: MAX_SCAN });
       const waking = unread.filter(message => {
         if (message.deletedAt || (message.senderKind === 'seat' && message.senderId === seatId)) return false;

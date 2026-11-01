@@ -73,7 +73,7 @@ export function ChatView({ office, channelId, onSelectChannel, notify }: Props):
     try { await api.send('POST', `${path}/messages`, inThread ? { body, threadSeq: inThread } : { body }); } catch (error) { notify(errorText(error)); throw error; }
   };
   const openThread = (message: ChatMessage): void => setThreadSeq(message.seq);
-  const subtitle = channel.kind === 'leaders' ? 'All department leaders' : `${department?.name ?? ''} department${department?.paused ? ' · paused' : ''}`;
+  const subtitle = channel.kind === 'outputs' ? 'Outputs of finished tasks · posting here wakes no one' : channel.kind === 'leaders' ? 'All department leaders' : `${department?.name ?? ''} department${department?.paused ? ' · paused' : ''}`;
 
   return (
     <div className={`chat-layout ${threadSeq !== null ? 'with-thread' : ''}`}>

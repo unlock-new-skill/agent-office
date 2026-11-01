@@ -146,7 +146,7 @@ server.registerTool('agent_office_create_task', {
 }, async input => text(await call('/v1/tasks', { body: input })));
 
 server.registerTool('agent_office_update_task', {
-  title: 'Update task', description: 'Move a task to todo/doing/blocked/done with an optional note, and/or set estimateMinutes (assignee: estimate every task you get, re-estimate when it changes). Leaders and the PM may also set dependsOn (task ids that must be done first; [] clears). A task cannot move to doing while a dependency is open. Assignee, department leader or the PM only. blocked/done notify the leader.',
+  title: 'Update task', description: 'Move a task to todo/doing/blocked/done with an optional note, and/or set estimateMinutes (assignee: estimate every task you get, re-estimate when it changes). Leaders and the PM may also set dependsOn (task ids that must be done first; [] clears). A task cannot move to doing while a dependency is open. Assignee, department leader or the PM only. blocked/done notify the leader. The done note is copied to #outputs for the manager: write the real output (deliverables, paths, links, commit), not just "done".',
   inputSchema: z.object({ taskId: id, status: z.enum(['todo', 'doing', 'blocked', 'done']).optional(), note: z.string().max(2000).default(''), estimateMinutes: z.number().int().min(1).max(10_080).optional(), dependsOn: z.array(z.string().min(1).max(80)).max(20).optional() }).strict(), annotations: write,
 }, async ({ taskId, ...patch }) => text(await call(`/v1/tasks/${encodeURIComponent(taskId)}`, { method: 'PATCH', body: patch })));
 

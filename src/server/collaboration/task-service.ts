@@ -2,7 +2,7 @@ import type { Database } from '../db/database.js';
 import type { CollabEvent, Seat, Task, TaskStatus } from '../../shared/contracts.js';
 import type { Actor, MessageService } from './message-service.js';
 import { forbidden, invalid, notFound } from './office-error.js';
-import { LEADERS_CHANNEL_ID, type OrgService } from './org-service.js';
+import { LEADERS_CHANNEL_ID, OUTPUTS_CHANNEL_ID, type OrgService } from './org-service.js';
 
 export type TaskEvent = { taskId: string; actorKind: string; actorId: string; fromStatus: TaskStatus | null; toStatus: TaskStatus; note: string; createdAt: number };
 type TaskFilter = { departmentId?: string | undefined; status?: TaskStatus | undefined; assignee?: string | undefined };
@@ -116,6 +116,7 @@ export class TaskService {
     this.announce(updated, `Task ${task.id} "${task.title}" ${change} by ${actorLabel(actor)}.${reassigned}${replanned ? this.planLine(updated) : ''}${note ? ` Note: ${note}` : ''}`, [...mentions]);
     if (status === 'done' && task.status !== 'done') {
       this.releaseDependents(updated);
+      this.postOutput(updated, actor, note);
       if (actor.kind === 'seat' && actor.seatId === updated.assigneeSeatId) this.onDoneByAssignee(updated);
     }
     // Close the loop for cross-department requests without the serving leader having to relay it.
@@ -123,6 +124,15 @@ export class TaskService {
       this.messages.postSystem(LEADERS_CHANNEL_ID, `@${updated.requesterSeatId} your request ${task.id} "${task.title}" is ${status}${note ? `: ${note}` : '.'}`.slice(0, 16_000), [updated.requesterSeatId]);
     }
     return updated;
+  }
+
+  /** Every finished task lands in #outputs with its result (the done note), so the manager reads outputs in one place. */
+  private postOutput(task: Task, actor: Actor, note: string): void {
+    const department = this.org.department(task.departmentId).name;
+    const who = task.assigneeSeatId ? `@${task.assigneeSeatId}` : actorLabel(actor);
+    const by = actor.kind === 'seat' && actor.seatId !== task.assigneeSeatId ? ` (closed by ${actorLabel(actor)})` : '';
+    const output = note.trim() || '(no output written — ask the assignee to put the result in the done note)';
+    if (this.db.raw.prepare('SELECT 1 FROM channels WHERE id=?').get(OUTPUTS_CHANNEL_ID)) this.messages.postSystem(OUTPUTS_CHANNEL_ID, `✅ ${task.id} "${task.title}" · ${department} · ${who}${by}\nOutput: ${output}`.slice(0, 16_000), []);
   }
 
   /** Tells the assignee of each open task that was waiting only on `done` that it can start now. */

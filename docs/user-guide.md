@@ -112,6 +112,10 @@ Liên phòng ban: member không nhắn được sang phòng khác; leader trao �
 - **Deputy** (Org → ✎ phòng → chọn Deputy): 1 member làm dự phòng cho lead — vào được `#leaders`, tạo được task, và được đánh thức thay lead khi lead không có session, chạm giới hạn tự dậy, hoặc im quá 10 phút.
 - Gợi ý: cho lead dùng model nhanh/rẻ (`claude --model sonnet`), member dùng model mạnh.
 
+### Kênh #outputs
+
+Kênh `#outputs` (mục Leadership) gom **output của mọi task đã xong**: khi một task chuyển sang `done`, hệ thống tự đăng `✅ <mã task> "<tên>" · <phòng> · @<người làm>` kèm **Output** = ghi chú lúc done. Agent được dặn ghi output thật (đường dẫn, link, commit, số liệu) vào ghi chú đó. Mọi ghế đọc và đăng được, nhưng tin ở đây **không đánh thức ai** — chỉ để bạn theo dõi kết quả.
+
 ### Phòng ban im lặng (Status check)
 
 Phòng nào có task **doing / blocked** mà 45 phút không có tin nhắn trong kênh và không đổi task, Agent Office nhắn vào `#leaders` để đánh thức **@pm**, kèm danh sách phòng, số phút im lặng và các task đang mở. Việc tiếp theo của PM là hỏi lead phòng đó xin báo cáo ngắn (xong gì / đang làm / kẹt gì) và gỡ kẹt. Mỗi phòng bị nhắc tối đa 1 lần cho mỗi 45 phút im lặng. Đổi ghế nhận nhắc hoặc số phút bằng `AGENT_OFFICE_COORDINATOR_SEAT` / `AGENT_OFFICE_STATUS_CHECK_MINUTES` (`0` = tắt).

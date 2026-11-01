@@ -7,6 +7,7 @@ type Props = { state: OfficeState; channelId: string; onSelect: (channelId: stri
 export function Sidebar({ state, channelId, onSelect }: Props): ReactNode {
   const org = state.org; if (!org) return <nav className="sidebar" aria-label="Channels" />;
   const leaders = org.channels.find(channel => channel.kind === 'leaders');
+  const outputs = org.channels.find(channel => channel.kind === 'outputs');
   const channelButton = (id: string, label: string, color?: string): ReactNode => {
     const unread = channelId === id ? 0 : unreadFor(state, id);
     return (
@@ -18,7 +19,7 @@ export function Sidebar({ state, channelId, onSelect }: Props): ReactNode {
   };
   return (
     <nav className="sidebar" aria-label="Channels">
-      {leaders && <section className="sidebar-group"><h2 className="sidebar-heading">Leadership</h2>{channelButton(leaders.id, 'leaders')}</section>}
+      {(leaders || outputs) && <section className="sidebar-group"><h2 className="sidebar-heading">Leadership</h2>{leaders && channelButton(leaders.id, 'leaders')}{outputs && channelButton(outputs.id, 'outputs')}</section>}
       {org.departments.map(department => {
         const seats = org.seats.filter(seat => seat.departmentId === department.id);
         return (

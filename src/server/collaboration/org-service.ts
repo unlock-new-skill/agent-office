@@ -3,6 +3,7 @@ import type { AfterTask, Channel, CollabEvent, Department, OfficeConfig, OrgView
 import { conflict, invalid, notFound, slugify } from './office-error.js';
 
 export const LEADERS_CHANNEL_ID = 'leaders';
+export const OUTPUTS_CHANNEL_ID = 'outputs';
 type SeatRow = Omit<Seat, 'wakeState'>;
 const SEAT_COLUMNS = 'id,department_id AS departmentId,title,description,role,sort,agent_id AS agentId,consecutive_wakes AS consecutiveWakes,work_ms AS workMs,after_task AS afterTask';
 
@@ -23,6 +24,10 @@ export class OrgService {
 
   constructor(private readonly db: Database, private readonly emit: (event: CollabEvent) => void, private readonly maxAutoWakes: number) {
     this.db.raw.prepare("INSERT OR IGNORE INTO channels(id,name,kind,department_id) VALUES (?,?,'leaders',NULL)").run(LEADERS_CHANNEL_ID, LEADERS_CHANNEL_ID);
+    if (!this.db.raw.prepare('SELECT 1 FROM channels WHERE id=?').get(OUTPUTS_CHANNEL_ID)) {
+      this.db.raw.prepare("INSERT OR IGNORE INTO channels(id,name,kind,department_id) VALUES (?,?,'outputs',NULL)").run(OUTPUTS_CHANNEL_ID, OUTPUTS_CHANNEL_ID);
+      this.db.raw.prepare('INSERT OR IGNORE INTO channel_members(channel_id,seat_id) SELECT ?,id FROM seats').run(OUTPUTS_CHANNEL_ID);
+    }
   }
 
   view(): OrgView {
@@ -30,9 +35,10 @@ export class OrgService {
     const seats = (this.db.raw.prepare(`SELECT ${SEAT_COLUMNS} FROM seats ORDER BY role='member',sort,title`).all() as SeatRow[]).map(row => this.toSeat(row));
     const members = this.db.raw.prepare('SELECT channel_id AS channelId,seat_id AS seatId FROM channel_members').all() as Array<{ channelId: string; seatId: string }>;
     const order = new Map(departments.map((department, index) => [department.id, index]));
+    const rank = (channel: { kind: string; departmentId: string | null }): number => channel.kind === 'leaders' ? -2 : channel.kind === 'outputs' ? -1 : order.get(channel.departmentId ?? '') ?? 0;
     const channels = (this.db.raw.prepare('SELECT c.id,c.name,c.kind,c.department_id AS departmentId,COALESCE(MAX(m.seq),0) AS lastSeq FROM channels c LEFT JOIN messages m ON m.channel_id=c.id GROUP BY c.id').all() as Array<Omit<Channel, 'memberSeatIds'>>)
       .map(channel => ({ ...channel, memberSeatIds: members.filter(member => member.channelId === channel.id).map(member => member.seatId) }))
-      .sort((a, b) => (a.kind === 'leaders' ? -1 : (order.get(a.departmentId ?? '') ?? 0)) - (b.kind === 'leaders' ? -1 : (order.get(b.departmentId ?? '') ?? 0)));
+      .sort((a, b) => rank(a) - rank(b));
     return { departments, seats, channels };
   }
 
@@ -75,7 +81,7 @@ export class OrgService {
 
   createDepartment(input: { id?: string | undefined; name: string; color: string }): Department {
     const id = input.id ?? this.uniqueId('departments', slugify(input.name));
-    if (id === LEADERS_CHANNEL_ID) throw conflict('department_id_reserved');
+    if (id === LEADERS_CHANNEL_ID || id === OUTPUTS_CHANNEL_ID) throw conflict('department_id_reserved');
     const sort = (this.db.raw.prepare('SELECT COALESCE(MAX(sort),-1)+1 AS next FROM departments').get() as { next: number }).next;
     this.mutate(() => this.insertDepartment(id, input.name, input.color, sort));
     return this.department(id);
@@ -191,6 +197,7 @@ export class OrgService {
       DELETE FROM channel_members;
       INSERT INTO channel_members(channel_id,seat_id) SELECT c.id,s.id FROM channels c JOIN seats s ON s.department_id=c.department_id WHERE c.kind='department';
       INSERT INTO channel_members(channel_id,seat_id) SELECT '${LEADERS_CHANNEL_ID}',id FROM seats WHERE role='leader';
+      INSERT INTO channel_members(channel_id,seat_id) SELECT '${OUTPUTS_CHANNEL_ID}',id FROM seats WHERE EXISTS (SELECT 1 FROM channels WHERE id='${OUTPUTS_CHANNEL_ID}');
       UPDATE departments SET deputy_seat_id=NULL WHERE deputy_seat_id IN (SELECT id FROM seats WHERE role='leader' OR department_id<>departments.id);
       INSERT OR IGNORE INTO channel_members(channel_id,seat_id) SELECT '${LEADERS_CHANNEL_ID}',deputy_seat_id FROM departments WHERE deputy_seat_id IS NOT NULL;
     `);
@@ -211,7 +218,7 @@ export class OrgService {
   }
 
   private uniqueId(table: 'departments' | 'seats', base: string): string {
-    const taken = (candidate: string): boolean => Boolean(this.db.raw.prepare(`SELECT 1 FROM ${table} WHERE id=?`).get(candidate)) || (table === 'departments' && candidate === LEADERS_CHANNEL_ID);
+    const taken = (candidate: string): boolean => Boolean(this.db.raw.prepare(`SELECT 1 FROM ${table} WHERE id=?`).get(candidate)) || (table === 'departments' && (candidate === LEADERS_CHANNEL_ID || candidate === OUTPUTS_CHANNEL_ID));
     if (!taken(base)) return base;
     for (let suffix = 2; ; suffix++) if (!taken(`${base}-${suffix}`)) return `${base}-${suffix}`;
   }

@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -64,6 +64,17 @@ const V18_TABLES = `CREATE TABLE music_tracks(
   title TEXT NOT NULL CHECK(length(title) <= 200), added_at INTEGER NOT NULL
 ) STRICT;
 INSERT INTO music_tracks(id,video_id,start_seconds,title,added_at) VALUES ('CXJJDxg7Mos','CXJJDxg7Mos',0,'OIIA OIIA CAT 10 HOURS',0);`;
+/**
+ * v19: channel kind 'outputs' (the read-only feed of finished task outputs). SQLite needs the table rebuilt to widen the
+ * CHECK; it runs with foreign keys off so dropping the old table does not cascade into messages and memberships.
+ */
+const V19_CHANNELS = `CREATE TABLE channels_v19(
+  id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL CHECK(kind IN ('department','leaders','outputs')),
+  department_id TEXT UNIQUE REFERENCES departments(id) ON DELETE CASCADE
+) STRICT;
+INSERT INTO channels_v19 SELECT id,name,kind,department_id FROM channels;
+DROP TABLE channels;
+ALTER TABLE channels_v19 RENAME TO channels;`;
 const V15_COLUMNS = "ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER; ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';";
 const THREAD_INDEX = 'CREATE INDEX messages_thread ON messages(channel_id, thread_seq);';
 
@@ -134,6 +145,9 @@ export class Database {
     // Additive upgrades run in place: v3 message edit/delete markers, v4 handoff notes + permission requests, v5 install codes, v6 deputies + task requesters, v7 message threads, v8 compaction summaries, v9 runners + app settings, v10 web-managed machines, v11 dismissed sessions, v12 seat work time + session model.
     const from = version.user_version;
     if (from >= 2 && from < SCHEMA_VERSION) {
+      // Table rebuilds (v19) must not cascade: foreign keys are off for the upgrade and checked afterwards.
+      this.raw.exec('PRAGMA foreign_keys=OFF');
+      try {
       this.transaction(() => {
         if (from < 3) this.raw.exec('ALTER TABLE messages ADD COLUMN edited_at INTEGER; ALTER TABLE messages ADD COLUMN deleted_at INTEGER;');
         if (from < 4) this.raw.exec(V4_TABLES);
@@ -153,8 +167,11 @@ export class Database {
         if (from < 16) this.raw.exec(V16_TABLES);
         if (from < 17) this.raw.exec(V17_COLUMNS);
         if (from < 18) this.raw.exec(V18_TABLES);
+        if (from < 19) this.raw.exec(V19_CHANNELS);
+        if ((this.raw.prepare('PRAGMA foreign_key_check').all() as unknown[]).length > 0) throw new Error('migration_foreign_key_violation');
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
+      } finally { this.raw.exec('PRAGMA foreign_keys=ON'); }
       return;
     }
     if (version.user_version !== 0) throw new Error('schema_reset_required: run npm run wipe -- --yes && npm run setup');
@@ -210,7 +227,7 @@ export class Database {
       ) STRICT;
       CREATE UNIQUE INDEX one_leader_per_department ON seats(department_id) WHERE role='leader';
       CREATE TABLE channels(
-        id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL CHECK(kind IN ('department','leaders')),
+        id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL CHECK(kind IN ('department','leaders','outputs')),
         department_id TEXT UNIQUE REFERENCES departments(id) ON DELETE CASCADE
       ) STRICT;
       CREATE TABLE channel_members(

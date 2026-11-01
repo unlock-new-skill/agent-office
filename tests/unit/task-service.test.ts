@@ -126,3 +126,17 @@ test('what happens after a task follows the seat setting, else the office defaul
   assert.equal(office.setAfterTaskDefault(null), 'compact', 'clearing the setting falls back to the env default');
   fixture.close();
 });
+
+test('a finished task posts its output to #outputs, which wakes nobody', () => {
+  const fixture = createSeededOffice(); const { tasks, messages, wake } = fixture.office; seatAll(fixture, ['dev-lead', 'dev-be']);
+  const task = tasks.create(seat('dev-lead'), { title: 'Export CSV', body: REQ, assigneeSeatId: 'dev-be' });
+  wake.check('dev-lead');
+  tasks.update(seat('dev-be'), task.id, { status: 'done', note: 'CSV at reports/export.csv, 169 rows, commit abc123' });
+  const output = messages.list(manager, 'outputs').at(-1)!;
+  assert.equal(output.senderKind, 'system'); assert.deepEqual(output.mentions, []);
+  assert.match(output.body, /✅ t-dev-1 "Export CSV" · Dev · @dev-be\nOutput: CSV at reports\/export\.csv, 169 rows, commit abc123/);
+  messages.post(seat('dev-be'), 'outputs', '@dev-lead extra details: charts in reports/');
+  assert.equal(wake.check('dev-lead').wake, true, 'the done line in #dev wakes the leader as before');
+  assert.equal(wake.check('dev-lead').wake, false, 'the #outputs message does not wake anyone');
+  fixture.close();
+});

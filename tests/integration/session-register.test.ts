@@ -36,7 +36,7 @@ test('manager seats a registered session; whoami reflects seat, description and 
   assert.equal((await fixture.manager('/v1/seats/dev-be/agent', { method: 'PUT', body: { agentId: session.agentId } })).status, 409);
   const me = await (await fixture.agent(session.token, '/v1/me')).json() as { seat: { id: string; description: string }; department: { name: string }; channels: Array<{ id: string }> };
   assert.equal(me.seat.id, 'dev-lead'); assert.equal(me.department.name, 'Dev'); assert.match(me.seat.description, /Coordinates/);
-  assert.deepEqual(me.channels.map(channel => channel.id).sort(), ['dev', 'leaders']);
+  assert.deepEqual(me.channels.map(channel => channel.id).sort(), ['dev', 'leaders', 'outputs']);
   assert.equal((await fixture.manager('/v1/seats/dev-lead/agent', { method: 'PUT', body: { agentId: null } })).status, 200);
   assert.equal(((await (await fixture.agent(session.token, '/v1/me')).json()) as { seat: null }).seat, null);
   fixture.close();

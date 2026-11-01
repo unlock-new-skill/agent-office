@@ -94,6 +94,10 @@ Output: <what is delivered, where (path, branch, URL)>
 Acceptance: <checks that prove it is done>
 \`\`\`
 
+**The done note is your output.** Moving a task to \`done\` copies its note into \`#outputs\`, the channel the manager
+reads for results: write the actual output there (what was delivered, file paths, links, commit, numbers), not just
+"done". Nothing posted in \`#outputs\` wakes anyone; add a follow-up message there only if the output does not fit the note.
+
 **Members: finishing a task trims your context.** When you (not a leader) move your own task to \`done\`, a runner
 seat compacts its conversation as soon as that turn ends (or starts a new session, per the manager's setting). Before
 \`done\`: put the result in the task note and keep your handoff note (\`agent_office_save_handoff\`) current with what
