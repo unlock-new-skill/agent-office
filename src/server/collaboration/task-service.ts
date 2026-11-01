@@ -78,7 +78,10 @@ export class TaskService {
       return this.get(id);
     });
     this.announce(task, `Task ${task.id} "${task.title}" assigned to @${assignee.id} by ${actorLabel(actor)}.${requester ? ` Requested by @${requester.id}.` : ''}${this.planLine(task)}${task.body ? ` Details: ${task.body}` : ''}`, [assignee.id]);
-    if (requester) this.messages.postSystem(LEADERS_CHANNEL_ID, `Request from @${requester.id} accepted as task ${task.id} "${task.title}" (assignee @${assignee.id}). You will be told here when it is blocked or done.`, [requester.id]);
+    if (requester) {
+      const accepted = this.messages.postSystem(LEADERS_CHANNEL_ID, `Request from @${requester.id} accepted as task ${task.id} "${task.title}" (assignee @${assignee.id}). You will be told in this thread when it is blocked or done.`, [requester.id]);
+      this.db.raw.prepare('UPDATE tasks SET request_thread_seq=? WHERE id=?').run(accepted.seq, task.id);
+    }
     return task;
   }
 
@@ -121,7 +124,7 @@ export class TaskService {
     }
     // Close the loop for cross-department requests without the serving leader having to relay it.
     if (updated.requesterSeatId && (status === 'blocked' || status === 'done') && status !== task.status) {
-      this.messages.postSystem(LEADERS_CHANNEL_ID, `@${updated.requesterSeatId} your request ${task.id} "${task.title}" is ${status}${note ? `: ${note}` : '.'}`.slice(0, 16_000), [updated.requesterSeatId]);
+      this.messages.postSystem(LEADERS_CHANNEL_ID, `@${updated.requesterSeatId} your request ${task.id} "${task.title}" is ${status}${note ? `: ${note}` : '.'}`.slice(0, 16_000), [updated.requesterSeatId], this.threadOf(task.id, 'request_thread_seq'));
     }
     return updated;
   }
@@ -140,7 +143,7 @@ export class TaskService {
     const waiting = (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE status!='done' AND depends_on LIKE ?`).all(`%"${done.id}"%`) as Array<Omit<Task, 'dependsOn'> & { dependsOn: string }>).map(toTask);
     for (const task of waiting) {
       if (!task.dependsOn.includes(done.id) || this.openDependencies(task.dependsOn).length > 0) continue;
-      this.messages.postSystem(task.departmentId, `Task ${task.id} "${task.title}" is ready to start: ${task.dependsOn.join(', ')} done (last: ${done.id}).${task.assigneeSeatId ? ` @${task.assigneeSeatId} move it to doing when you pick it up.` : ''}`, task.assigneeSeatId ? [task.assigneeSeatId] : []);
+      this.postInTaskThread(task, `Task ${task.id} "${task.title}" is ready to start: ${task.dependsOn.join(', ')} done (last: ${done.id}).${task.assigneeSeatId ? ` @${task.assigneeSeatId} move it to doing when you pick it up.` : ''}`, task.assigneeSeatId ? [task.assigneeSeatId] : []);
     }
   }
 
@@ -191,6 +194,19 @@ export class TaskService {
 
   private announce(task: Task, body: string, mentions: string[]): void {
     this.emit({ type: 'collab', kind: 'task', task });
-    this.messages.postSystem(task.departmentId, body.slice(0, 16_000), mentions);
+    this.postInTaskThread(task, body, mentions);
+  }
+
+  /**
+   * Lines about one task share one thread in its department channel: the first line is the root, every later change
+   * (status, reassign, ready to start) a reply. Mentions in replies still wake, the channel itself stays readable.
+   */
+  private postInTaskThread(task: Task, body: string, mentions: string[]): void {
+    const posted = this.messages.postSystem(task.departmentId, body.slice(0, 16_000), mentions, this.threadOf(task.id, 'thread_seq'));
+    if (posted.threadSeq === null) this.db.raw.prepare('UPDATE tasks SET thread_seq=? WHERE id=?').run(posted.seq, task.id);
+  }
+
+  private threadOf(taskId: string, column: 'thread_seq' | 'request_thread_seq'): number | undefined {
+    return (this.db.raw.prepare(`SELECT ${column} AS seq FROM tasks WHERE id=?`).get(taskId) as { seq: number | null } | undefined)?.seq ?? undefined;
   }
 }

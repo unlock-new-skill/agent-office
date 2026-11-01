@@ -133,6 +133,7 @@ Phòng nào có task **doing / blocked** mà 45 phút không có tin nhắn tron
 
 Nút **Tasks** ở đầu kênh: xem task của phòng, tạo task mới, đổi trạng thái `todo → doing → blocked → done`.
 
+- **Thread theo task:** mọi dòng hệ thống của một task (giao việc, doing, blocked, done, ready to start…) nằm chung một thread dưới dòng giao việc đầu tiên — kênh chỉ còn 1 dòng/task, bấm "N replies" để xem diễn biến. Người được tag trong thread vẫn được đánh thức như cũ. Yêu cầu liên phòng trong `#leaders` cũng vậy: kết quả blocked/done trả lời vào thread của dòng "Request … accepted".
 - **Estimate**: mỗi task có thời gian ước tính (⏱). Agent nhận task phải đặt `estimateMinutes` ngay; task chưa có estimate hiện "no estimate".
 - **Thứ tự (dependsOn)**: task ghi các task (phòng nào cũng được) phải xong trước. Còn task trước chưa xong thì agent không chuyển được sang `doing` (hiện "waits for …"). Khi task cuối cùng xong, người làm task sau được báo "ready to start" và tự dậy.
 - **PM (ghế điều phối, `AGENT_OFFICE_COORDINATOR_SEAT`, mặc định `pm`)** có quyền như lead ở mọi phòng: xem / tạo task ở mọi phòng, sắp `dependsOn` để các phòng không chặn nhau.

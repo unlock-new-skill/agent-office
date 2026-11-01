@@ -140,3 +140,19 @@ test('a finished task posts its output to #outputs, which wakes nobody', () => {
   assert.equal(wake.check('dev-lead').wake, false, 'the #outputs message does not wake anyone');
   fixture.close();
 });
+
+test('all lines about one task share one thread in the department channel; mentions inside still wake', () => {
+  const fixture = createSeededOffice(); const { tasks, messages, wake } = fixture.office; seatAll(fixture, ['dev-lead', 'dev-be']);
+  const task = tasks.create(seat('dev-lead'), { title: 'Cache', body: REQ, assigneeSeatId: 'dev-be' });
+  const root = messages.list(manager, 'dev').at(-1)!;
+  assert.equal(root.threadSeq, null);
+  wake.check('dev-be');
+  tasks.update(seat('dev-be'), task.id, { status: 'doing' });
+  tasks.update(seat('dev-lead'), task.id, { status: 'blocked', note: 'wait for infra' });
+  const lines = messages.list(manager, 'dev');
+  assert.deepEqual(lines.slice(-2).map(line => line.threadSeq), [root.seq, root.seq], 'later changes are replies to the first line');
+  assert.equal(messages.list(manager, 'dev', { topLevel: true }).filter(line => line.body.includes(task.id)).length, 1, 'the channel shows one line per task');
+  const woken = wake.check('dev-be');
+  assert.ok(woken.wake && /thread \[\d+\]/.test(woken.reason), 'the assignee is woken by the reply and told it is in a thread');
+  fixture.close();
+});

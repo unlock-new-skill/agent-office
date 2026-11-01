@@ -39,7 +39,11 @@ export class MessageService {
   }
 
   /** System lines (task lifecycle). Mentions are explicit so they never wake the actor that caused them. */
-  postSystem(channelId: string, body: string, mentions: string[]): ChatMessage { return this.insert(channelId, 'system', 'system', body, mentions); }
+  postSystem(channelId: string, body: string, mentions: string[], threadSeq?: number): ChatMessage {
+    // A thread whose root was deleted falls back to the channel instead of losing the line.
+    if (threadSeq !== undefined) { try { this.threadRoot(channelId, threadSeq); } catch { threadSeq = undefined; } }
+    return this.insert(channelId, 'system', 'system', body, mentions, threadSeq);
+  }
 
   /** Authors edit their own messages; mentions are re-parsed (seats that already received it are not woken again). */
   edit(actor: Actor, channelId: string, seq: number, body: string): ChatMessage {
