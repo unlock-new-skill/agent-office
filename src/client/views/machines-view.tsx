@@ -25,6 +25,14 @@ const afterTaskLabel = (mode: AfterTask): string => AFTER_TASK.find(option => op
 const shortPath = (value: string): string => value.split(/[\\/]/).filter(Boolean).slice(-2).join('/') || value;
 const ago = (ts: number): string => { const minutes = Math.round((Date.now() - ts) / 60_000); return minutes < 1 ? 'vừa xong' : minutes < 60 ? `${minutes} phút trước` : `${Math.round(minutes / 60)} giờ trước`; };
 
+const ACTIVE = (state: string): boolean => state !== 'stopped' && state !== 'failed';
+/** Sends one runner command to many seats; resolves to how many were accepted. */
+const sendAll = async (api: Api, seatIds: string[], kind: RunnerCommandKind): Promise<{ ok: number; failed: number }> => {
+  const results = await Promise.allSettled(seatIds.map(seatId => api.send('POST', `/v1/seats/${seatId}/runner-commands`, { kind })));
+  const failed = results.filter(result => result.status === 'rejected').length;
+  return { ok: seatIds.length - failed, failed };
+};
+
 /** A button that needs a second click within 4 s; for actions that cut a running session. */
 function ConfirmButton({ label, confirm, title, disabled, onConfirm }: { label: string; confirm: string; title: string; disabled?: boolean; onConfirm: () => void }): ReactNode {
   const [armed, setArmed] = useState(false); const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -43,6 +51,11 @@ function ConfirmButton({ label, confirm, title, disabled, onConfirm }: { label: 
 export function MachinesView({ state, api, notify }: Props): ReactNode {
   const [label, setLabel] = useState('');
   const [afterTask, setAfterTask] = useState<AfterTask | null>(null);
+  // Seats running on online machines: "stop everything" stops their Claude processes (sessions are kept for Start).
+  const activeSeats = state.runners.filter(runner => runner.online).flatMap(runner => runner.seats.filter(seat => ACTIVE(seat.state) && runner.config.seats.some(row => row.seatId === seat.seatId)).map(seat => seat.seatId));
+  const stopEverything = (): void => {
+    sendAll(api, activeSeats, 'stop').then(({ ok, failed }) => notify(`Đã gửi lệnh dừng ${ok} ghế${failed ? `; ${failed} ghế lỗi` : ''}. Bấm "Chạy" từng ghế (hoặc "Chạy cả máy") để chạy lại.`));
+  };
   useEffect(() => { api.get<{ mode: AfterTask }>('/v1/settings/after-task').then(result => setAfterTask(result.mode)).catch(() => undefined); }, [api]);
   const changeAfterTask = (mode: AfterTask): void => {
     api.send<{ mode: AfterTask }>('PUT', '/v1/settings/after-task', { mode }).then(result => { setAfterTask(result.mode); notify(`Mặc định sau khi xong task: ${afterTaskLabel(result.mode)}.`); }).catch(error => notify(errorText(error)));
@@ -62,6 +75,10 @@ export function MachinesView({ state, api, notify }: Props): ReactNode {
           <button type="submit" className="btn btn-small btn-primary" disabled={!label.trim()}>Thêm máy</button>
         </form>
       </header>
+      <div className="stop-everything">
+        <ConfirmButton label={`⏹ Dừng mọi agent (${activeSeats.length})`} confirm={`Xác nhận dừng ${activeSeats.length} ghế`} title="Dừng Claude ở mọi ghế đang chạy bằng runner; session được giữ để chạy tiếp sau" disabled={activeSeats.length === 0} onConfirm={stopEverything} />
+        <span className="muted">Chỉ dừng ghế chạy bằng runner; session được giữ nguyên, bấm "Chạy" để tiếp tục. Ghế mở trong terminal phải tự dừng ở máy đó.</span>
+      </div>
       <div className="after-task-default">
         <label htmlFor="after-task-default">Khi agent thành viên xong task</label>
         <select id="after-task-default" value={afterTask ?? ''} disabled={!afterTask} onChange={event => changeAfterTask(event.target.value as AfterTask)}>
@@ -120,8 +137,14 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
     api.send('DELETE', `/v1/machines/${runner.id}`).then(() => notify('Đã xoá máy và thu hồi quyền kết nối của nó.')).catch(error => notify(errorText(error)));
   };
   const command = (seatId: string, kind: RunnerCommandKind): Promise<void> => api.send('POST', `/v1/seats/${seatId}/runner-commands`, { kind }).then(() => undefined);
+  const DONE_TEXT: Partial<Record<RunnerCommandKind, string>> = { fresh: 'đang mở session mới', restart: 'đang khởi động lại session', stop: 'đã dừng (session được giữ)', start: 'đang chạy lại' };
   const run = (seatId: string, kind: RunnerCommandKind): void => {
-    command(seatId, kind).then(() => notify(kind === 'fresh' ? `@${seatId}: đang mở session mới.` : `@${seatId}: đang khởi động lại session.`)).catch(error => notify(errorText(error)));
+    command(seatId, kind).then(() => notify(`@${seatId}: ${DONE_TEXT[kind] ?? kind}.`)).catch(error => notify(errorText(error)));
+  };
+  const machineActive = runner.seats.filter(seat => ACTIVE(seat.state) && runner.config.seats.some(row => row.seatId === seat.seatId)).map(seat => seat.seatId);
+  const machineStopped = runner.config.seats.map(row => row.seatId).filter(seatId => !machineActive.includes(seatId));
+  const bulk = (seatIds: string[], kind: 'stop' | 'start'): void => {
+    sendAll(api, seatIds, kind).then(({ ok, failed }) => notify(`${kind === 'stop' ? 'Dừng' : 'Chạy lại'} ${ok} ghế trên ${runner.label ?? runner.machine}${failed ? `; ${failed} ghế lỗi` : ''}.`));
   };
   const runningSeats = runner.seats.filter(seat => runner.config.seats.some(row => row.seatId === seat.seatId)).map(seat => seat.seatId);
   const restartAll = (): void => {
@@ -151,6 +174,8 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
         <span className={`machine-dot ${runner.online ? 'on' : ''}`} aria-hidden="true" />
         <div className="machine-title"><strong>{name}</strong><span className="muted">{runner.machine && runner.label ? `${runner.machine} · ` : ''}{presence}</span></div>
         <span className="spacer" />
+        <ConfirmButton label="Dừng cả máy" confirm={`Xác nhận dừng ${machineActive.length} ghế`} title="Dừng Claude ở mọi ghế đang chạy trên máy này (giữ session)" disabled={!runner.online || machineActive.length === 0} onConfirm={() => bulk(machineActive, 'stop')} />
+        <button type="button" className="btn btn-small" title="Chạy lại mọi ghế đang dừng trên máy này (tiếp tục session cũ)" disabled={!runner.online || machineStopped.length === 0 || dirty} onClick={() => bulk(machineStopped, 'start')}>Chạy cả máy</button>
         <ConfirmButton label="Restart tất cả" confirm={`Xác nhận restart ${runningSeats.length} ghế`} title="Khởi động lại session của mọi ghế trên máy này (tiếp tục đúng session cũ)" disabled={!runner.online || runningSeats.length === 0 || dirty} onConfirm={restartAll} />
         <button type="button" className="btn btn-small btn-primary" onClick={getInstall}>Lệnh cài</button>
         <button type="button" className={`btn btn-small ${confirmDelete ? 'btn-warn' : ''}`} onClick={remove}>{confirmDelete ? 'Xác nhận xoá' : 'Xoá'}</button>
@@ -212,6 +237,9 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
                   <button type="button" className="btn btn-small btn-primary" disabled={saving} title="Lưu riêng ghế này và khởi động lại nó trên session đang chạy với cấu hình mới" onClick={() => applyRow(seat)}>Áp dụng</button>
                   <span className="machine-warn">Chưa lưu</span>
                 </span> : <span className="machine-actions">
+                  {live && ACTIVE(live.state)
+                    ? <ConfirmButton label="Dừng" confirm="Xác nhận dừng" title="Dừng Claude ở ghế này; session được giữ, bấm Chạy để tiếp tục" disabled={!runner.online} onConfirm={() => run(seat.seatId, 'stop')} />
+                    : <button type="button" className="btn btn-small btn-primary" title="Chạy ghế này (tiếp tục session cũ)" disabled={!runner.online || !live} onClick={() => run(seat.seatId, 'start')}>Chạy</button>}
                   <ConfirmButton label="Restart" confirm="Xác nhận restart" title="Dừng rồi chạy lại Claude, tiếp tục đúng session hiện tại (giữ context)" disabled={!runner.online || !live} onConfirm={() => run(seat.seatId, 'restart')} />
                   <ConfirmButton label="Session mới" confirm="Xác nhận session mới" title="Dừng session hiện tại và mở một session Claude mới cho ghế này (mất context cũ; ghi chú bàn giao và task vẫn còn)" disabled={!runner.online || !live} onConfirm={() => run(seat.seatId, 'fresh')} />
                 </span>}</td>
