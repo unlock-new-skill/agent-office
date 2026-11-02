@@ -115,9 +115,12 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
     const badModel = seats.find(seat => seat.model && !MODEL_NAME.test(seat.model));
     return badModel ? `Tên model "${badModel.model}" có ký tự không hợp lệ (chỉ chữ, số và . _ : @ - / [ ]).` : null;
   };
+  // Active/Inactive is switched on its own (setActive); a draft never overwrites it with a stale value.
+  const savedActive = (seat: MachineSeat): boolean => runner.config.seats.find(row => row.seatId === seat.seatId)?.autoStart ?? seat.autoStart;
   /** Saves just this row on top of the saved config: the machine restarts that seat on its current session with the new values. */
   const applyRow = (seat: MachineSeat): void => {
-    const seats = runner.config.seats.some(row => row.seatId === seat.seatId) ? runner.config.seats.map(row => row.seatId === seat.seatId ? seat : row) : [...runner.config.seats, seat];
+    const merged = { ...seat, autoStart: savedActive(seat) };
+    const seats = runner.config.seats.some(row => row.seatId === seat.seatId) ? runner.config.seats.map(row => row.seatId === seat.seatId ? merged : row) : [...runner.config.seats, merged];
     const problem = invalid([seat]); if (problem) { notify(problem); return; }
     setSaving(true);
     api.send('PUT', `/v1/machines/${runner.id}/config`, { seats: seats.map(row => ({ ...row, cwd: row.cwd.trim() })) })
@@ -127,7 +130,7 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
   const save = (): void => {
     const problem = invalid(draft); if (problem) { notify(problem); return; }
     setSaving(true);
-    api.send('PUT', `/v1/machines/${runner.id}/config`, { seats: draft.map(seat => ({ ...seat, cwd: seat.cwd.trim() })) })
+    api.send('PUT', `/v1/machines/${runner.id}/config`, { seats: draft.map(seat => ({ ...seat, autoStart: savedActive(seat), cwd: seat.cwd.trim() })) })
       .then(() => { setDirty(false); notify(runner.online ? 'Đã lưu — máy đang áp dụng; ghế có thay đổi sẽ khởi động lại với cấu hình mới.' : 'Đã lưu — máy sẽ áp dụng khi runner kết nối.'); })
       .catch(error => notify(errorText(error))).finally(() => setSaving(false));
   };
@@ -141,8 +144,21 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
   const run = (seatId: string, kind: RunnerCommandKind): void => {
     command(seatId, kind).then(() => notify(`@${seatId}: ${DONE_TEXT[kind] ?? kind}.`)).catch(error => notify(errorText(error)));
   };
+  /**
+   * Active/Inactive switch: saves autoStart for this seat only (so the choice survives runner restarts) and starts or
+   * stops it right away. The session is kept either way.
+   */
+  const [toggling, setToggling] = useState<string | null>(null);
+  const setActive = (seatId: string, active: boolean): void => {
+    setToggling(seatId);
+    const seats = runner.config.seats.map(row => row.seatId === seatId ? { ...row, autoStart: active } : row);
+    api.send('PUT', `/v1/machines/${runner.id}/config`, { seats })
+      .then(() => runner.online ? command(seatId, active ? 'start' : 'stop').catch(() => undefined) : undefined)
+      .then(() => notify(`@${seatId}: ${active ? 'Active — đang chạy lại' : 'Inactive — đã cho nghỉ (session được giữ)'}${runner.online ? '' : '; máy đang offline, sẽ áp dụng khi kết nối'}.`))
+      .catch(error => notify(errorText(error))).finally(() => setToggling(null));
+  };
   const machineActive = runner.seats.filter(seat => ACTIVE(seat.state) && runner.config.seats.some(row => row.seatId === seat.seatId)).map(seat => seat.seatId);
-  const machineStopped = runner.config.seats.map(row => row.seatId).filter(seatId => !machineActive.includes(seatId));
+  const machineStopped = runner.config.seats.filter(row => row.autoStart).map(row => row.seatId).filter(seatId => !machineActive.includes(seatId));
   const bulk = (seatIds: string[], kind: 'stop' | 'start'): void => {
     sendAll(api, seatIds, kind).then(({ ok, failed }) => notify(`${kind === 'stop' ? 'Dừng' : 'Chạy lại'} ${ok} ghế trên ${runner.label ?? runner.machine}${failed ? `; ${failed} ghế lỗi` : ''}.`));
   };
@@ -163,7 +179,7 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
   // A row whose repo, model, permissions or session differ from the saved config: the machine still runs the old values.
   const unsaved = (seat: MachineSeat): boolean => {
     const saved = runner.config.seats.find(row => row.seatId === seat.seatId);
-    return !saved || saved.cwd !== seat.cwd || (saved.model ?? null) !== (seat.model ?? null) || saved.permissionMode !== seat.permissionMode || saved.sessionId !== seat.sessionId || saved.autoStart !== seat.autoStart || saved.showWindow !== seat.showWindow;
+    return !saved || saved.cwd !== seat.cwd || (saved.model ?? null) !== (seat.model ?? null) || saved.permissionMode !== seat.permissionMode || saved.sessionId !== seat.sessionId || saved.showWindow !== seat.showWindow;
   };
   const name = runner.label ?? (runner.machine || runner.id);
   const presence = runner.lastSeenAt === 0 ? 'chưa cài' : runner.online ? 'online' : `offline · ${ago(runner.lastSeenAt)}`;
@@ -198,7 +214,7 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
         <button type="button" className="btn btn-small btn-primary" disabled={saving} onClick={save}>{saving ? 'Đang lưu…' : 'Lưu & áp dụng'}</button>
       </div>}
       <table className="machine-seats">
-        <thead><tr><th>Ghế</th><th>Thư mục repo</th><th>Model</th><th>Quyền</th><th>Session</th><th>Tự chạy</th><th title="Mở cửa sổ Terminal trên máy để xem session trực tiếp">Cửa sổ</th><th title="Khi agent thành viên tự đánh dấu xong task">Sau task</th><th>Trạng thái</th><th>Điều khiển</th><th><span className="sr-only">Xoá</span></th></tr></thead>
+        <thead><tr><th>Ghế</th><th>Thư mục repo</th><th>Model</th><th>Quyền</th><th>Session</th><th title="Inactive: ghế nghỉ (không chạy Claude), kể cả khi runner khởi động lại; mention vẫn được giữ chờ">Active</th><th title="Mở cửa sổ Terminal trên máy để xem session trực tiếp">Cửa sổ</th><th title="Khi agent thành viên tự đánh dấu xong task">Sau task</th><th>Trạng thái</th><th>Điều khiển</th><th><span className="sr-only">Xoá</span></th></tr></thead>
         <tbody>
           {draft.length === 0 && <tr><td colSpan={11} className="muted">Chưa có ghế. Bấm "+ Thêm ghế".</td></tr>}
           {draft.map((seat, index) => {
@@ -224,7 +240,13 @@ function MachineCard({ runner, state, api, notify, afterTaskDefault }: { runner:
                   {chosen && !chosen.ended && <span className="machine-warn">Session đang mở ở một terminal — khi lưu, hệ thống tự đóng Claude ở terminal đó (sau lượt đang chạy) rồi runner chạy tiếp session này.</span>}
                   {chosen && chosen.project !== seat.cwd && <button type="button" className="link-btn" onClick={() => edit(index, { cwd: chosen.project })}>Dùng thư mục của session</button>}
                 </td>
-                <td data-label="Tự chạy"><input type="checkbox" aria-label="Tự chạy khi runner khởi động" checked={seat.autoStart} onChange={event => edit(index, { autoStart: event.target.checked })} /></td>
+                <td data-label="Active">{(() => {
+                  const saved = runner.config.seats.find(row => row.seatId === seat.seatId); const active = saved?.autoStart ?? seat.autoStart;
+                  return <button type="button" role="switch" aria-checked={active} className={`switch ${active ? 'on' : ''}`} disabled={!saved || saving || toggling === seat.seatId}
+                    title={active ? 'Active — bấm để cho ghế nghỉ (dừng Claude, giữ session)' : 'Inactive — bấm để chạy lại ghế (tiếp tục session cũ)'} onClick={() => setActive(seat.seatId, !active)}>
+                    <span className="switch-knob" aria-hidden="true" /><span className="switch-label">{active ? 'Active' : 'Inactive'}</span>
+                  </button>;
+                })()}</td>
                 <td data-label="Cửa sổ"><input type="checkbox" aria-label="Mở cửa sổ theo dõi session trên desktop của máy" checked={seat.showWindow !== false} onChange={event => edit(index, { showWindow: event.target.checked })} /></td>
                 <td data-label="Sau task">{leadLike(seat.seatId)
                   ? <span className="muted" title="Lead và deputy giữ nguyên context">Lead — không áp dụng</span>
