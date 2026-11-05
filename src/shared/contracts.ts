@@ -66,7 +66,11 @@ export type Task = { id: string; departmentId: string; number: number; assigneeS
   /** Assignee's estimate of the work, in minutes (null until set). */
   estimateMinutes: number | null;
   /** Tasks (any department) that must be done before this one can start. */
-  dependsOn: string[] };
+  dependsOn: string[];
+  /** Step of this parent task (null for a top-level task); the parent's assignee leads and coordinates its steps. */
+  parentId: string | null; step: number | null;
+  /** Root seq of the task's discussion thread in its department channel (null until the first line is posted). */
+  threadSeq: number | null };
 /** Realtime collaboration notifications; state lives in SQLite, clients refetch over REST after reconnect. */
 export type PermissionStatus = 'pending' | 'allowed' | 'denied' | 'expired';
 export type PermissionBehavior = 'allow' | 'deny';

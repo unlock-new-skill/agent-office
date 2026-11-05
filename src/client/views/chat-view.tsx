@@ -6,7 +6,7 @@ import { MessageList } from '../components/message-list.js';
 import { Sidebar } from '../components/sidebar.js';
 import { TasksPanel } from '../components/tasks-panel.js';
 import { ThreadPanel } from '../components/thread-panel.js';
-import type { ChatMessage } from '../../shared/contracts.js';
+import type { ChatMessage, Task } from '../../shared/contracts.js';
 import { threadKey } from '../state/office-store.js';
 import type { OfficeHandle } from '../state/use-office.js';
 
@@ -73,6 +73,14 @@ export function ChatView({ office, channelId, onSelectChannel, notify }: Props):
     try { await api.send('POST', `${path}/messages`, inThread ? { body, threadSeq: inThread } : { body }); } catch (error) { notify(errorText(error)); throw error; }
   };
   const openThread = (message: ChatMessage): void => setThreadSeq(message.seq);
+  // A task's chat is its thread in its department channel (created on first open); it may live in another room.
+  const openTaskThread = async (task: Task): Promise<void> => {
+    try {
+      const target = await api.send<{ channelId: string; seq: number }>('POST', `/v1/tasks/${encodeURIComponent(task.id)}/thread`);
+      setThread(target); setPanel(null);
+      if (target.channelId !== channelId) onSelectChannel(target.channelId);
+    } catch (error) { notify(errorText(error)); }
+  };
   const subtitle = channel.kind === 'outputs' ? 'Outputs of finished tasks · posting here wakes no one' : channel.kind === 'leaders' ? 'All department leaders' : `${department?.name ?? ''} department${department?.paused ? ' · paused' : ''}`;
 
   return (
@@ -91,14 +99,14 @@ export function ChatView({ office, channelId, onSelectChannel, notify }: Props):
         <Composer channelLabel={label} seats={members} onSend={body => send(body)} />
       </main>
       {threadSeq !== null && <ThreadPanel channelId={channelId} thread={state.threads[threadKey(channelId, threadSeq)]} org={state.org}
-        seats={members} onSend={body => send(body, threadSeq)} onEdit={editMessage} onDelete={deleteMessage} onClose={() => setThreadSeq(null)} />}
+        memberIds={channel.memberSeatIds} onSend={body => send(body, threadSeq)} onEdit={editMessage} onDelete={deleteMessage} onClose={() => setThreadSeq(null)} />}
       {panel && <aside className="detail-panel" aria-label="Channel details">
         <div className="tabs" role="tablist">
           <button type="button" role="tab" aria-selected={panel === 'members'} className={panel === 'members' ? 'active' : ''} onClick={() => setPanel('members')}>Members</button>
           <button type="button" role="tab" aria-selected={panel === 'tasks'} className={panel === 'tasks' ? 'active' : ''} onClick={() => setPanel('tasks')}>Tasks</button>
           <button type="button" className="icon-btn detail-close" aria-label="Close panel" onClick={() => setPanel(null)}>✕</button>
         </div>
-        <div role="tabpanel">{panel === 'members' ? <MembersPanel state={state} channel={channel} /> : <TasksPanel state={state} channel={channel} api={api} notify={notify} />}</div>
+        <div role="tabpanel">{panel === 'members' ? <MembersPanel state={state} channel={channel} /> : <TasksPanel state={state} channel={channel} api={api} notify={notify} onOpenThread={task => void openTaskThread(task)} />}</div>
       </aside>}
     </div>
   );

@@ -125,6 +125,8 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .mention-menu button { display: flex; gap: 10px; width: 100%; background: none; border: 0; padding: 6px 8px; border-radius: 5px; cursor: pointer; text-align: left; }
 .mention-menu button.active { background: var(--accent-soft); }
 .mention-menu span { color: var(--text-dim); }
+.mention-menu .mention-hint { margin-left: auto; font-size: 11px; font-style: normal; color: var(--text-mute); }
+.thread-guests { margin: 0; padding: 6px 14px; font-size: 12px; border-bottom: 1px solid var(--line-soft); }
 
 .detail-panel { position: fixed; z-index: 25; top: 48px; right: 0; bottom: 0; width: min(400px, 100vw); border-left: 1px solid var(--line); background: var(--panel); box-shadow: var(--shadow); overflow-y: auto; overflow-x: hidden; }
 .detail-close { margin-left: auto; }
@@ -150,6 +152,15 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .task-plan { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--text-dim); }
 .task-no-estimate { color: var(--warn); }
 .task-waiting { color: var(--warn); }
+.task-steps { margin: 4px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.task-step { display: grid; gap: 2px; padding: 5px 8px; border-left: 2px solid var(--line); background: var(--panel); border-radius: 4px; }
+.task-step.status-doing { border-left-color: var(--busy); } .task-step.status-blocked { border-left-color: var(--warn); } .task-step.status-done { border-left-color: var(--ok); }
+.task-step-head { display: flex; align-items: center; gap: 6px; font-size: 12px; min-width: 0; }
+.task-step-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.task-step-head select { width: auto; padding: 1px 4px; font-size: 11px; }
+.step-form { margin-top: 4px; }
+.task-form .check { display: flex; align-items: center; gap: 6px; flex-direction: row; }
+.task-form .check input { width: auto; }
 .task-body { font-size: 12px; color: var(--text-mute); white-space: pre-wrap; }
 
 /* Org */

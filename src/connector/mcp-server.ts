@@ -95,7 +95,7 @@ server.registerTool('agent_office_read_channel', {
 });
 
 server.registerTool('agent_office_send_message', {
-  title: 'Send message', description: 'Post a message to a channel you belong to. Mention seats with @seat-id to notify them (mentions wake that seat). To answer a specific message or continue a discussion, pass threadSeq = the [seq] of the thread root: the reply goes into that thread (the root author is woken) instead of the main channel.',
+  title: 'Send message', description: 'Post a message to a channel you belong to, or into a thread you were invited to. Mention seats with @seat-id to notify them (mentions wake that seat). Inside a thread you may mention any seat of the office: a seat outside the channel is invited into that thread only. To answer a specific message or continue a discussion, pass threadSeq = the [seq] of the thread root: the reply goes into that thread (the root author is woken) instead of the main channel.',
   inputSchema: z.object({ channelId: id, body: z.string().min(1).max(16_384), threadSeq: z.number().int().min(1).optional() }).strict(), annotations: write,
 }, async ({ channelId, body, threadSeq }) => text(await call(`/v1/channels/${encodeURIComponent(channelId)}/messages`, { body: { body, ...(threadSeq ? { threadSeq } : {}) } })));
 
@@ -140,9 +140,18 @@ server.registerTool('agent_office_list_tasks', {
   inputSchema: z.object({ status: z.enum(['todo', 'doing', 'blocked', 'done']).optional(), mine: z.boolean().default(false), departmentId: id.optional() }).strict(), annotations: readOnly,
 }, async ({ status, mine, departmentId }) => text(await call(`/v1/tasks?${new URLSearchParams({ ...(status ? { status } : {}), ...(mine ? { assignee: 'me' } : {}), ...(departmentId ? { departmentId } : {}) }).toString()}`)));
 
+server.registerTool('agent_office_task_thread', {
+  title: 'Task thread', description: 'Open the discussion thread of a task (created if missing): returns its channelId and seq and shows the thread. Chat about the task there with agent_office_send_message { channelId, threadSeq: seq }; mention any seat of the office to bring it into the discussion. Works for tasks of your department, tasks you lead, and the parent task of a step you were given.',
+  inputSchema: z.object({ taskId: id }).strict(), annotations: write,
+}, async ({ taskId }) => {
+  const { channelId, seq } = await call(`/v1/tasks/${encodeURIComponent(taskId)}/thread`, { method: 'POST', body: {} }) as { channelId: string; seq: number };
+  const { root, replies } = await call(`/v1/channels/${encodeURIComponent(channelId)}/threads/${seq}`) as { root: ThreadedMessage; replies: ThreadedMessage[] };
+  return text([`Task ${taskId} thread: channelId=${channelId} seq=${seq}`, formatMessage(channelId, root), ...replies.map(reply => formatMessage(channelId, reply))].join('\n') + `\n(answer with agent_office_send_message channelId=${channelId} threadSeq=${seq})`);
+});
+
 server.registerTool('agent_office_create_task', {
-  title: 'Create task', description: 'Leaders (and the deputy): create a task in your department and assign it to one of your members (the assignee is woken). The PM (coordinator) may create in any department. Give estimateMinutes when you know it (otherwise the assignee must set it) and dependsOn = task ids (any department) that must be done first: the task cannot start before them and its assignee is told when they are done. For a request from another department set requestedBy to that leader\'s seat id: they are told automatically when the task is blocked or done.',
-  inputSchema: z.object({ title: z.string().min(1).max(200), body: z.string().min(20).max(8000).describe('The requirement, shown to the manager: goal, inputs (file paths / task ids), expected output (where it is delivered), acceptance criteria.'), assigneeSeatId: id, requestedBy: id.optional(), estimateMinutes: z.number().int().min(1).max(10_080).optional(), dependsOn: z.array(z.string().min(1).max(80)).max(20).optional() }).strict(), annotations: write,
+  title: 'Create task', description: 'Leaders (and the deputy): create a task in your department and assign it to one of your members (the assignee is woken). The PM (coordinator) may create in any department. Give estimateMinutes when you know it (otherwise the assignee must set it) and dependsOn = task ids (any department) that must be done first: the task cannot start before them and its assignee is told when they are done. For a request from another department set requestedBy to that leader\'s seat id: they are told automatically when the task is blocked or done. Steps: to split a task across people (any department), pass parentId = the task you lead (you are its assignee; the PM may too) and one call per step in order — each step waits for the previous one unless parallel=true, its assignee is woken and joins the parent task\'s thread, and you are told in that thread when a step is blocked or done (then close the parent with the final output).',
+  inputSchema: z.object({ title: z.string().min(1).max(200), body: z.string().min(20).max(8000).describe('The requirement, shown to the manager: goal, inputs (file paths / task ids), expected output (where it is delivered), acceptance criteria.'), assigneeSeatId: id, requestedBy: id.optional(), parentId: z.string().min(1).max(80).optional().describe('Make this a step of that task (one level). Assignee may be in any department.'), parallel: z.boolean().optional().describe('Step starts now instead of waiting for the previous step.'), estimateMinutes: z.number().int().min(1).max(10_080).optional(), dependsOn: z.array(z.string().min(1).max(80)).max(20).optional() }).strict(), annotations: write,
 }, async input => text(await call('/v1/tasks', { body: input })));
 
 server.registerTool('agent_office_update_task', {

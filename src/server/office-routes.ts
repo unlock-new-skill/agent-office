@@ -168,9 +168,10 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
     return c.json({ tasks: office.tasks.list(actor, filter) });
   }));
   app.post('/v1/tasks', c => withActor(c, async ({ actor }) => {
-    const input = z.object({ departmentId: z.string().max(64).optional(), title: z.string().max(200), body: z.string().max(8000).default(''), assigneeSeatId: z.string().min(1).max(64), requestedBy: z.string().min(1).max(64).optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
+    const input = z.object({ departmentId: z.string().max(64).optional(), title: z.string().max(200), body: z.string().max(8000).default(''), assigneeSeatId: z.string().min(1).max(64), requestedBy: z.string().min(1).max(64).optional(), parentId: z.string().min(1).max(80).optional(), parallel: z.boolean().optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
     return c.json(office.tasks.create(actor, input), 201);
   }));
+  app.post('/v1/tasks/:id/thread', c => withActor(c, ({ actor }) => c.json(office.tasks.thread(actor, c.req.param('id')))));
   app.patch('/v1/tasks/:id', c => withActor(c, async ({ actor }) => {
     const patch = z.object({ status: TaskStatusSchema.optional(), note: z.string().max(2000).optional(), assigneeSeatId: z.string().min(1).max(64).optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
     return c.json(office.tasks.update(actor, c.req.param('id'), patch));

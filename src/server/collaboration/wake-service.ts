@@ -40,6 +40,7 @@ export class WakeService {
     const standIn = this.standingInFor(seatId);
     const count = this.db.transaction(() => {
       for (const [channelId, lastSeq] of pending.channelHighWater) this.messages.markRead(seatId, channelId, lastSeq);
+      for (const { channelId, threadSeq, seq } of pending.guestHighWater) this.messages.markThreadRead(seatId, channelId, threadSeq, seq);
       // After a cooldown release the count starts over, so a real loop is stopped again after another full budget.
       const before = seat.consecutiveWakes >= this.maxAutoWakes ? 0 : seat.consecutiveWakes;
       this.db.raw.prepare('UPDATE seats SET consecutive_wakes=?,last_wake_at=? WHERE id=?').run(before + 1, Date.now(), seatId);
@@ -96,7 +97,7 @@ export class WakeService {
   waiterCount(): number { return this.waiters.size; }
   close(): void { for (const waiter of [...this.waiters]) waiter.finish({ wake: false, state: 'shutdown' }); }
 
-  private pending(seatId: string): { items: ChatMessage[]; channelHighWater: Map<string, number>; otherUnread: number } {
+  private pending(seatId: string): { items: ChatMessage[]; channelHighWater: Map<string, number>; guestHighWater: Array<{ channelId: string; threadSeq: number; seq: number }>; otherUnread: number } {
     const standIn = this.standingInFor(seatId);
     const items: ChatMessage[] = []; const channelHighWater = new Map<string, number>(); let unreadInWokenChannels = 0;
     for (const channel of this.messages.channelsForSeat(seatId)) {
@@ -110,7 +111,16 @@ export class WakeService {
       if (waking.length === 0) continue;
       items.push(...waking); channelHighWater.set(channel.id, channel.lastSeq); unreadInWokenChannels += channel.unread;
     }
-    return { items, channelHighWater, otherUnread: Math.max(unreadInWokenChannels - items.length, 0) };
+    const channelItems = items.length;
+    // Threads of other channels the seat was invited into by a mention: only mentions there wake it.
+    const guestHighWater: Array<{ channelId: string; threadSeq: number; seq: number }> = [];
+    for (const guest of this.messages.guestThreads(seatId)) {
+      const unread = this.messages.threadAfter(guest.channelId, guest.threadSeq, guest.lastReadSeq, MAX_SCAN);
+      const waking = unread.filter(message => !message.deletedAt && !(message.senderKind === 'seat' && message.senderId === seatId) && message.mentions.includes(seatId));
+      if (waking.length === 0) continue;
+      items.push(...waking); guestHighWater.push({ channelId: guest.channelId, threadSeq: guest.threadSeq, seq: unread.at(-1)!.seq });
+    }
+    return { items, channelHighWater, guestHighWater, otherUnread: Math.max(unreadInWokenChannels - channelItems, 0) };
   }
 
   private cooledDown(seatId: string): boolean {
@@ -141,7 +151,7 @@ export class WakeService {
     const seat = this.org.seat(seatId); const department = this.org.department(seat.departmentId);
     const header = `[Agent Office] ${items.length} new item(s) for @${seat.id} (${seat.title}, ${seat.role} of ${department.name}):`
       + (standIn ? `\nYou are the deputy and @${standIn} (your leader) is unavailable: handle items addressed to @${standIn} as acting leader (reply in #leaders, create tasks with requestedBy for cross-department requests).` : '');
-    const footer = `${otherUnread > 0 ? `(+${otherUnread} other unread message(s) in these channels)\n` : ''}Next: use agent_office_read_channel for context, do the work, reply with agent_office_send_message (mention @seat-id; pass threadSeq to answer inside a thread — the [n] shown — so replies do not flood the channel), update tasks with agent_office_update_task, and keep your seat note current with agent_office_save_handoff.`;
+    const footer = `${otherUnread > 0 ? `(+${otherUnread} other unread message(s) in these channels)\n` : ''}Next: use agent_office_read_channel for context (for a thread item, agent_office_read_thread { channelId, seq: the thread number } — the only way into a thread of a channel you are not in), do the work, reply with agent_office_send_message (mention @seat-id; pass threadSeq to answer inside a thread — the [n] shown — so replies do not flood the channel), update tasks with agent_office_update_task, and keep your seat note current with agent_office_save_handoff.`;
     const lines: string[] = []; let budget = MAX_REASON - header.length - footer.length - 64;
     for (const item of items) {
       const sender = item.senderKind === 'seat' ? `@${item.senderId}` : item.senderKind;

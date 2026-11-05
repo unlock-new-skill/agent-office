@@ -2,9 +2,10 @@ import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'rea
 import type { Seat } from '../../shared/contracts.js';
 import { mentionQueryAt } from '../state/mentions.js';
 
-type Props = { channelLabel: string; seats: Seat[]; onSend: (body: string) => Promise<void> };
+/** hint: extra text next to a suggested seat (e.g. that mentioning it invites it from another department). */
+type Props = { channelLabel: string; seats: Seat[]; onSend: (body: string) => Promise<void>; hint?: (seat: Seat) => string | null };
 
-export function Composer({ channelLabel, seats, onSend }: Props): ReactNode {
+export function Composer({ channelLabel, seats, onSend, hint }: Props): ReactNode {
   const [text, setText] = useState(''); const [sending, setSending] = useState(false); const [active, setActive] = useState(0);
   const [query, setQuery] = useState<{ query: string; start: number } | null>(null);
   const input = useRef<HTMLTextAreaElement>(null); const inputId = useId();
@@ -41,7 +42,7 @@ export function Composer({ channelLabel, seats, onSend }: Props): ReactNode {
         <ul className="mention-menu" role="listbox" aria-label="Mention a seat">
           {suggestions.map((seat, index) => (
             <li key={seat.id} role="option" aria-selected={index === active}>
-              <button type="button" className={index === active ? 'active' : ''} onMouseDown={event => { event.preventDefault(); choose(seat); }}><b>@{seat.id}</b><span>{seat.title}</span></button>
+              <button type="button" className={index === active ? 'active' : ''} onMouseDown={event => { event.preventDefault(); choose(seat); }}><b>@{seat.id}</b><span>{seat.title}</span>{hint?.(seat) && <em className="mention-hint">{hint(seat)}</em>}</button>
             </li>
           ))}
         </ul>

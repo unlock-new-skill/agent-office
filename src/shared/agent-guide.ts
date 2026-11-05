@@ -48,12 +48,19 @@ replies as \`↳ in thread [n]\` and roots with their reply count; \`agent_offic
 whole thread. Use a thread for follow-ups, questions about one request, and status updates on it; start a new
 top-level message only for a new topic. Threads are one level deep (reply to the root, not to a reply).
 
+**Chat on a task.** Every task has its own thread in its department channel (its status lines go there too).
+\`agent_office_task_thread { taskId }\` opens it and gives you \`channelId\` + \`seq\`; discuss the task there with
+\`agent_office_send_message { channelId, threadSeq: seq }\` instead of the main channel. Inside a thread you may
+mention **any seat of the office**: a seat outside the channel is invited into that one thread (it can read it with
+\`agent_office_read_thread\` and reply there, nothing else of the channel). Invite only who you need an answer from.
+
 ## 4. Mentions — how you notify someone
 
 - Write \`@seat-id\` (e.g. \`@dev-be\`, \`@ba-lead\`) anywhere in a message body. Only real seat ids count; check ids with
   \`agent_office_whoami\` / the channel member list. Email-like text (\`a@b.c\`) is not a mention.
 - A mention **wakes** that seat if its session is waiting, and the message is handed to it immediately.
-- You can only mention people effectively in a channel they are members of — mention seats in a shared channel.
+- In a channel's main timeline, only members of that channel count as mentions. Inside a thread, any seat counts and
+  is invited into that thread (see Threads).
 - Editing a message re-parses mentions: removing a mention before the recipient has read it cancels the wake-up; seats
   that already received the message are **not** woken again by an edit. Deleting a message cancels its wake-up.
 - \`@all\` (or \`@everyone\`) mentions every seat in the channel and wakes them all. Only the manager, leaders and
@@ -83,6 +90,15 @@ While the limit is hit the seat keeps listening and picks its mentions up as soo
 | List | \`agent_office_list_tasks { status?, mine?, departmentId? }\` | anyone (own department); the PM sees all |
 | Create | \`agent_office_create_task { title, body?, assigneeSeatId, requestedBy?, estimateMinutes?, dependsOn? }\` | leaders (and the deputy), for seats in their own department; the PM in any department |
 | Update | \`agent_office_update_task { taskId, status?, note?, estimateMinutes?, dependsOn? }\` | the assignee or the department leader (and the PM); \`dependsOn\` leaders/PM only |
+| Add step | \`agent_office_create_task { parentId, title, body, assigneeSeatId, parallel? }\` | the task's lead (its assignee) and the PM; assignee in any department |
+| Chat | \`agent_office_task_thread { taskId }\` | department members, the task's lead, its step assignees |
+
+**Steps (multi-agent work).** The PM (or the manager) gives a task to one lead, who coordinates it. The lead (or PM)
+splits it into ordered steps with \`parentId\`: step 1 → @a, step 2 → @b…, each with what to do and the expected output
+in \`body\`. A step waits for the previous one (pass \`parallel: true\` for one that can start now); when a step is done,
+the next assignee is woken. Step assignees join the parent task's thread — discuss there. The lead is told in that
+thread when a step is blocked or done, and when all steps are done reviews the outputs and moves the parent to
+\`done\` with the final output (refused while a step is open). Assignee of a step: update only your step.
 
 **Every task carries its requirement** in \`body\` (refused when missing): the manager follows the work from it.
 Write it so the assignee needs nothing else:

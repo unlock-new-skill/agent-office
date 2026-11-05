@@ -156,3 +156,51 @@ test('all lines about one task share one thread in the department channel; menti
   assert.ok(woken.wake && /thread \[\d+\]/.test(woken.reason), 'the assignee is woken by the reply and told it is in a thread');
   fixture.close();
 });
+
+test('a mention inside a thread invites a seat from another department into that thread only', () => {
+  const fixture = createSeededOffice(); const { tasks, messages, wake } = fixture.office; seatAll(fixture, ['dev-lead', 'dev-be', 'ba-docs']);
+  const task = tasks.create(seat('dev-lead'), { title: 'Cache', body: REQ, assigneeSeatId: 'dev-be' });
+  const { channelId, seq } = tasks.thread(seat('dev-be'), task.id);
+  assert.equal(channelId, 'dev');
+  assert.throws(() => messages.thread(seat('ba-docs'), 'dev', seq), /forbidden_channel/);
+  wake.check('dev-be');
+  messages.post(seat('dev-be'), 'dev', '@ba-docs which fields does the report need?', seq);
+  assert.deepEqual(messages.guests('dev', seq), ['ba-docs']);
+  const woken = wake.check('ba-docs');
+  assert.ok(woken.wake && woken.reason.includes(`#dev thread [${seq}]`), 'the guest is woken by the mention');
+  assert.equal(wake.check('ba-docs').wake, false, 'the mention is consumed once');
+  assert.equal(messages.thread(seat('ba-docs'), 'dev', seq).replies.at(-1)!.senderId, 'dev-be');
+  messages.post(seat('ba-docs'), 'dev', '@dev-be id, total and date.', seq);
+  assert.ok(wake.check('dev-be').wake, 'the guest reply wakes the member it mentions');
+  assert.throws(() => messages.post(seat('ba-docs'), 'dev', 'top level'), /forbidden_channel/, 'a guest cannot post to the channel');
+  assert.throws(() => messages.list(seat('ba-docs'), 'dev'), /forbidden_channel/, 'nor read it');
+  assert.equal(messages.post(seat('dev-be'), 'dev', 'ping @ba-docs').mentions.length, 0, 'top-level mentions still need channel membership');
+  fixture.close();
+});
+
+test('steps: the lead splits a task across departments, steps run in order, the lead closes it', () => {
+  const fixture = createSeededOffice({ coordinatorSeatId: 'ops-lead' }); const { tasks, messages, wake } = fixture.office; seatAll(fixture, ['ops-lead', 'dev-lead', 'dev-be', 'ba-docs']);
+  const parent = tasks.create(seat('ops-lead'), { departmentId: 'dev', title: 'Report feature', body: REQ, assigneeSeatId: 'dev-lead' });
+  assert.throws(() => tasks.create(seat('dev-be'), { title: 'x', body: REQ, assigneeSeatId: 'ba-docs', parentId: parent.id }), /only_task_lead_adds_steps/);
+  const spec = tasks.create(seat('dev-lead'), { title: 'Spec', body: REQ, assigneeSeatId: 'ba-docs', parentId: parent.id });
+  const code = tasks.create(seat('dev-lead'), { title: 'Code', body: REQ, assigneeSeatId: 'dev-be', parentId: parent.id });
+  assert.deepEqual([spec.departmentId, spec.step, spec.parentId], ['ba', 1, parent.id]);
+  assert.deepEqual([code.step, code.dependsOn], [2, [spec.id]], 'a step waits for the previous one by default');
+  assert.throws(() => tasks.create(seat('dev-lead'), { title: 'x', body: REQ, assigneeSeatId: 'dev-be', parentId: spec.id }), /steps_are_one_level/);
+  const parentThread = tasks.thread(seat('dev-lead'), parent.id);
+  assert.deepEqual(messages.guests('dev', parentThread.seq), ['ba-docs'], 'step assignees from other departments join the parent thread');
+  assert.ok(tasks.list(seat('dev-lead'), {}).some(task => task.id === spec.id), 'the lead sees steps in other departments');
+  assert.ok(tasks.list(seat('ba-docs'), {}).some(task => task.id === parent.id), 'a step assignee sees the parent');
+  wake.check('dev-lead'); wake.check('dev-be');
+  assert.throws(() => tasks.update(seat('dev-lead'), parent.id, { status: 'done' }), /steps_open/);
+  tasks.update(seat('ba-docs'), spec.id, { status: 'done', note: 'docs/report-spec.md' });
+  const lead = wake.check('dev-lead');
+  assert.ok(lead.wake && lead.reason.includes(spec.id), 'the lead is told a step is done');
+  assert.ok(wake.check('dev-be').wake, 'the next step assignee is told to start');
+  tasks.update(seat('dev-be'), code.id, { status: 'doing' });
+  tasks.update(seat('dev-be'), code.id, { status: 'done', note: 'commit abc' });
+  const last = wake.check('dev-lead');
+  assert.ok(last.wake && /All 2 steps are done/.test(last.reason));
+  assert.equal(tasks.update(seat('dev-lead'), parent.id, { status: 'done', note: 'shipped' }).status, 'done');
+  fixture.close();
+});

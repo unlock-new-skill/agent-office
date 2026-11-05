@@ -7,7 +7,7 @@ import { LEADERS_CHANNEL_ID, OUTPUTS_CHANNEL_ID, type OrgService } from './org-s
 export type TaskEvent = { taskId: string; actorKind: string; actorId: string; fromStatus: TaskStatus | null; toStatus: TaskStatus; note: string; createdAt: number };
 type TaskFilter = { departmentId?: string | undefined; status?: TaskStatus | undefined; assignee?: string | undefined };
 type TaskPlan = { estimateMinutes?: number | null | undefined; dependsOn?: string[] | undefined };
-const TASK_COLUMNS = 'id,department_id AS departmentId,number,assignee_seat_id AS assigneeSeatId,requester_seat_id AS requesterSeatId,created_by_kind AS createdByKind,created_by_id AS createdById,title,body,status,created_at AS createdAt,updated_at AS updatedAt,estimate_minutes AS estimateMinutes,depends_on AS dependsOn';
+const TASK_COLUMNS = 'id,department_id AS departmentId,number,assignee_seat_id AS assigneeSeatId,requester_seat_id AS requesterSeatId,created_by_kind AS createdByKind,created_by_id AS createdById,title,body,status,created_at AS createdAt,updated_at AS updatedAt,estimate_minutes AS estimateMinutes,depends_on AS dependsOn,parent_id AS parentId,step,thread_seq AS threadSeq';
 const toTask = (row: Omit<Task, 'dependsOn'> & { dependsOn: string }): Task => ({ ...row, dependsOn: JSON.parse(row.dependsOn) as string[] });
 const MAX_ESTIMATE = 7 * 24 * 60; const MAX_DEPENDENCIES = 20;
 /** Agents must write what the task needs (goal, inputs, expected output, acceptance) so the manager can follow it. */
@@ -37,7 +37,11 @@ export class TaskService {
     }
     const assignee = filter.assignee === 'me' && actor.kind === 'seat' ? actor.seatId : filter.assignee;
     const clauses: string[] = []; const params: string[] = [];
-    if (departmentId) { clauses.push('department_id=?'); params.push(departmentId); }
+    // Besides its department, a seat sees the steps of tasks it leads and the parent of steps it was given.
+    if (departmentId && actor.kind === 'seat' && !this.isCoordinator(actor)) {
+      clauses.push('(department_id=? OR parent_id IN (SELECT id FROM tasks WHERE assignee_seat_id=?) OR id IN (SELECT parent_id FROM tasks WHERE assignee_seat_id=? AND parent_id IS NOT NULL))'); params.push(departmentId, actor.seatId, actor.seatId);
+    }
+    else if (departmentId) { clauses.push('department_id=?'); params.push(departmentId); }
     if (filter.status) { clauses.push('status=?'); params.push(filter.status); }
     if (assignee) { clauses.push('assignee_seat_id=?'); params.push(assignee); }
     return (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY status='done',updated_at DESC LIMIT 500`).all(...params) as Array<Omit<Task, 'dependsOn'> & { dependsOn: string }>).map(toTask);
@@ -53,8 +57,9 @@ export class TaskService {
     return this.db.raw.prepare('SELECT task_id AS taskId,actor_kind AS actorKind,actor_id AS actorId,from_status AS fromStatus,to_status AS toStatus,note,created_at AS createdAt FROM task_events WHERE task_id=? ORDER BY id').all(taskId) as TaskEvent[];
   }
 
-  create(actor: Actor, input: { departmentId?: string | undefined; title: string; body: string; assigneeSeatId: string; requestedBy?: string | undefined } & TaskPlan): Task {
+  create(actor: Actor, input: { departmentId?: string | undefined; title: string; body: string; assigneeSeatId: string; requestedBy?: string | undefined; parentId?: string | undefined; parallel?: boolean | undefined } & TaskPlan): Task {
     if (input.title.trim().length === 0 || input.title.length > 200 || input.body.length > 8000) throw invalid('invalid_task');
+    if (input.parentId !== undefined) return this.createStep(actor, { ...input, parentId: input.parentId });
     const assignee = this.org.seat(input.assigneeSeatId);
     let departmentId = input.departmentId ?? assignee.departmentId;
     if (actor.kind === 'seat' && !this.isCoordinator(actor)) {
@@ -85,10 +90,62 @@ export class TaskService {
     return task;
   }
 
+  /**
+   * A step of a parent task, assignable to a seat of any department (the step lives in the assignee's department).
+   * The manager, the PM and the parent's assignee (the lead who coordinates it) add steps. Steps run in order: each
+   * waits for the previous one unless `parallel`. The step's assignee is invited into the parent's thread.
+   */
+  private createStep(actor: Actor, input: { title: string; body: string; assigneeSeatId: string; parentId: string; parallel?: boolean | undefined } & TaskPlan): Task {
+    const parent = this.get(input.parentId);
+    if (parent.parentId !== null) throw invalid('steps_are_one_level: add the step to the parent task');
+    if (parent.status === 'done') throw invalid('parent_task_done');
+    if (actor.kind === 'seat' && !this.isCoordinator(actor) && actor.seatId !== parent.assigneeSeatId) throw forbidden('only_task_lead_adds_steps');
+    if (actor.kind === 'seat' && input.body.trim().length < MIN_REQUIREMENT) throw invalid('requirement_required: write what this step does and the expected output in body');
+    const assignee = this.org.seat(input.assigneeSeatId); const departmentId = assignee.departmentId;
+    const previous = this.steps(parent.id).at(-1);
+    const dependsOn = this.checkDependencies(null, [...(input.dependsOn ?? []), ...(previous && !input.parallel ? [previous.id] : [])]);
+    const estimate = this.checkEstimate(input.estimateMinutes); const timestamp = Date.now();
+    const task = this.db.transaction(() => {
+      const number = (this.db.raw.prepare('SELECT COALESCE(MAX(number),0)+1 AS next FROM tasks WHERE department_id=?').get(departmentId) as { next: number }).next;
+      const id = `t-${departmentId}-${number}`; const step = (previous?.step ?? 0) + 1;
+      this.db.raw.prepare('INSERT INTO tasks(id,department_id,number,assignee_seat_id,requester_seat_id,created_by_kind,created_by_id,title,body,status,created_at,updated_at,estimate_minutes,depends_on,parent_id,step) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(id, departmentId, number, assignee.id, null, actor.kind, actorId(actor), input.title, input.body, 'todo', timestamp, timestamp, estimate, JSON.stringify(dependsOn), parent.id, step);
+      this.record(id, actor, null, 'todo', '');
+      return this.get(id);
+    });
+    const lead = parent.assigneeSeatId ? ` Lead: @${parent.assigneeSeatId}.` : '';
+    this.announce(task, `Step ${task.step} of ${parent.id} "${parent.title}": task ${task.id} "${task.title}" assigned to @${assignee.id} by ${actorLabel(actor)}.${lead}${this.planLine(task)}${task.body ? ` Expected: ${task.body}` : ''}`, [assignee.id]);
+    const parentThread = this.ensureThread(parent);
+    this.messages.invite(parent.departmentId, parentThread, [assignee.id]);
+    this.postInTaskThread(parent, `Step ${task.step} added: ${task.id} "${task.title}" → @${assignee.id}${dependsOn.length ? ` (after ${dependsOn.join(', ')})` : ' (can start now)'}. Discuss the whole task here.`, []);
+    this.emit({ type: 'collab', kind: 'task', task: this.get(parent.id) });
+    return this.get(task.id);
+  }
+
+  /** Steps of a parent task in order. */
+  steps(parentId: string): Task[] {
+    return (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE parent_id=? ORDER BY step`).all(parentId) as Array<Omit<Task, 'dependsOn'> & { dependsOn: string }>).map(toTask);
+  }
+
+  /**
+   * The task's discussion thread (created if the task has none yet), opened for chat from the task. A seat needs to be
+   * in the task's department channel, or already invited into the thread (a mention, or a step of the task).
+   */
+  thread(actor: Actor, taskId: string): { channelId: string; seq: number } {
+    const task = this.get(taskId); const seq = this.ensureThread(task);
+    if (actor.kind === 'seat' && !this.org.isMember(task.departmentId, actor.seatId) && !this.messages.guests(task.departmentId, seq).includes(actor.seatId)) {
+      const leadsParent = task.parentId !== null && this.get(task.parentId).assigneeSeatId === actor.seatId;
+      if (!this.isCoordinator(actor) && !leadsParent && !this.steps(task.id).some(step => step.assigneeSeatId === actor.seatId)) throw forbidden('forbidden_task');
+      this.messages.invite(task.departmentId, seq, [actor.seatId]);
+    }
+    return { channelId: task.departmentId, seq };
+  }
+
   update(actor: Actor, taskId: string, patch: { status?: TaskStatus | undefined; note?: string | undefined; assigneeSeatId?: string | undefined } & TaskPlan): Task {
     const task = this.get(taskId); const leader = this.leaderOf(task.departmentId); const note = patch.note ?? '';
     if (note.length > 2000) throw invalid('invalid_task');
-    const isLeader = actor.kind === 'manager' || actor.seatId === leader?.id || this.isCoordinator(actor) || this.isDeputy(this.org.seat(actor.seatId), task.departmentId);
+    const parent = task.parentId ? this.get(task.parentId) : null;
+    const isLeader = actor.kind === 'manager' || actor.seatId === leader?.id || this.isCoordinator(actor) || actor.seatId === parent?.assigneeSeatId || this.isDeputy(this.org.seat(actor.seatId), task.departmentId);
     if (!isLeader && (actor.kind !== 'seat' || actor.seatId !== task.assigneeSeatId)) throw forbidden('forbidden_task');
     if (patch.assigneeSeatId !== undefined && !isLeader) throw forbidden('leader_only');
     if (task.status === 'done' && patch.status && patch.status !== 'done' && !isLeader) throw forbidden('reopen_requires_leader');
@@ -99,6 +156,10 @@ export class TaskService {
     const estimate = patch.estimateMinutes !== undefined ? this.checkEstimate(patch.estimateMinutes) : task.estimateMinutes;
     const dependsOn = patch.dependsOn !== undefined ? this.checkDependencies(taskId, patch.dependsOn) : task.dependsOn;
     const status = patch.status ?? task.status;
+    if (status === 'done' && task.status !== 'done') {
+      const open = this.steps(task.id).filter(step => step.status !== 'done').map(step => step.id);
+      if (open.length > 0) throw invalid(`steps_open: ${open.join(', ')} not done yet`);
+    }
     if (status === 'doing' && task.status !== 'doing' && actor.kind === 'seat') {
       const waiting = this.openDependencies(dependsOn);
       if (waiting.length > 0) throw invalid(`waiting_for_dependencies: ${waiting.join(', ')} not done yet; ask your leader or the PM to reorder`);
@@ -122,11 +183,21 @@ export class TaskService {
       this.postOutput(updated, actor, note);
       if (actor.kind === 'seat' && actor.seatId === updated.assigneeSeatId) this.onDoneByAssignee(updated);
     }
+    if (parent && (status === 'blocked' || status === 'done') && status !== task.status) this.reportStep(parent, updated, actor, status, note);
     // Close the loop for cross-department requests without the serving leader having to relay it.
     if (updated.requesterSeatId && (status === 'blocked' || status === 'done') && status !== task.status) {
       this.messages.postSystem(LEADERS_CHANNEL_ID, `@${updated.requesterSeatId} your request ${task.id} "${task.title}" is ${status}${note ? `: ${note}` : '.'}`.slice(0, 16_000), [updated.requesterSeatId], this.threadOf(task.id, 'request_thread_seq'));
     }
     return updated;
+  }
+
+  /** A step blocked or done is reported in the parent's thread to its lead; the last step asks the lead to close it. */
+  private reportStep(parent: Task, step: Task, actor: Actor, status: TaskStatus, note: string): void {
+    const lead = parent.assigneeSeatId; const steps = this.steps(parent.id);
+    const allDone = status === 'done' && steps.every(candidate => candidate.status === 'done');
+    const mention = lead && !(actor.kind === 'seat' && actor.seatId === lead) ? [lead] : [];
+    const next = allDone ? ` All ${steps.length} steps are done${lead ? `: @${lead} review the outputs and move ${parent.id} to done with the final output` : ''}.` : '';
+    this.postInTaskThread(parent, `${lead ? `@${lead} ` : ''}step ${step.step} ${step.id} "${step.title}" is ${status} (by ${actorLabel(actor)})${note ? `: ${note}` : '.'}${next}`, allDone && lead ? [lead] : mention);
   }
 
   /** Every finished task lands in #outputs with its result (the done note), so the manager reads outputs in one place. */
@@ -204,6 +275,15 @@ export class TaskService {
   private postInTaskThread(task: Task, body: string, mentions: string[]): void {
     const posted = this.messages.postSystem(task.departmentId, body.slice(0, 16_000), mentions, this.threadOf(task.id, 'thread_seq'));
     if (posted.threadSeq === null) this.db.raw.prepare('UPDATE tasks SET thread_seq=? WHERE id=?').run(posted.seq, task.id);
+  }
+
+  /** Root seq of the task's thread, posting a root line first when the task has none (or it was deleted). */
+  private ensureThread(task: Task): number {
+    const seq = this.threadOf(task.id, 'thread_seq');
+    if (seq !== undefined) { try { this.messages.thread({ kind: 'manager' }, task.departmentId, seq); return seq; } catch { /* root gone: start a new thread */ } }
+    this.db.raw.prepare('UPDATE tasks SET thread_seq=NULL WHERE id=?').run(task.id);
+    this.postInTaskThread(task, `Discussion of task ${task.id} "${task.title}".`, []);
+    return this.threadOf(task.id, 'thread_seq')!;
   }
 
   private threadOf(taskId: string, column: 'thread_seq' | 'request_thread_seq'): number | undefined {

@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -77,6 +77,18 @@ DROP TABLE channels;
 ALTER TABLE channels_v19 RENAME TO channels;`;
 /** v20: the thread each task's system lines go to (department channel, and #leaders for cross-department requests). */
 const V20_COLUMNS = 'ALTER TABLE tasks ADD COLUMN thread_seq INTEGER; ALTER TABLE tasks ADD COLUMN request_thread_seq INTEGER;';
+/**
+ * v21: seats from outside a channel invited into one thread by a mention (with their own read cursor), and steps:
+ * a task split into ordered sub-tasks (parent_id + step), each assignable in any department.
+ */
+const V21_TABLES = `CREATE TABLE thread_guests(
+  channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, thread_seq INTEGER NOT NULL,
+  seat_id TEXT NOT NULL REFERENCES seats(id) ON DELETE CASCADE, last_read_seq INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(channel_id, thread_seq, seat_id)
+) STRICT;
+CREATE INDEX thread_guests_seat ON thread_guests(seat_id);
+ALTER TABLE tasks ADD COLUMN parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE;
+ALTER TABLE tasks ADD COLUMN step INTEGER;`;
 const V15_COLUMNS = "ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER; ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';";
 const THREAD_INDEX = 'CREATE INDEX messages_thread ON messages(channel_id, thread_seq);';
 
@@ -171,6 +183,7 @@ export class Database {
         if (from < 18) this.raw.exec(V18_TABLES);
         if (from < 19) this.raw.exec(V19_CHANNELS);
         if (from < 20) this.raw.exec(V20_COLUMNS);
+        if (from < 21) this.raw.exec(V21_TABLES);
         if ((this.raw.prepare('PRAGMA foreign_key_check').all() as unknown[]).length > 0) throw new Error('migration_foreign_key_violation');
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
@@ -271,6 +284,7 @@ export class Database {
       ${V17_COLUMNS}
       ${V18_TABLES}
       ${V20_COLUMNS}
+      ${V21_TABLES}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

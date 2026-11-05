@@ -4,12 +4,19 @@ import { Composer } from './composer.js';
 import { MessageList } from './message-list.js';
 
 type Props = {
-  channelId: string; thread: { root: ChatMessage; replies: ChatMessage[] } | undefined; org: OrgView; seats: Seat[];
+  channelId: string; thread: { root: ChatMessage; replies: ChatMessage[] } | undefined; org: OrgView; memberIds: string[];
   onSend: (body: string) => Promise<void>; onEdit: (message: ChatMessage, body: string) => Promise<void>; onDelete: (message: ChatMessage) => void; onClose: () => void;
 };
 
-/** Side panel for one thread: the root message, its replies and a composer that posts into the thread. */
-export function ThreadPanel({ channelId, thread, org, seats, onSend, onEdit, onDelete, onClose }: Props): ReactNode {
+/**
+ * Side panel for one thread: the root message, its replies and a composer that posts into the thread. Any seat of the
+ * office can be mentioned here: a seat outside the channel is invited into this thread only.
+ */
+export function ThreadPanel({ channelId, thread, org, memberIds, onSend, onEdit, onDelete, onClose }: Props): ReactNode {
+  const members = new Set(memberIds);
+  const seats = [...org.seats.filter(seat => members.has(seat.id)), ...org.seats.filter(seat => !members.has(seat.id))];
+  const guests = thread ? [...new Set([thread.root, ...thread.replies].flatMap(message => message.mentions).filter(id => !members.has(id) && org.seats.some(seat => seat.id === id)))] : [];
+  const hint = (seat: Seat): string | null => members.has(seat.id) ? null : `${seat.departmentId} · joins this thread`;
   return (
     <aside className="thread-panel" aria-label="Thread">
       <header className="thread-head">
@@ -17,10 +24,11 @@ export function ThreadPanel({ channelId, thread, org, seats, onSend, onEdit, onD
         <span className="spacer" />
         <button type="button" className="icon-btn" aria-label="Close thread" onClick={onClose}>✕</button>
       </header>
+      {guests.length > 0 && <p className="thread-guests muted">Also in this thread: {guests.map(id => `@${id}`).join(', ')}</p>}
       {thread
         ? <>
             <MessageList messages={[thread.root, ...thread.replies]} org={org} onEdit={onEdit} onDelete={onDelete} emptyText="No replies yet." />
-            <Composer channelLabel={`thread in #${channelId}`} seats={seats} onSend={onSend} />
+            <Composer channelLabel={`thread in #${channelId}`} seats={seats} onSend={onSend} hint={hint} />
           </>
         : <p className="loading">Loading thread…</p>}
     </aside>
