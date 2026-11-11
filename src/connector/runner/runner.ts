@@ -12,12 +12,18 @@ export type RunnerDeps = {
   spawn?: SpawnClaude; sleep?: (ms: number) => Promise<void>; machine?: string; checkCwd?: (cwd: string) => string | null;
   /** Desktop live-view window for a seat (`runner watch`); returns why none was opened, or null. */
   openWatch?: (seatId: string) => string | null; closeWatch?: (seatId: string) => void;
+  /** Re-adds the Agent Office MCP server and hooks to Claude Code when missing; run before a seat launches. */
+  ensureTools?: () => { fixed: string[]; problem: string | null };
 };
+
+const webSeat = (seat: MachineSeat): SeatConfig => ({ seatId: seat.seatId, cwd: seat.cwd, permissionMode: seat.permissionMode, autoStart: seat.autoStart, showWindow: seat.showWindow, ...(seat.model ? { model: seat.model } : {}) });
 
 const POLL_SECONDS = 60; const FLUSH_MS = 1000; const MAX_QUEUED_LOGS = 500;
 const BACKOFF_MS = [2000, 4000, 8000, 15_000, 30_000, 60_000];
 /** Wakes are long-polled for one Claude session at a time; this window only bounds one listen call. */
 const LISTEN_WINDOW_SECONDS = 3600;
+/** Seats auto-starting together share one tool check. */
+const TOOL_CHECK_TTL_MS = 30_000;
 
 /**
  * Runs this machine's seats headless and links them to the daemon over outbound HTTP only: registers, long-polls
@@ -42,6 +48,7 @@ export class Runner {
   /** Bumped per seat on every start/stop so an older wait-for-free-seat loop gives up. */
   private readonly launches = new Map<string, number>();
   private localStarted = false;
+  private toolsCheckedAt = -Infinity;
 
   constructor(private readonly deps: RunnerDeps) {
     this.state = new RunnerState(deps.store);
@@ -95,15 +102,15 @@ export class Runner {
           }
           continue;
         }
-        const problem = this.deps.checkCwd ? this.deps.checkCwd(seat.cwd) : cwdProblem(seat.cwd, this.deps.config.allowedRoots);
+        if (seat.sessionId && seat.sessionId !== before?.sessionId) this.state.setSessionId(seat.seatId, seat.sessionId);
+        const problem = this.cwdProblem(seat.cwd);
         const wasRunning = worker ? !['stopped', 'failed'].includes(worker.snapshot().state) : false;
         if (worker) { await worker.stop(); this.workers.delete(seat.seatId); }
         if (problem) {
           this.statuses.set(seat.seatId, { seatId: seat.seatId, state: 'failed', sessionId: null, restarts: 0, permissionMode: seat.permissionMode, detail: problem });
           this.deps.out(`[${seat.seatId}] ${problem}`); continue;
         }
-        if (seat.sessionId && seat.sessionId !== before?.sessionId) this.state.setSessionId(seat.seatId, seat.sessionId);
-        const added = this.addWorker({ seatId: seat.seatId, cwd: seat.cwd, permissionMode: seat.permissionMode, autoStart: seat.autoStart, showWindow: seat.showWindow, ...(seat.model ? { model: seat.model } : {}) });
+        const added = this.addWorker(webSeat(seat));
         if (wasRunning || seat.autoStart) this.startSeat(added);
       }
       this.lastStatus = '';
@@ -138,8 +145,55 @@ export class Runner {
       await this.sleep(5000);
     }
     if (!current()) return;
+    this.ensureTools(seatId);
     const result = worker.start();
     if (result.ok && worker.seat.showWindow) this.openWatch(seatId);
+  }
+
+  /**
+   * A machine set up again (new drive, new user profile, Claude Code reinstalled) can lose the MCP registration, and
+   * the seat would then run without its agent_office_* tools. Repairs it before launching; a failure is logged and
+   * the seat starts anyway so its own output shows what is missing.
+   */
+  private ensureTools(seatId: string): void {
+    if (!this.deps.ensureTools || Date.now() - this.toolsCheckedAt < TOOL_CHECK_TTL_MS) return;
+    const { fixed, problem } = this.deps.ensureTools();
+    for (const line of fixed) this.deps.out(`[${seatId}] ${line}`);
+    if (problem) this.deps.out(`[${seatId}] Agent Office tools missing: ${problem}`);
+    else this.toolsCheckedAt = Date.now();
+  }
+
+  private cwdProblem(cwd: string): string | null {
+    return this.deps.checkCwd ? this.deps.checkCwd(cwd) : cwdProblem(cwd, this.deps.config.allowedRoots);
+  }
+
+  /**
+   * A seat left without a worker because its folder was missing (a NAS or external volume not mounted at the time):
+   * checks the folder again and creates the worker once it is usable, so the seat recovers without a config change.
+   */
+  private revive(seatId: string): SeatWorker | null {
+    const existing = this.workers.get(seatId);
+    if (existing) return existing;
+    const web = this.applied.get(seatId);
+    const seat = web ? webSeat(web) : this.deps.config.seats.find(local => local.seatId === seatId);
+    if (!seat) return null;
+    const problem = web ? this.cwdProblem(seat.cwd) : existsSync(seat.cwd) ? null : `folder not found on this machine: ${seat.cwd} (fix runner.json)`;
+    if (problem) {
+      const status = this.statuses.get(seatId);
+      if (status && status.detail !== problem) this.statuses.set(seatId, { ...status, detail: problem });
+      return null;
+    }
+    this.deps.out(`[${seatId}] folder ${seat.cwd} is available again`);
+    return this.addWorker(seat);
+  }
+
+  /** Brings back auto-start seats whose folder has reappeared since they failed. */
+  private reviveUnavailable(): void {
+    for (const [seatId, status] of this.statuses) {
+      if (this.workers.has(seatId) || status.state !== 'failed') continue;
+      const worker = this.revive(seatId);
+      if (worker?.seat.autoStart) this.startSeat(worker);
+    }
   }
 
   private openWatch(seatId: string): void {
@@ -164,7 +218,7 @@ export class Runner {
 
   /** Runs one manager command against a configured seat. */
   async execute(command: Pick<RunnerCommand, 'seatId' | 'kind' | 'text'>): Promise<CommandResult> {
-    const worker = this.workers.get(command.seatId);
+    const worker = ['start', 'restart', 'fresh'].includes(command.kind) ? this.revive(command.seatId) : this.workers.get(command.seatId);
     if (!worker) return { ok: false, message: this.statuses.get(command.seatId)?.detail ?? `seat ${command.seatId} is not configured on this machine` };
     switch (command.kind) {
       case 'start': return this.startSeat(worker);
@@ -205,6 +259,7 @@ export class Runner {
         if (!this.registered) await this.register();
         const { commands, configVersion } = await this.call<{ commands: RunnerCommand[]; configVersion: number }>(`/v1/runners/me/commands?wait=${POLL_SECONDS}&version=${this.configVersion}`, { timeoutMs: (POLL_SECONDS + 15) * 1000 });
         failures = 0;
+        this.reviveUnavailable();
         if (configVersion !== this.configVersion) await this.applyConfig(await this.call<MachineConfig>('/v1/runners/me/config'));
         for (const command of commands) {
           this.deps.out(`command ${command.kind} ${command.seatId} (by ${command.requestedBy})`);

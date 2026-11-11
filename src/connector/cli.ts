@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { claude, ensureClaudeSetup, mcpEntry, readSettings, registerMcp, settingsFile, writeSettings } from './claude-setup.js';
 import { runHook } from './hook-runner.js';
-import { agentOfficeHooks, hookCommand, LISTEN_SECONDS, mergeAgentOfficeHooks, removeAgentOfficeHooks, type ClaudeSettings } from './installer.js';
+import { agentOfficeHooks, hookCommand, LISTEN_SECONDS, mergeAgentOfficeHooks, removeAgentOfficeHooks } from './installer.js';
 import { startMcpServer } from './mcp-server.js';
 import { loadRunnerConfig, runnerConfigFile, sampleConfig } from './runner/runner-config.js';
 import { installService, restartServiceIfInstalled, uninstallService } from './runner/runner-service-install.js';
@@ -26,7 +26,6 @@ import { SessionStore } from './session-store.js';
  */
 const [mode, ...rest] = process.argv.slice(2);
 const option = (name: string): string | undefined => { const index = rest.indexOf(`--${name}`); return index >= 0 ? rest[index + 1] : undefined; };
-const settingsFile = path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(homedir(), '.claude'), 'settings.json');
 const self = fileURLToPath(import.meta.url);
 const numberEnv = (name: string, fallback: number): number => { const value = Number(process.env[name] ?? fallback); return Number.isFinite(value) && value >= 0 ? value : fallback; };
 
@@ -52,24 +51,6 @@ const closeClaude = (): void => {
 
 const readStdin = async (): Promise<string> => { let text = ''; for await (const chunk of process.stdin) text += String(chunk); return text; };
 
-const readSettings = (): ClaudeSettings => {
-  if (!existsSync(settingsFile)) return {};
-  try { return JSON.parse(readFileSync(settingsFile, 'utf8')) as ClaudeSettings; }
-  catch { throw new Error(`${settingsFile} is not valid JSON; fix it and run the installer again.`); }
-};
-const writeSettings = (settings: ClaudeSettings): string => {
-  mkdirSync(path.dirname(settingsFile), { recursive: true });
-  const backup = `${settingsFile}.bak-agent-office-${Date.now()}`;
-  if (existsSync(settingsFile)) copyFileSync(settingsFile, backup);
-  writeFileSync(settingsFile, `${JSON.stringify(settings, null, 2)}\n`);
-  return backup;
-};
-
-/** Runs the `claude` CLI; on Windows it is a .cmd shim that needs a shell. Returns false when it is missing or fails. */
-const claude = (args: string[]): boolean => {
-  try { execFileSync('claude', args, { stdio: 'ignore', shell: process.platform === 'win32' }); return true; } catch { return false; }
-};
-
 const install = async (): Promise<void> => {
   const url = option('url')?.replace(/\/+$/, ''); const code = option('code');
   if (!url || !code) throw new Error('usage: agent-office.mjs install --url <https://office.example.com> --code <install code>');
@@ -79,12 +60,11 @@ const install = async (): Promise<void> => {
   const store = new SessionStore(); store.saveConnector({ daemonUrl: body.daemonUrl ?? url, token: body.token });
   const command = hookCommand(process.execPath, self);
   const backup = writeSettings(mergeAgentOfficeHooks(readSettings(), agentOfficeHooks(command, numberEnv('AGENT_OFFICE_PERMISSION_WAIT_SECONDS', 120))));
-  const mcp = { command: process.execPath.replaceAll('\\', '/'), args: [self.replaceAll('\\', '/'), 'mcp'] };
-  claude(['mcp', 'remove', 'agent-office', '-s', 'user']);
-  const mcpOk = claude(['mcp', 'add-json', '--scope', 'user', 'agent-office', JSON.stringify(mcp)]);
+  const mcp = mcpEntry(process.execPath, self);
+  const mcpOk = registerMcp(process.execPath, self);
   process.stdout.write([
     `Connected to ${body.daemonUrl ?? url}. Credential: ${store.home}/connector.json`,
-    `Hooks merged into ${settingsFile}${existsSync(backup) ? ` (previous version: ${backup})` : ''}.`,
+    `Hooks merged into ${settingsFile()}${existsSync(backup) ? ` (previous version: ${backup})` : ''}.`,
     mcpOk ? 'MCP server "agent-office" registered for your user.' : `Could not run "claude mcp". Register the MCP server yourself:\n  claude mcp add-json --scope user agent-office '${JSON.stringify(mcp)}'`,
     'Start a seated session, e.g.:  AGENT_OFFICE_SEAT=design-atom claude   (PowerShell: $env:AGENT_OFFICE_SEAT="design-atom"; claude)',
     'Already-running Claude sessions must be restarted to pick up the hooks.',
@@ -111,7 +91,7 @@ const update = async (): Promise<void> => {
 
 const syncHooks = (): void => {
   const backup = writeSettings(mergeAgentOfficeHooks(readSettings(), agentOfficeHooks(hookCommand(process.execPath, self), numberEnv('AGENT_OFFICE_PERMISSION_WAIT_SECONDS', 120))));
-  process.stdout.write(`Hooks synced in ${settingsFile}${existsSync(backup) ? ` (previous version: ${backup})` : ''}.\n`);
+  process.stdout.write(`Hooks synced in ${settingsFile()}${existsSync(backup) ? ` (previous version: ${backup})` : ''}.\n`);
 };
 
 const uninstall = (): void => {
@@ -142,7 +122,8 @@ const runner = async (): Promise<void> => {
     loadRunnerConfig(store);
     process.stdout.write(`${installService(self, store.home)}\n`); return;
   }
-  const active = new Runner({ store, fetch, config: loadRunnerConfig(store), openWatch: seatId => openWatchWindow(store, seatId, self), closeWatch: seatId => closeWatchWindow(store, seatId), out: line => process.stdout.write(`${new Date().toISOString()} ${line}\n`) });
+  const permissionWait = numberEnv('AGENT_OFFICE_PERMISSION_WAIT_SECONDS', 120);
+  const active = new Runner({ store, fetch, config: loadRunnerConfig(store), ensureTools: () => ensureClaudeSetup(process.execPath, self, permissionWait), openWatch: seatId => openWatchWindow(store, seatId, self), closeWatch: seatId => closeWatchWindow(store, seatId), out: line => process.stdout.write(`${new Date().toISOString()} ${line}\n`) });
   const shutdown = (): void => { void active.close().finally(() => process.exit(0)); };
   process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
   await active.run();

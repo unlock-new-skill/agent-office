@@ -96,6 +96,43 @@ test('runner applies the web config live: add, restart on change, refuse folders
   fixture.close();
 });
 
+test('a seat whose folder was missing (unmounted volume) comes back once the folder reappears', async () => {
+  const fixture = createAppFixture();
+  const appFetch = ((input: string | URL | Request, init?: RequestInit) => Promise.resolve(fixture.app.request(String(input), init))) as typeof fetch;
+  const machine = fixture.office.runners.createMachine('NAS box');
+  const store = new SessionStore(mkdtempSync(path.join(tmpdir(), 'ao-nas-')));
+  store.saveConnector({ daemonUrl: `http://${HOST}`, token: fixture.auth.createConnectorCredential(machine.id).token });
+  let mounted = false;
+  const spawned: Array<{ seatId: string; resume: string | null }> = [];
+  const runner = new Runner({
+    store, fetch: appFetch, out: () => undefined, config: { seats: [] }, sleep: () => new Promise(resolve => setTimeout(resolve, 5)),
+    checkCwd: cwd => mounted ? null : `folder not found on this machine: ${cwd}`,
+    spawn: (seat, resume, onEvent) => {
+      spawned.push({ seatId: seat.seatId, resume });
+      return { send: () => undefined, interrupt: () => undefined, close: () => onEvent({ kind: 'exit', code: 0, stderr: '' }), kill: () => undefined };
+    },
+  });
+  const running = runner.run();
+  const until = async (check: () => boolean): Promise<void> => { for (let i = 0; i < 400 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 5)); assert.ok(check()); };
+  const seat = () => fixture.office.runners.views().find(view => view.id === machine.id)!.seats.find(item => item.seatId === 'dev-be');
+  try {
+  await until(() => fixture.office.runners.views().some(view => view.id === machine.id && view.online));
+
+  fixture.office.runners.setConfig(machine.id, [{ seatId: 'dev-be', cwd: '/Volumes/nas/project', permissionMode: 'bypassPermissions', sessionId: 'sess-devbe', autoStart: false, showWindow: false }]);
+  await until(() => seat()?.state === 'failed');
+  assert.match(seat()!.detail, /folder not found/);
+  assert.equal((await runner.execute({ seatId: 'dev-be', kind: 'restart', text: null })).ok, false, 'still unmounted: restart reports the problem');
+
+  mounted = true;
+  assert.equal((await runner.execute({ seatId: 'dev-be', kind: 'restart', text: null })).ok, true, 'remounted: restart works without a config change');
+  await until(() => spawned.length === 1);
+  assert.deepEqual(spawned[0], { seatId: 'dev-be', resume: 'sess-devbe' }, 'the seat resumes the session picked on the web');
+  } finally {
+    await runner.close(); fixture.office.runners.close(); await running;
+    fixture.close();
+  }
+});
+
 test('a local seat with a missing folder is reported as failed instead of stopping the runner', () => {
   const store = new SessionStore(mkdtempSync(path.join(tmpdir(), 'ao-badlocal-')));
   const runner = new Runner({ store, fetch, out: () => undefined, config: { seats: [{ seatId: 'dev-be', cwd: '/Users/me/projects/game-server', permissionMode: 'acceptEdits', autoStart: true, showWindow: false }] } });
