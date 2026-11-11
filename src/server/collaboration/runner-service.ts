@@ -49,7 +49,12 @@ export class RunnerService {
 
   renameMachine(id: string, label: string): void { this.row(id); this.db.raw.prepare('UPDATE runners SET label=? WHERE id=?').run(label.slice(0, 80), id); this.publish(); }
 
-  deleteMachine(id: string): void { this.row(id); this.db.raw.prepare('DELETE FROM runners WHERE id=?').run(id); this.publish(); }
+  deleteMachine(id: string): void {
+    this.row(id); this.db.raw.prepare('DELETE FROM runners WHERE id=?').run(id);
+    this.online.delete(id);
+    for (const done of [...(this.waiters.get(id) ?? [])]) done();
+    this.publish();
+  }
 
   config(id: string): MachineConfig {
     const row = this.row(id);
@@ -182,7 +187,11 @@ export class RunnerService {
     const expired = this.db.raw.prepare(`UPDATE runner_commands SET status='expired',done_at=? WHERE status IN ('queued','sent') AND created_at<? RETURNING ${COLUMNS}`).all(Date.now(), Date.now() - COMMAND_TTL_MS) as RunnerCommand[];
     for (const command of expired) this.emit({ type: 'collab', kind: 'runner-command', command });
     let changed = false;
-    for (const id of [...this.online]) { if (!this.waiters.has(id) && Date.now() - this.row(id).lastSeenAt > ONLINE_MS) { this.online.delete(id); changed = true; } }
+    for (const id of [...this.online]) {
+      // A machine deleted on the web may still be in the online set; it must not throw out of the timer.
+      const lastSeenAt = (this.db.raw.prepare('SELECT last_seen_at AS lastSeenAt FROM runners WHERE id=?').get(id) as { lastSeenAt: number } | undefined)?.lastSeenAt;
+      if (lastSeenAt === undefined || (!this.waiters.has(id) && Date.now() - lastSeenAt > ONLINE_MS)) { this.online.delete(id); changed = true; }
+    }
     if (changed) this.publish();
   }
 

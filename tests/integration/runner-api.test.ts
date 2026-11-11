@@ -79,3 +79,14 @@ test('the runner executes a web command on its headless seat and reports back', 
   await runner.close(); fixture.office.runners.close(); await running;
   fixture.close();
 });
+
+test('deleting a machine that is online does not crash the next sweep', async () => {
+  const fixture = createAppFixture();
+  const machine = fixture.office.runners.createMachine('Old laptop');
+  const { token } = fixture.auth.createConnectorCredential(machine.id);
+  assert.equal((await fixture.agent(token, '/v1/runners/register', { body: { machine: 'old-laptop', seats: [] } })).status, 200);
+  fixture.office.runners.deleteMachine(machine.id);
+  assert.doesNotThrow(() => fixture.office.runners.sweep());
+  assert.equal(fixture.office.runners.views().some(view => view.id === machine.id), false);
+  fixture.close();
+});

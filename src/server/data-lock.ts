@@ -2,6 +2,8 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, w
 import path from 'node:path';
 
 const activePid = (pid: number): boolean => {
+  // In a container the daemon is PID 1 on every start, so a lock left by a crash names our own pid.
+  if (pid === process.pid) return false;
   try { process.kill(pid, 0); return true; } catch { return false; }
 };
 
