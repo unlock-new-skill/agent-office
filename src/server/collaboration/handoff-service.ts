@@ -90,12 +90,15 @@ export class HandoffService {
    */
   private recentConversation(seatId: string): string[] {
     type Row = { channelId: string; seq: number; threadSeq: number | null; senderKind: string; senderId: string; body: string };
-    const rows = this.db.raw.prepare(`SELECT m.channel_id AS channelId,m.seq,m.thread_seq AS threadSeq,m.sender_kind AS senderKind,m.sender_id AS senderId,m.body
+    // Threads the seat took part in are resolved once up front; a per-message correlated subquery here was O(n²) and
+    // blocked the event loop for tens of seconds per whoami on a channel with a few thousand messages.
+    const rows = this.db.raw.prepare(`WITH mine AS (SELECT DISTINCT channel_id,COALESCE(thread_seq,seq) AS root FROM messages WHERE sender_kind='seat' AND sender_id=?)
+      SELECT m.channel_id AS channelId,m.seq,m.thread_seq AS threadSeq,m.sender_kind AS senderKind,m.sender_id AS senderId,m.body
       FROM messages m JOIN channel_members cm ON cm.channel_id=m.channel_id AND cm.seat_id=?
       WHERE m.deleted_at IS NULL AND (
         (m.sender_kind='seat' AND m.sender_id=?) OR m.mentions_json LIKE ? OR
-        (m.thread_seq IS NOT NULL AND EXISTS (SELECT 1 FROM messages t WHERE t.channel_id=m.channel_id AND (t.seq=m.thread_seq OR t.thread_seq=m.thread_seq) AND t.sender_kind='seat' AND t.sender_id=?))
-      ) ORDER BY m.created_at DESC LIMIT ?`).all(seatId, seatId, `%"${seatId}"%`, seatId, RECENT_LINES) as Row[];
+        (m.thread_seq IS NOT NULL AND (m.channel_id,m.thread_seq) IN (SELECT channel_id,root FROM mine))
+      ) ORDER BY m.created_at DESC LIMIT ?`).all(seatId, seatId, seatId, `%"${seatId}"%`, RECENT_LINES) as Row[];
     if (rows.length === 0) return ['Recent conversation: none.'];
     const line = (row: Row): string => {
       const where = row.threadSeq ? `#${row.channelId} thread [${row.threadSeq}]` : `#${row.channelId} [${row.seq}]`;
