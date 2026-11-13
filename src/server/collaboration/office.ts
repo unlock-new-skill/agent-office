@@ -63,8 +63,13 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
   dispatch.refresh();
   const alerts = new AlertService(db, org, messages, blockers, dispatch);
   // Every 5 minutes: grants and windows that ended reopen their blocker, then new exceptions go out in one digest.
-  const exceptions = (): void => { try { blockers.expireDue(); alerts.run(); } catch (error) { logger.error(error); } };
+  const exceptions = (): void => {
+    try { blockers.expireDue(); } catch (error) { logger.error(error); }
+    try { alerts.run(); } catch (error) { logger.error(error); }
+  };
   const alertTimer = setInterval(exceptions, 5 * 60_000); alertTimer.unref();
+  // Grants and windows that ended while the server was down close at start, not 5 minutes later.
+  try { blockers.expireDue(); } catch (error) { logger.error(error); }
   const handoffs = new HandoffService(db, org, messages);
   const permissions = new PermissionService(db, org, options.emit, options.remoteApproval ?? false);
   const runners = new RunnerService(db, org, options.emit);

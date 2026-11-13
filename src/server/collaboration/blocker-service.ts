@@ -1,6 +1,7 @@
 import type { Database } from '../db/database.js';
 import type { Blocker, BlockerKind, CollabEvent } from '../../shared/contracts.js';
 import type { Actor } from './message-service.js';
+import { logger } from '../logger.js';
 import { forbidden, invalid, notFound } from './office-error.js';
 import type { OrgService } from './org-service.js';
 import type { TaskService } from './task-service.js';
@@ -114,17 +115,21 @@ export class BlockerService {
    */
   expireDue(now = Date.now()): number {
     const due = this.db.raw.prepare("SELECT id FROM blockers WHERE status='resolved' AND valid_until IS NOT NULL AND valid_until<=?").all(now) as Array<{ id: string }>;
+    let expired = 0;
     for (const { id } of due) {
-      const blocker = this.db.transaction(() => {
-        const expired = this.get(id);
-        this.db.raw.prepare("UPDATE blockers SET status='open',resolved_by=NULL,resolved_at=NULL,resolution='',valid_until=NULL,updated_at=? WHERE id=?").run(now, id);
-        const reopened = this.get(id);
-        this.tell(reopened, null, `opened again: the grant or window "${expired.resolution}" ended at ${new Date(expired.validUntil!).toISOString()}`, reopened.taskIds);
-        return reopened;
-      });
-      this.changed(blocker);
+      // One failing blocker must not keep the others (or the alert digest) from running.
+      try {
+        const blocker = this.db.transaction(() => {
+          const before = this.get(id);
+          this.db.raw.prepare("UPDATE blockers SET status='open',resolved_by=NULL,resolved_at=NULL,resolution='',valid_until=NULL,updated_at=? WHERE id=?").run(now, id);
+          const reopened = this.get(id);
+          this.tell(reopened, null, `opened again: the grant or window "${before.resolution}" ended at ${new Date(before.validUntil!).toISOString()}`, reopened.taskIds);
+          return reopened;
+        });
+        this.changed(blocker); expired++;
+      } catch (error) { logger.error(error); }
     }
-    return due.length;
+    return expired;
   }
 
   /** Reopens a resolved blocker (a revoked grant, a fix that did not hold): tasks lose readiness again. */

@@ -5,7 +5,7 @@ Requirement: /Users/truongpham/Desktop/requiremtn.md (PM pm-live)
 
 ## Run
 
-- `npm test` on Node 24.11.1 (`.nvmrc`): **222 tests, 222 pass, 0 fail** (incl. P1: alerts digest, window expiry). `npm run lint` clean, `npm run build` ok.
+- `npm test` on Node 24.11.1 (`.nvmrc`): **224 tests, 224 pass, 0 fail** (incl. P1: alerts digest, window expiry, review fixes). `npm run lint` clean, `npm run build` ok.
 - On Node 26 the backup/restore test fails with `unsupported_node_runtime` (script guard) — environment, not code.
 - New test files: `tests/unit/task-edit.test.ts`, `tests/unit/readiness-dispatch.test.ts`, `tests/unit/channel-visit.test.ts`,
   `tests/integration/task-edit-api.test.ts`. All tests use their own in-memory office (no real task touched).
@@ -73,6 +73,15 @@ Tasks → **By blocker** → *Dispatch*: `suggest` (default: readiness only), `o
 - Decided by the owner (2026-11-13): PASS is recorded by the lead (deputy, parent lead) or the PM; the assignee self-passes
   only when no lead or PM oversees the task (fail/inconclusive always allowed). The manager and the PM may start a task
   without the readiness checks; the override is written in the task thread.
+
+## P1 review + browser check
+
+- Browser (desktop + mobile, no horizontal scroll): Alerts section on Tasks → By blocker shows kind, text, owner, next step.
+- Review fixed: one org read per alert scan (was one per alert); digests carry at most 30 new alerts and the rest wait for
+  the next run instead of being marked reported unseen; board alerts empty in dispatch off; reported keys of cleared
+  alerts are deleted (no unbounded alert_state); expiry and digest fail independently; coordinators mentioned only when
+  in #leaders; a blocker shared by departments alerts on each board; digest state saved after the line is posted;
+  ended grants close at startup too.
 
 ## Unresolved questions
 

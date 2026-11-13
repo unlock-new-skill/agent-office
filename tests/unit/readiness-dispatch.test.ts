@@ -296,3 +296,22 @@ test('a granted window that ends opens its blocker again: not started → not re
   assert.equal(blockers.expireDue(until + 2), 0, 'expires once');
   fixture.close();
 });
+
+test('a long list of new alerts goes out over several digests; none is marked reported unseen', () => {
+  const fixture = dispatched(); const { tasks, alerts } = fixture.office;
+  for (let index = 0; index < 35; index++) { const task = exec(fixture, `Orphan ${index}`, 'dev-be'); tasks.update(seat('dev-lead'), task.id, { assigneeSeatId: null }); }
+  assert.equal(alerts.run().length, 30);
+  assert.equal(alerts.run().length, 5);
+  assert.equal(alerts.run().length, 0);
+  fixture.close();
+});
+
+test('a blocker shared by two departments raises its alert on both boards', () => {
+  const fixture = dispatched(); const { tasks, blockers, alerts } = fixture.office;
+  const dev = exec(fixture, 'Dev side', 'dev-be');
+  const ba = tasks.create(manager, { title: 'BA side', body: REQ, assigneeSeatId: 'ba-docs', kind: 'execution', estimateMinutes: 30 });
+  blockers.open(manager, { kind: 'decision', description: 'Pick the scope', taskIds: [dev.id, ba.id], nextStep: 'decide' });
+  assert.deepEqual(alerts.current(Date.now(), 'dev').map(alert => alert.taskIds), [[dev.id]]);
+  assert.deepEqual(alerts.current(Date.now(), 'ba').map(alert => alert.taskIds), [[ba.id]]);
+  fixture.close();
+});

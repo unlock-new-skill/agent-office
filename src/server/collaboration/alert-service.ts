@@ -13,9 +13,10 @@ const MAX_LINES = 30;
 
 /**
  * Exceptions for leads and the PM, without spam: missing owner, task over its estimate, a running task whose conditions
- * broke, blockers past their due date, stale or without a resolver. Each alert has a stable key; alert_state remembers
- * which ones were reported, so a digest in #leaders lists only alerts that are new (or came back after clearing), and
- * nothing is posted while nothing changed. Off when dispatch is off. Alerts never change tasks.
+ * broke, blockers past their due date, stale or without a resolver. Each alert has a stable key; alert_state holds the
+ * keys already reported and still live (a cleared alert is dropped, so it is new again if it returns). A digest in
+ * #leaders lists up to MAX_LINES new alerts; the rest wait for the next run instead of being marked reported unseen.
+ * Nothing is posted while nothing changed. Off when dispatch is off. Alerts never change tasks.
  */
 export class AlertService {
   constructor(private readonly db: Database, private readonly org: OrgService, private readonly messages: MessageService, private readonly blockers: BlockerService, private readonly dispatch: DispatchService) {}
@@ -24,7 +25,9 @@ export class AlertService {
   current(now = Date.now(), departmentId: string | null = null): OfficeAlert[] {
     const alerts: OfficeAlert[] = []; const entries = this.dispatch.evaluations();
     const byId = new Map(entries.map(entry => [entry.task.id, entry.task]));
-    const leader = (department: string): string => { const seat = this.org.view().seats.find(candidate => candidate.departmentId === department && candidate.role === 'leader'); return seat ? `@${seat.id}` : 'manager'; };
+    // One org read per scan (view() is heavy), not one per alert.
+    const leaders = new Map(this.org.view().seats.filter(seat => seat.role === 'leader').map(seat => [seat.departmentId, seat.id]));
+    const leader = (department: string): string => { const id = leaders.get(department); return id ? `@${id}` : 'manager'; };
     for (const { task, evaluation } of entries) {
       if (task.status === 'done' || task.kind === 'tracking') continue;
       if (task.assigneeSeatId === null) alerts.push({ key: `owner:${task.id}`, kind: 'owner-missing', departmentId: task.departmentId, owner: leader(task.departmentId), taskIds: [task.id], text: `${task.id} "${task.title}" has no assignee`, next: 'set assigneeSeatId (or close it if it is no longer needed — with its output)' });
@@ -34,39 +37,41 @@ export class AlertService {
       if (task.status === 'doing' && evaluation.gate.length > 0) alerts.push({ key: `gate:${task.id}:${evaluation.gate.map(reason => reason.group).sort().join(',')}`, kind: 'gate-broken', departmentId: task.departmentId, owner: task.assigneeSeatId ? `@${task.assigneeSeatId}` : leader(task.departmentId), taskIds: [task.id], text: `${task.id} "${task.title}" is in progress but ${evaluation.gate.map(reason => reason.text).join('; ')}`, next: `owner and ${leader(task.departmentId)} decide to continue or pause` });
     }
     for (const blocker of this.blockers.list({ status: 'open' })) {
-      const tasks = blocker.taskIds.map(id => byId.get(id)).filter((task): task is Task => Boolean(task) && task!.status !== 'done');
-      if (tasks.length === 0) continue;
-      const department = tasks[0]!.departmentId; const resolver = this.resolverOf(blocker, department, leader);
-      const base = { departmentId: department, owner: resolver, taskIds: tasks.map(task => task.id) };
-      if (blocker.dueAt !== null && now > blocker.dueAt) alerts.push({ ...base, key: `due:${blocker.id}:${blocker.dueAt}`, kind: 'blocker-overdue', text: `${blocker.id} (${blocker.kind}) "${blocker.description}" was due ${new Date(blocker.dueAt).toISOString()}`, next: blocker.nextStep || 'set the next step and a new due date' });
-      else if (blocker.dueAt === null && now - blocker.updatedAt > STALE_BLOCKER_MS) alerts.push({ ...base, key: `stale:${blocker.id}:${blocker.updatedAt}`, kind: 'blocker-stale', text: `${blocker.id} (${blocker.kind}) "${blocker.description}" has not moved for ${Math.round((now - blocker.updatedAt) / 3_600_000)}h`, next: blocker.nextStep || 'set the next step' });
-      if (!blocker.resolverSeatId && !blocker.resolverRole) alerts.push({ ...base, key: `resolver:${blocker.id}`, kind: 'resolver-missing', owner: leader(department), text: `${blocker.id} "${blocker.description}" has no resolver`, next: 'name the seat or role that removes it' });
+      const open = blocker.taskIds.map(id => byId.get(id)).filter((task): task is Task => Boolean(task) && task!.status !== 'done');
+      // A blocker shared by several departments is shown on each of their boards.
+      for (const department of new Set(open.map(task => task.departmentId))) {
+        const base = { departmentId: department, owner: this.resolverOf(blocker, department, leader), taskIds: open.filter(task => task.departmentId === department).map(task => task.id) };
+        if (blocker.dueAt !== null && now > blocker.dueAt) alerts.push({ ...base, key: `due:${blocker.id}:${department}:${blocker.dueAt}`, kind: 'blocker-overdue', text: `${blocker.id} (${blocker.kind}) "${blocker.description}" was due ${new Date(blocker.dueAt).toISOString()}`, next: blocker.nextStep || 'set the next step and a new due date' });
+        else if (blocker.dueAt === null && now - blocker.updatedAt > STALE_BLOCKER_MS) alerts.push({ ...base, key: `stale:${blocker.id}:${department}:${blocker.updatedAt}`, kind: 'blocker-stale', text: `${blocker.id} (${blocker.kind}) "${blocker.description}" has not moved for ${Math.round((now - blocker.updatedAt) / 3_600_000)}h`, next: blocker.nextStep || 'set the next step' });
+        if (!blocker.resolverSeatId && !blocker.resolverRole) alerts.push({ ...base, key: `resolver:${blocker.id}:${department}`, kind: 'resolver-missing', owner: leader(department), text: `${blocker.id} "${blocker.description}" has no resolver`, next: 'name the seat or role that removes it' });
+      }
     }
     return departmentId ? alerts.filter(alert => alert.departmentId === departmentId) : alerts;
   }
 
-  /** Reports new alerts once in a digest in #leaders. Returns the alerts that were reported. */
+  /** Reports new alerts once in a digest in #leaders. Returns the alerts that were reported (at most MAX_LINES per run). */
   run(now = Date.now()): OfficeAlert[] {
     if (this.dispatch.mode() === 'off') return [];
-    const alerts = this.current(now);
-    return this.db.transaction(() => {
-      const known = new Map((this.db.raw.prepare('SELECT key,notified_at AS notifiedAt,active FROM alert_state').all() as Array<{ key: string; notifiedAt: number | null; active: number }>).map(row => [row.key, row]));
-      const live = new Set(alerts.map(alert => alert.key));
-      for (const key of known.keys()) if (!live.has(key)) this.db.raw.prepare('UPDATE alert_state SET active=0 WHERE key=?').run(key);
-      // An alert that cleared and came back is new again; one still reported stays quiet.
-      const fresh = alerts.filter(alert => { const row = known.get(alert.key); return !row || row.active === 0 || row.notifiedAt === null; });
-      const upsert = this.db.raw.prepare('INSERT INTO alert_state(key,first_seen,notified_at,active) VALUES (?,?,?,1) ON CONFLICT(key) DO UPDATE SET notified_at=excluded.notified_at,active=1');
-      for (const alert of fresh) upsert.run(alert.key, now, now);
-      if (fresh.length > 0) this.digest(fresh);
-      return fresh;
-    });
+    const alerts = this.current(now); const live = new Set(alerts.map(alert => alert.key));
+    const known = new Set((this.db.raw.prepare('SELECT key FROM alert_state').all() as Array<{ key: string }>).map(row => row.key));
+    const forget = this.db.raw.prepare('DELETE FROM alert_state WHERE key=?');
+    this.db.transaction(() => { for (const key of known) if (!live.has(key)) forget.run(key); });
+    const fresh = alerts.filter(alert => !known.has(alert.key));
+    const shown = fresh.slice(0, MAX_LINES);
+    if (shown.length === 0) return [];
+    // Post first, then remember: a crash in between repeats a line at worst; it never loses one.
+    this.digest(shown, fresh.length - shown.length);
+    const remember = this.db.raw.prepare('INSERT OR REPLACE INTO alert_state(key,first_seen,notified_at,active) VALUES (?,?,?,1)');
+    this.db.transaction(() => { for (const alert of shown) remember.run(alert.key, now, now); });
+    return shown;
   }
 
-  private digest(alerts: OfficeAlert[]): void {
-    const lines = alerts.slice(0, MAX_LINES).map(alert => `- [${alert.kind}] ${alert.text} — owner ${alert.owner} — next: ${alert.next}`);
-    const more = alerts.length > MAX_LINES ? `\n…and ${alerts.length - MAX_LINES} more on Tasks → By blocker.` : '';
-    const coordinators = this.org.view().seats.filter(seat => seat.coordinator).map(seat => seat.id);
-    const owners = alerts.flatMap(alert => /^@([a-z0-9-]+)$/.exec(alert.owner)?.[1] ?? []).filter(id => this.org.isMember(LEADERS_CHANNEL_ID, id));
+  private digest(alerts: OfficeAlert[], waiting: number): void {
+    const lines = alerts.map(alert => `- [${alert.kind}] ${alert.text} — owner ${alert.owner} — next: ${alert.next}`);
+    const more = waiting > 0 ? `\n…${waiting} more come in the next digests (all of them are on Tasks → By blocker).` : '';
+    const inLeaders = (id: string): boolean => this.org.isMember(LEADERS_CHANNEL_ID, id);
+    const coordinators = this.org.view().seats.filter(seat => seat.coordinator).map(seat => seat.id).filter(inLeaders);
+    const owners = alerts.flatMap(alert => /^@([a-z0-9-]+)$/.exec(alert.owner)?.[1] ?? []).filter(inLeaders);
     const mentions = [...new Set([...coordinators, ...owners])];
     this.messages.postSystem(LEADERS_CHANNEL_ID, `${mentions.map(id => `@${id}`).join(' ')} Exceptions — ${alerts.length} new:\n${lines.join('\n')}${more}\nEach line names who acts; reply in the task threads. Reported once until it changes.`.slice(0, 16_000), mentions);
   }

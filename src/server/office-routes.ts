@@ -181,7 +181,7 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
   }));
   app.get('/v1/board', c => withActor(c, ({ actor }) => {
     const board = office.dispatch.board(actor, z.object({ departmentId: z.string().max(64).optional(), assignee: z.string().max(64).optional(), resolver: z.string().max(65).optional() }).parse(c.req.query()));
-    return c.json({ ...board, alerts: office.alerts.current(Date.now(), board.scope.departmentId) });
+    return c.json({ ...board, alerts: board.dispatch === 'off' ? [] : office.alerts.current(Date.now(), board.scope.departmentId) });
   }));
   app.get('/v1/settings/dispatch', c => managerOnly(c, () => c.json({ mode: office.dispatch.mode() })));
   app.put('/v1/settings/dispatch', c => managerOnly(c, async () => c.json({ mode: office.dispatch.setMode(z.object({ mode: z.enum(['off', 'suggest', 'on']) }).strict().parse(await c.req.json()).mode) })));
