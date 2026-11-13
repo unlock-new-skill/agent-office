@@ -129,7 +129,8 @@ export class ProgressService {
    * What every seat is doing, from records only:
    * - executing / reviewing: an active executor / reviewer role updated within ACTIVITY_STALE_MS (executor wins);
    *   a task without any participant falls back to its owner's current doing run (legacy), never its first start;
-   * - waiting: a recent waiting role, or an active one on a blocked task (with the task's readiness reasons);
+   * - waiting: a recent waiting role, or an active one claimed before its task was blocked (with readiness reasons);
+   *   an active role reported after the block stays executing / reviewing, with the task's blockers in `reasons`;
    * - available: the seat's latest role was finished or stopped recently and nothing else is open for it;
    * - unknown: nothing recent — the last signal and its time are shown. Online state is reported apart, never here.
    * Owning a blocked task says nothing about the person: it is listed under `also`, not used as the state.
@@ -147,12 +148,16 @@ export class ProgressService {
     const doingLegacy = [...tasks.values()].filter(task => task.status === 'doing' && task.assigneeSeatId && !withParticipants.has(task.id));
     const runs = doingTime(this.db, doingLegacy.map(task => task.id), now);
     const fresh = (at: number): boolean => now - at <= ACTIVITY_STALE_MS;
+    const blockedIds = [...tasks.values()].filter(task => task.status === 'blocked').map(task => task.id);
+    const blockedAt = new Map<string, number>(blockedIds.length === 0 ? [] : (this.db.raw.prepare(`SELECT task_id AS taskId, MAX(created_at) AS at FROM task_events WHERE to_status='blocked' AND task_id IN (${blockedIds.map(() => '?').join(',')}) GROUP BY task_id`).all(...blockedIds) as Array<{ taskId: string; at: number }>).map(row => [row.taskId, row.at]));
     const title = (taskId: string | null): string | null => (taskId ? tasks.get(taskId)?.title ?? null : null);
     return this.org.view().seats.map(seat => {
       const mine = rows.filter(row => row.seatId === seat.id);
-      // An active role on a blocked task is waiting, not working.
+      // On a blocked task, an active role claimed before the block is waiting; one reported after it is real work on
+      // an independent phase and keeps its state (the task's blockers are attached, the task itself is unchanged).
       const live = mine.filter(row => open(row.taskId) && (row.state === 'active' || row.state === 'waiting'))
-        .map(row => row.state === 'active' && tasks.get(row.taskId)!.status === 'blocked' ? { ...row, state: 'waiting' as const } : row);
+        .map(row => row.state === 'active' && tasks.get(row.taskId)!.status === 'blocked' && row.updatedAt <= (blockedAt.get(row.taskId) ?? Infinity) ? { ...row, state: 'waiting' as const } : row);
+      const blockedNote = (row: ParticipantRow): string[] => tasks.get(row.taskId)!.status === 'blocked' ? [`task blocked: ${reasonsOf(row.taskId).join('; ') || 'see task blockers'}`] : [];
       const legacy = doingLegacy.filter(task => task.assigneeSeatId === seat.id).map(task => ({ task, since: runs.get(task.id)?.runStart ?? task.updatedAt }));
       const also = [
         ...live.map(row => ({ taskId: row.taskId, role: row.role as ParticipantRole | 'owner', state: row.state as string })),
@@ -161,11 +166,11 @@ export class ProgressService {
       const base = { seatId: seat.id, also };
       const pick = (role: ParticipantRole): ParticipantRow | undefined => live.filter(row => row.role === role && row.state === 'active' && fresh(row.updatedAt)).sort((a, b) => b.updatedAt - a.updatedAt)[0];
       const executing = pick('executor');
-      if (executing) return { ...base, state: 'executing' as const, taskId: executing.taskId, taskTitle: title(executing.taskId), role: 'executor' as const, phase: executing.phase, since: executing.updatedAt, source: `${executing.source} by ${executing.updatedBy}`, stale: false, reasons: [] };
+      if (executing) return { ...base, state: 'executing' as const, taskId: executing.taskId, taskTitle: title(executing.taskId), role: 'executor' as const, phase: executing.phase, since: executing.updatedAt, source: `${executing.source} by ${executing.updatedBy}`, stale: false, reasons: blockedNote(executing) };
       const freshLegacy = legacy.filter(entry => fresh(entry.since)).sort((a, b) => b.since - a.since)[0];
       if (freshLegacy) return { ...base, state: 'executing' as const, taskId: freshLegacy.task.id, taskTitle: freshLegacy.task.title, role: 'owner' as const, phase: '', since: freshLegacy.since, source: 'task status doing (no participants recorded)', stale: false, reasons: [] };
       const reviewing = pick('reviewer') ?? pick('intake');
-      if (reviewing) return { ...base, state: 'reviewing' as const, taskId: reviewing.taskId, taskTitle: title(reviewing.taskId), role: reviewing.role, phase: reviewing.phase, since: reviewing.updatedAt, source: `${reviewing.source} by ${reviewing.updatedBy}`, stale: false, reasons: [] };
+      if (reviewing) return { ...base, state: 'reviewing' as const, taskId: reviewing.taskId, taskTitle: title(reviewing.taskId), role: reviewing.role, phase: reviewing.phase, since: reviewing.updatedAt, source: `${reviewing.source} by ${reviewing.updatedBy}`, stale: false, reasons: blockedNote(reviewing) };
       const waiting = live.filter(row => row.state === 'waiting' && fresh(row.updatedAt)).sort((a, b) => b.updatedAt - a.updatedAt)[0];
       if (waiting) {
         const reasons = [...(waiting.note ? [waiting.note] : []), ...reasonsOf(waiting.taskId)];

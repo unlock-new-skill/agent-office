@@ -154,6 +154,20 @@ test('staleness is even: a stale waiting role is unknown, a leader edit does not
   const blocked = make(fixture, 'Blocked with executor', 'dev-fe');
   progress.setParticipant(manager, blocked.id, { seatId: 'dev-mobile', role: 'executor', state: 'active', phase: 'build' }, 'ui');
   tasks.update(manager, blocked.id, { status: 'blocked', note: 'input missing' });
-  assert.equal(activityOf(fixture, 'dev-mobile').state, 'waiting');
+  assert.equal(activityOf(fixture, 'dev-mobile').state, 'waiting', 'active claimed before the block');
+  fixture.close();
+});
+
+test('a phase reported after the task was blocked is real work: shown with the blockers, task and dependencies unchanged', () => {
+  const fixture = createSeededOffice(); const { progress, tasks } = fixture.office;
+  const before = make(fixture, 'Prerequisite', 'dev-be');
+  const task = fixture.office.tasks.create(manager, { title: 'Blocked at runtime acceptance', body: REQ, assigneeSeatId: 'dev-fe', estimateMinutes: 60, dependsOn: [before.id] });
+  tasks.update(manager, task.id, { status: 'blocked', note: 'runtime acceptance missing' });
+  fixture.db.raw.prepare('UPDATE task_events SET created_at=created_at-60000 WHERE task_id=?').run(task.id);
+  progress.setParticipant(manager, task.id, { seatId: 'dev-mobile', role: 'reviewer', state: 'active', phase: 'review mesh export (independent)' }, 'ui');
+  const activity = activityOf(fixture, 'dev-mobile');
+  assert.equal(activity.state, 'reviewing'); assert.equal(activity.phase, 'review mesh export (independent)');
+  assert.ok(activity.reasons.some(reason => reason.startsWith('task blocked')), 'blocker stays visible');
+  assert.equal(tasks.get(task.id).status, 'blocked'); assert.deepEqual(tasks.get(task.id).dependsOn, [before.id]);
   fixture.close();
 });

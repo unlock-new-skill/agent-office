@@ -22,7 +22,7 @@ export function SeatActivityLine({ activity }: { activity: SeatActivity | undefi
       <b>{ICON[activity.state]} {activity.state}{activity.stale ? ' (stale)' : ''}</b>
       {what && <> {what}</>}
       {activity.since && <span className="muted"> · {ago(activity.since)}</span>}
-      {activity.state === 'waiting' && activity.reasons.length > 0 && <span className="task-waiting"> · {activity.reasons[0]}</span>}
+      {activity.state !== 'unknown' && activity.reasons.length > 0 && <span className="task-waiting"> · {activity.reasons[0]}</span>}
       {activity.state === 'unknown' && !activity.taskId && <span className="muted"> · {activity.source}</span>}
       {others > 0 && <span className="muted"> · +{others} other task{others === 1 ? '' : 's'}</span>}
     </span>
