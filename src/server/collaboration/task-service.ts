@@ -212,17 +212,22 @@ export class TaskService {
     if (passRequired.some(id => !dependsOn.includes(id))) throw invalid('pass_required_not_in_depends_on');
     // A reopened task's old result no longer describes it: back to unknown unless one is recorded with the change.
     const result = patch.result ?? (task.status === 'done' && status !== 'done' ? 'unknown' : task.result);
+    // A PASS opens the steps that need it, so it is the lead's or the PM's call; the assignee records it alone only when
+    // no lead or PM oversees the task. Bad news (fail, inconclusive, not-applicable) is never blocked.
+    if (result === 'pass' && task.result !== 'pass' && !isLeader && this.hasReviewer(task)) throw forbidden('pass_needs_review');
     if (status === 'done' && task.status !== 'done') {
       const open = this.steps(task.id).filter(step => step.status !== 'done').map(step => step.id);
       if (open.length > 0) throw invalid(`steps_open: ${open.join(', ')} not done yet`);
     }
-    if (status === 'doing' && (task.status !== 'doing' || reassigned) && actor.kind === 'seat') {
-      const waiting = this.unmetDependencies(dependsOn, passRequired);
-      if (waiting.length > 0) throw invalid(`waiting_for_dependencies: ${waiting.join(', ')} not done yet; ask your leader or the PM to reorder`);
-      if (kind === 'execution' && assigneeId === null) throw invalid('assignee_required: an execution task needs an assignee before it starts');
-      if (kind === 'execution' && (estimate === null || estimate > MAX_EXECUTION_MINUTES)) throw invalid(`execution_estimate_required: set estimateMinutes (at most ${MAX_EXECUTION_MINUTES}) before starting; split bigger work into steps`);
-      if (kind === 'execution') this.startGate({ ...task, title, body, assigneeSeatId: assigneeId, estimateMinutes: estimate, dependsOn, passRequired, kind, result }, actor);
+    // The manager and coordinators (PM) may start a task without the readiness checks; the override is written in the thread.
+    const starting = status === 'doing' && (task.status !== 'doing' || reassigned);
+    const candidate: Task = { ...task, title, body, assigneeSeatId: assigneeId, estimateMinutes: estimate, dependsOn, passRequired, kind, result };
+    let overrideLine = '';
+    if (starting && (actor.kind === 'manager' || this.isCoordinator(actor))) {
+      try { this.checkStart(actor, candidate); }
+      catch (error) { overrideLine = ` Started by override of ${actorLabel(actor)} without the readiness check (${error instanceof Error ? error.message : 'not ready'}).`; }
     }
+    else if (starting) this.checkStart(actor, candidate);
     const after: Record<AuditField, unknown> = { title, body, assigneeSeatId: assigneeId, estimateMinutes: estimate, dependsOn, passRequired, kind, status, result };
     const changed = (Object.keys(after) as AuditField[]).filter(field => JSON.stringify(after[field]) !== JSON.stringify(task[field]));
     const replanned = changed.includes('estimateMinutes') || changed.includes('dependsOn');
@@ -249,7 +254,7 @@ export class TaskService {
     const handoffLine = reassigned && handoff ? ` Handoff: ${handoff}` : '';
     const editLine = edited.length ? ` Edited: ${edited.map(field => field === 'body' ? 'requirement' : field === 'kind' ? `kind=${kind}` : field === 'result' ? `result=${result}` : field === 'passRequired' ? `needs pass from ${passRequired.join(', ') || 'none'}` : field).join(', ')}.` : '';
     const name = title !== task.title ? `"${task.title}" → "${title}"` : `"${task.title}"`;
-    this.announce(updated, `Task ${task.id} ${name} ${change} by ${actorLabel(actor)}.${owner}${handoffLine}${editLine}${replanned ? this.planLine(updated) : ''}${note ? ` Note: ${note}` : ''}${reason ? ` Reason: ${reason}` : ''}`, [...mentions]);
+    this.announce(updated, `Task ${task.id} ${name} ${change} by ${actorLabel(actor)}.${owner}${handoffLine}${editLine}${replanned ? this.planLine(updated) : ''}${overrideLine}${note ? ` Note: ${note}` : ''}${reason ? ` Reason: ${reason}` : ''}`, [...mentions]);
     if ((status === 'done' && task.status !== 'done') || (status === 'done' && result === 'pass' && task.result !== 'pass')) this.releaseDependents(updated);
     if (status === 'done' && task.status !== 'done') {
       this.postOutput(updated, actor, note);
@@ -345,6 +350,23 @@ export class TaskService {
     if (this.leaderOf(task.departmentId)?.id === seat.id || this.isDeputy(seat, task.departmentId)) return 'leader';
     if (task.parentId !== null && this.get(task.parentId).assigneeSeatId === seat.id) return 'leader';
     return task.assigneeSeatId === seat.id ? 'assignee' : null;
+  }
+
+  /** What must hold before a task moves to doing (dependencies, owner, estimate, readiness gate for execution tasks). */
+  private checkStart(actor: Actor, candidate: Task): void {
+    const waiting = this.unmetDependencies(candidate.dependsOn, candidate.passRequired);
+    if (waiting.length > 0) throw invalid(`waiting_for_dependencies: ${waiting.join(', ')} not done yet; ask your leader or the PM to reorder`);
+    if (candidate.kind !== 'execution') return;
+    if (candidate.assigneeSeatId === null) throw invalid('assignee_required: an execution task needs an assignee before it starts');
+    if (candidate.estimateMinutes === null || candidate.estimateMinutes > MAX_EXECUTION_MINUTES) throw invalid(`execution_estimate_required: set estimateMinutes (at most ${MAX_EXECUTION_MINUTES}) before starting; split bigger work into steps`);
+    this.startGate(candidate, actor);
+  }
+
+  /** A lead or PM oversees the task: its department has a leader or deputy, it is a step of a lead's task, or the office has a coordinator. */
+  private hasReviewer(task: Task): boolean {
+    if (this.leaderOf(task.departmentId) || this.org.department(task.departmentId).deputySeatId) return true;
+    if (task.parentId !== null && this.get(task.parentId).assigneeSeatId) return true;
+    return this.org.view().seats.some(seat => seat.coordinator);
   }
 
   /** Posts a line in the task's thread (blockers and the dispatcher talk about a task there too). */

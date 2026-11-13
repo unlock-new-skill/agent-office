@@ -13,7 +13,9 @@ const readyLines = (fixture: Fixture, taskId: string): number => fixture.office.
 const finish = (fixture: Fixture, taskId: string, result?: 'pass' | 'fail' | 'inconclusive'): void => {
   const { tasks } = fixture.office; const owner = tasks.get(taskId).assigneeSeatId!;
   tasks.update(seat(owner), taskId, { status: 'doing' });
-  tasks.update(seat(owner), taskId, { status: 'done', note: 'delivered', ...(result ? { result } : {}) });
+  // The assignee reports; a PASS is recorded by the lead (it opens the steps that need it).
+  tasks.update(seat(owner), taskId, { status: 'done', note: 'delivered', ...(result && result !== 'pass' ? { result } : {}) });
+  if (result === 'pass') tasks.update(seat('dev-lead'), taskId, { result: 'pass', reason: 'reviewed the run' });
 };
 const dispatched = (): Fixture => { const fixture = createSeededOffice(); seatAll(fixture, ['dev-lead', 'dev-be', 'dev-fe', 'dev-unity']); fixture.office.dispatch.setMode('on'); return fixture; };
 
@@ -29,7 +31,8 @@ test('DONE is not PASS: a test task done with FAIL does not open the step that n
   const unknown = exec(fixture, 'Gate unknown', 'dev-unity', { dependsOn: [probe.id], passRequired: [probe.id] });
   fixture.office.tasks.update(seat('dev-lead'), probe.id, { result: 'unknown' });
   assert.equal(dispatch.readiness(unknown.id).state, 'needs-action', 'a missing result needs confirmation, not a guess');
-  fixture.office.tasks.update(seat('dev-be'), probe.id, { result: 'pass' });
+  assert.throws(() => fixture.office.tasks.update(seat('dev-be'), probe.id, { result: 'pass' }), /pass_needs_review/);
+  fixture.office.tasks.update(seat('dev-lead'), probe.id, { result: 'pass', reason: 'rerun green' });
   assert.equal(dispatch.readiness(gate.id).state, 'ready');
   fixture.close();
 });
@@ -219,5 +222,33 @@ test('a failed nested step rolls back alone and the database keeps working', () 
   assert.equal(db.raw.prepare("SELECT 1 FROM app_settings WHERE key='inner'").get(), undefined);
   assert.throws(() => db.transaction(() => { throw new Error('outer boom'); }), /outer boom/);
   assert.equal(db.transaction(() => 42), 42, 'depth back to zero: a new top-level transaction starts');
+  fixture.close();
+});
+
+test('PASS is recorded by the lead or the PM; the assignee alone only when no lead or PM oversees the task', () => {
+  const fixture = dispatched(); const { tasks, org } = fixture.office;
+  const task = exec(fixture, 'Probe', 'dev-be'); finish(fixture, task.id);
+  assert.throws(() => tasks.update(seat('dev-be'), task.id, { result: 'pass' }), /pass_needs_review/);
+  assert.equal(tasks.update(seat('dev-be'), task.id, { result: 'fail' }).result, 'fail', 'bad news is never blocked');
+  org.createDepartment({ id: 'pmo', name: 'PMO', color: '#64748b' });
+  org.createSeat('pmo', { id: 'pm-live', title: 'PM', description: '', role: 'leader', coordinator: true });
+  assert.equal(tasks.update(seat('pm-live'), task.id, { result: 'pass' }).result, 'pass');
+  // A department with no lead, no deputy, no parent task and an office without a PM: nobody to review, so self-pass.
+  org.updateSeat('pm-live', { coordinator: false });
+  const solo = org.createDepartment({ id: 'solo', name: 'Solo', color: '#64748b' });
+  org.createSeat(solo.id, { id: 'solo-dev', title: 'Solo', description: '', role: 'member' });
+  const own = tasks.create(manager, { title: 'Own check', body: REQ, assigneeSeatId: 'solo-dev', kind: 'execution', estimateMinutes: 30 });
+  assert.equal(tasks.update(seat('solo-dev'), own.id, { status: 'done', note: 'ok', result: 'pass' }).result, 'pass');
+  fixture.close();
+});
+
+test('the PM, like the manager, may start a task that is not ready; the override is written in the thread', () => {
+  const fixture = dispatched(); const { tasks, org, messages } = fixture.office;
+  org.createDepartment({ id: 'pmo', name: 'PMO', color: '#64748b' });
+  org.createSeat('pmo', { id: 'pm-live', title: 'PM', description: '', role: 'leader', coordinator: true });
+  const upstream = exec(fixture, 'Upstream', 'dev-fe'); const task = exec(fixture, 'Urgent', 'dev-be', { dependsOn: [upstream.id] });
+  assert.throws(() => tasks.update(seat('dev-lead'), task.id, { status: 'doing' }), /waiting_for_dependencies/);
+  assert.equal(tasks.update(seat('pm-live'), task.id, { status: 'doing', reason: 'hotfix, upstream reviewed by hand' }).status, 'doing');
+  assert.ok(messages.list(manager, 'dev', { limit: 200 }).some(message => message.body.includes('Started by override of @pm-live without the readiness check')));
   fixture.close();
 });

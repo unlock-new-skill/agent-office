@@ -121,7 +121,10 @@ estimate and history stay as they are); it is not work for one member. Older tas
 **Done is not pass.** A task that ran a check records its verified outcome in \`result\` (pass / fail / inconclusive /
 not-applicable; unknown until recorded) — a test that ran and failed is \`done\` with \`result: fail\`. A dependency
 listed in \`passRequired\` is met only when that task is done **and** its result is pass; the others only need done.
-Never infer a result from chat: record it, or leave it unknown (the board then asks for confirmation).
+Never infer a result from chat: record it, or leave it unknown (the board then asks for confirmation). A **pass** is
+recorded by the lead (or deputy, or the lead of the parent task) or the PM after review; the assignee records pass alone
+only when no lead or PM oversees the task. The assignee always records fail / inconclusive / not-applicable.
+The manager and the PM may move a task to \`doing\` without the readiness checks (an override); it is written in the task thread.
 
 **Blockers are records, not a status.** When something stops a task, open one blocker for the root cause with
 \`agent_office_blocker { action: "open" }\`: kind, one sentence saying what is missing, the resolver (seat or role),

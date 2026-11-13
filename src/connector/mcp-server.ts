@@ -19,6 +19,7 @@ const HINTS: Record<string, string> = {
   reassign_doing_requires_handoff: 'The task is in progress. Pass handoffNote (what is done, what is left, where the work is) to hand it over; it goes back to todo for the new assignee.',
   readiness_changed: 'The task is no longer ready under that offer (a dependency, result or blocker changed). Read it with agent_office_get_task: readiness lists what is missing.',
   already_started: 'Someone already started this task.',
+  pass_needs_review: 'A PASS is recorded by your lead or the PM (it opens the steps that need it). Record fail / inconclusive yourself, or put the evidence in the note and ask your lead to record pass.',
   forbidden_blocker: 'Only the resolver, the leader of an affected task, a coordinator or the manager can change this blocker.',
   start_by_assignee_only: 'Only the task\'s assignee starts it. Leaders reassign it first if someone else should do it.',
   join_channel_leaders_only: 'Only leaders and coordinators can join another department\'s channel. Ask your leader.',

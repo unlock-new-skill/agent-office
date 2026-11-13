@@ -5,7 +5,7 @@ Requirement: /Users/truongpham/Desktop/requiremtn.md (PM pm-live)
 
 ## Run
 
-- `npm test` on Node 24.11.1 (`.nvmrc`): **218 tests, 218 pass, 0 fail** (after review fixes). `npm run lint` clean, `npm run build` ok.
+- `npm test` on Node 24.11.1 (`.nvmrc`): **220 tests, 220 pass, 0 fail** (after review fixes and the pass/override decisions). `npm run lint` clean, `npm run build` ok.
 - On Node 26 the backup/restore test fails with `unsupported_node_runtime` (script guard) — environment, not code.
 - New test files: `tests/unit/task-edit.test.ts`, `tests/unit/readiness-dispatch.test.ts`, `tests/unit/channel-visit.test.ts`,
   `tests/integration/task-edit-api.test.ts`. All tests use their own in-memory office (no real task touched).
@@ -71,12 +71,12 @@ Tasks → **By blocker** → *Dispatch*: `suggest` (default: readiness only), `o
   posted in the thread); transaction depth counter after a failed COMMIT; reopening a done task keeps a stale pass
   (result back to unknown); reassign + doing skipped START checks; warnings sent in mode off; a failing recompute
   turned a committed edit into a 500 (now logged); board group titles of unreadable tasks hidden; blocker link lookup O(n).
-- Kept on purpose: the manager may move a task to doing without the readiness gate (manager override); an assignee may
-  record its own result — mandatory reviews are modelled as a separate dependency task.
+- Decided by the owner (2026-11-13): PASS is recorded by the lead (deputy, parent lead) or the PM; the assignee self-passes
+  only when no lead or PM oversees the task (fail/inconclusive always allowed). The manager and the PM may start a task
+  without the readiness checks; the override is written in the task thread.
 
 ## Unresolved questions
 
-- Should an assignee be allowed to record `pass` on its own task, or only a leader/reviewer?
 
 - Who owns `t-dev-391` (Unity 2 = `unity-ui-chuye-n-hud`?).
 - When to switch dispatch to `on` (after leads classify open tasks).
