@@ -193,13 +193,13 @@ server.registerTool('agent_office_board', {
 }, async filter => text(await call(`/v1/board?${new URLSearchParams(Object.entries(filter).filter(([, value]) => value !== undefined) as Array<[string, string]>).toString()}`)));
 
 server.registerTool('agent_office_blocker', {
-  title: 'Blocker', description: 'Structured blockers shared by every task they stop (link by id, never duplicate a cause). action=open { kind, description (one sentence: what is missing), taskIds, resolverSeatId or resolverRole, nextStep (action + evidence needed to close), dueAt? (only a real commitment), originTaskId?, refs? (thread/evidence references) }; update { blockerId, fields }; link { blockerId, taskIds }; unlink { blockerId, taskId }; resolve { blockerId, text = evidence or reason }; reopen { blockerId, text = why (e.g. grant revoked) }; list { status?, taskId? }. Kinds: dependency (waiting only), missing-input, permission, environment, defect, owner-missing, decision. Never put secrets, tokens or raw logs in a blocker.',
+  title: 'Blocker', description: 'Structured blockers shared by every task they stop (link by id, never duplicate a cause). action=open { kind, description (one sentence: what is missing), taskIds, resolverSeatId or resolverRole, nextStep (action + evidence needed to close), dueAt? (only a real commitment), originTaskId?, refs? (thread/evidence references) }; update { blockerId, fields }; link { blockerId, taskIds }; unlink { blockerId, taskId }; resolve { blockerId, text = evidence or reason, validUntil? = epoch ms when a granted window/permission ends (the blocker opens again by itself) }; reopen { blockerId, text = why (e.g. grant revoked) }; list { status?, taskId? }. Kinds: dependency (waiting only), missing-input, permission, environment, defect, owner-missing, decision. Never put secrets, tokens or raw logs in a blocker.',
   inputSchema: z.object({ action: z.enum(['open', 'update', 'link', 'unlink', 'resolve', 'reopen', 'list']), blockerId: z.string().min(1).max(40).optional(),
     kind: z.enum(['dependency', 'missing-input', 'permission', 'environment', 'defect', 'owner-missing', 'decision']).optional(), description: z.string().min(1).max(500).optional(),
     taskIds: z.array(z.string().min(1).max(80)).max(50).optional(), taskId: z.string().min(1).max(80).optional(), resolverSeatId: id.nullable().optional(), resolverRole: z.string().max(80).nullable().optional(),
     nextStep: z.string().max(1000).optional(), dueAt: z.number().int().positive().nullable().optional(), originTaskId: z.string().max(80).optional(), refs: z.array(z.string().min(1).max(300)).max(10).optional(),
-    text: z.string().max(1000).optional(), status: z.enum(['open', 'resolved']).optional() }).strict(), annotations: write,
-}, async ({ action, blockerId, text: reason, taskId, status, kind, taskIds, ...fields }) => {
+    text: z.string().max(1000).optional(), status: z.enum(['open', 'resolved']).optional(), validUntil: z.number().int().positive().optional() }).strict(), annotations: write,
+}, async ({ action, blockerId, text: reason, taskId, status, kind, taskIds, validUntil, ...fields }) => {
   const path = (suffix = ''): string => { if (!blockerId) throw new Error('blockerId is required for this action'); return `/v1/blockers/${encodeURIComponent(blockerId)}${suffix}`; };
   const clean = (value: Record<string, unknown>): Record<string, unknown> => Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
   if (action === 'list') return text(await call(`/v1/blockers?${new URLSearchParams(clean({ status, taskId }) as Record<string, string>).toString()}`));
@@ -207,7 +207,7 @@ server.registerTool('agent_office_blocker', {
   if (action === 'update') return text(await call(path(), { method: 'PATCH', body: clean(fields) }));
   if (action === 'link') return text(await call(path('/link'), { body: { taskIds } }));
   if (action === 'unlink') return text(await call(path('/unlink'), { body: { taskId } }));
-  return text(await call(path(action === 'resolve' ? '/resolve' : '/reopen'), { body: action === 'resolve' ? { resolution: reason ?? '' } : { reason: reason ?? '' } }));
+  return text(await call(path(action === 'resolve' ? '/resolve' : '/reopen'), { body: action === 'resolve' ? { resolution: reason ?? '', ...(validUntil ? { validUntil } : {}) } : { reason: reason ?? '' } }));
 });
 
 server.registerTool('agent_office_get_task', {

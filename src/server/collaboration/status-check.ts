@@ -38,11 +38,10 @@ export class StatusCheck {
     this.messages.postSystem(LEADERS_CHANNEL_ID, `@${coordinator.id} Status check — no report for a while:\n${lines.join('\n')}\nAsk these leads for a short report (done / doing / blocked, next step) and help unblock them.`, [coordinator.id]);
   }
 
-  /** The seat to ping: it must exist, be occupied and sit in #leaders, otherwise the check stays quiet. */
+  /** The seat to ping: the configured seat, else a coordinator flagged by the manager; occupied and in #leaders, otherwise quiet. */
   private coordinator(): { id: string; departmentId: string } | null {
-    const seat = this.db.raw.prepare('SELECT id,department_id AS departmentId,agent_id AS agentId FROM seats WHERE id=?').get(this.options.seatId) as { id: string; departmentId: string; agentId: string | null } | undefined;
-    if (!seat?.agentId || !this.org.isMember(LEADERS_CHANNEL_ID, seat.id)) return null;
-    return seat;
+    const candidates = this.db.raw.prepare('SELECT id,department_id AS departmentId,agent_id AS agentId FROM seats WHERE id=? OR coordinator=1 ORDER BY id=? DESC,id').all(this.options.seatId, this.options.seatId) as Array<{ id: string; departmentId: string; agentId: string | null }>;
+    return candidates.find(seat => seat.agentId && this.org.isMember(LEADERS_CHANNEL_ID, seat.id)) ?? null;
   }
 
   /** Latest message in the department channel or task change in the department (0 when there is none). */

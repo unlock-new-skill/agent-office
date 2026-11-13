@@ -211,7 +211,7 @@ paths:
       security: [{cookieAuth: []}, {bearerAuth: []}]
       description: Tasks grouped by root cause (needsAction, waiting) plus ready, doing, done, tracking; totals count each task once. Non-coordinator seats see their own department.
       parameters: [{in: query, name: departmentId, schema: {type: string}}, {in: query, name: assignee, schema: {type: string}}, {in: query, name: resolver, schema: {type: string}}]
-      responses: {'200': {description: Board}, '403': {description: forbidden_task_read}}
+      responses: {'200': {description: 'Board + alerts (current exceptions in scope)'}, '403': {description: forbidden_task_read}}
   /v1/blockers:
     get:
       security: [{cookieAuth: []}, {bearerAuth: []}]
@@ -230,7 +230,7 @@ paths:
   /v1/blockers/{id}/{action}:
     post:
       security: [{cookieAuth: []}, {bearerAuth: []}]
-      description: 'link {taskIds}, unlink {taskId}, resolve {resolution: evidence or reason}, reopen {reason}'
+      description: 'link {taskIds}, unlink {taskId}, resolve {resolution: evidence or reason, validUntil?: epoch ms when the grant/window ends}, reopen {reason}'
       parameters: [{in: path, name: id, required: true, schema: {type: string}}, {in: path, name: action, required: true, schema: {enum: [link, unlink, resolve, reopen]}}]
       responses: {'200': {description: Blocker}, '400': {description: 'resolution_required, reason_required, already_open, already_resolved, last_task'}, '403': {description: 'forbidden_blocker, forbidden_task_change'}}
   /v1/settings/dispatch:

@@ -78,7 +78,9 @@ export type BlockerKind = typeof BLOCKER_KINDS[number];
  */
 export type Blocker = { id: string; kind: BlockerKind; description: string; resolverSeatId: string | null; resolverRole: string | null; nextStep: string; dueAt: number | null;
   originTaskId: string | null; refs: string[]; status: 'open' | 'resolved'; openedBy: string; openedAt: number; updatedAt: number;
-  resolvedBy: string | null; resolvedAt: number | null; resolution: string; taskIds: string[] };
+  resolvedBy: string | null; resolvedAt: number | null; resolution: string; taskIds: string[];
+  /** For a resolved grant or window: when it ends (the blocker opens again by itself). */
+  validUntil: number | null };
 /**
  * Computed, never stored as a status: ready = an execution task that may START now; waiting = only dependencies are
  * missing; needs-action = someone must act (owner, estimate, blocker, a result to confirm, classification).
@@ -88,11 +90,13 @@ export type ReadinessState = 'ready' | 'waiting' | 'needs-action' | 'doing' | 'd
 export type ReadinessReason = { code: string; group: string; text: string; action: 'needs-action' | 'waiting' };
 export type Readiness = { taskId: string; state: ReadinessState; reasons: ReadinessReason[]; generation: number; queued: boolean };
 export type DispatchMode = 'off' | 'suggest' | 'on';
+/** An exception worth a lead's or the PM's attention, with who acts and what to do next. key: stable id (reported once while it lasts). */
+export type OfficeAlert = { key: string; kind: 'owner-missing' | 'overdue' | 'gate-broken' | 'blocker-overdue' | 'blocker-stale' | 'resolver-missing'; departmentId: string; owner: string; taskIds: string[]; text: string; next: string };
 export type BoardGroup = { id: string; title: string; kind: string; resolver: string | null; nextStep: string; dueAt: number | null; blockerId: string | null; taskIds: string[] };
 /** Board of one scope at one moment: tasks are counted once by id even when they sit under several groups. */
 export type Board = { snapshotAt: number; scope: { departmentId: string | null; assignee: string | null; resolver: string | null }; dispatch: DispatchMode;
   needsAction: BoardGroup[]; waiting: BoardGroup[]; ready: string[]; doing: string[]; done: string[]; tracking: string[];
-  tasks: Record<string, Task>; readiness: Record<string, Readiness>;
+  tasks: Record<string, Task>; readiness: Record<string, Readiness>; alerts: OfficeAlert[];
   totals: { tasks: number; needsActionTasks: number; waitingTasks: number; readyTasks: number; blockers: number; groups: number } };
 export type TaskChange = { taskId: string; revision: number; actorKind: string; actorId: string; source: ChangeSource; field: string; before: unknown; after: unknown; reason: string; createdAt: number };
 export type SeatHandoff = { seatId: string; body: string; updatedAt: number; updatedBy: string };

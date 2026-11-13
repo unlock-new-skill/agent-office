@@ -252,3 +252,47 @@ test('the PM, like the manager, may start a task that is not ready; the override
   assert.ok(messages.list(manager, 'dev', { limit: 200 }).some(message => message.body.includes('Started by override of @pm-live without the readiness check')));
   fixture.close();
 });
+
+test('exception digest: new alerts once in #leaders with owner and next step; quiet while unchanged; again when they return', () => {
+  const fixture = dispatched(); const { tasks, dispatch, alerts, blockers, org, messages } = fixture.office;
+  org.createDepartment({ id: 'pmo', name: 'PMO', color: '#64748b' });
+  org.createSeat('pmo', { id: 'pm-live', title: 'PM', description: '', role: 'leader', coordinator: true });
+  const orphan = exec(fixture, 'Orphan', 'dev-be'); tasks.update(seat('dev-lead'), orphan.id, { assigneeSeatId: null });
+  const slow = exec(fixture, 'Slow', 'dev-fe', { estimateMinutes: 60 }); dispatch.start(seat('dev-fe'), slow.id, {}, 'mcp');
+  const stuck = exec(fixture, 'Stuck', 'dev-unity');
+  blockers.open(seat('dev-lead'), { kind: 'decision', description: 'Pick the HUD font', taskIds: [stuck.id], dueAt: Date.now() + 60_000, resolverSeatId: 'design-lead', nextStep: 'design-lead picks one of the two fonts' });
+  const later = Date.now() + 2 * 3_600_000;
+  const reported = alerts.run(later);
+  assert.deepEqual(reported.map(alert => alert.kind).sort(), ['blocker-overdue', 'overdue', 'owner-missing']);
+  const digest = messages.list(manager, 'leaders', { limit: 200 }).filter(message => message.body.includes('Exceptions —'));
+  assert.equal(digest.length, 1); assert.ok(digest[0]!.mentions.includes('pm-live'));
+  assert.match(digest[0]!.body, /\[blocker-overdue\].*owner @design-lead — next: design-lead picks one/);
+  assert.deepEqual(alerts.run(later + 60_000), [], 'nothing new: no second digest');
+  tasks.update(seat('dev-lead'), orphan.id, { assigneeSeatId: 'dev-mobile' });
+  assert.deepEqual(alerts.run(later + 120_000), []);
+  tasks.update(seat('dev-lead'), orphan.id, { assigneeSeatId: null });
+  assert.deepEqual(alerts.run(later + 180_000).map(alert => alert.key), [`owner:${orphan.id}`], 'came back: reported again');
+  dispatch.setMode('off');
+  assert.deepEqual(alerts.run(later + 240_000), [], 'off: no alerts');
+  fixture.close();
+});
+
+test('a granted window that ends opens its blocker again: not started → not ready; running → warned only', () => {
+  const fixture = dispatched(); const { blockers, dispatch, tasks, messages } = fixture.office;
+  const waiting = exec(fixture, 'Waiting', 'dev-be'); const running = exec(fixture, 'Running', 'dev-fe');
+  const window = blockers.open(manager, { kind: 'environment', description: 'Test window', taskIds: [waiting.id, running.id], resolverRole: 'manager', nextStep: 'open a window' });
+  assert.throws(() => blockers.resolve(manager, window.id, 'window open', Date.now() - 1), /valid_until_must_be_in_the_future/);
+  const until = Date.now() + 60_000;
+  blockers.resolve(manager, window.id, 'window 14:00-15:00 granted', until);
+  dispatch.start(seat('dev-fe'), running.id, {}, 'mcp');
+  assert.equal(dispatch.readiness(waiting.id).state, 'ready');
+  assert.equal(blockers.expireDue(until - 1), 0);
+  assert.equal(blockers.expireDue(until + 1), 1);
+  assert.equal(blockers.get(window.id).status, 'open');
+  assert.equal(dispatch.readiness(waiting.id).state, 'needs-action');
+  assert.throws(() => dispatch.start(seat('dev-be'), waiting.id, {}, 'mcp'), /not_ready/);
+  assert.equal(tasks.get(running.id).status, 'doing');
+  assert.ok(messages.list(manager, 'dev', { limit: 200 }).some(message => message.body.startsWith(`⚠ ${running.id}`)));
+  assert.equal(blockers.expireDue(until + 2), 0, 'expires once');
+  fixture.close();
+});

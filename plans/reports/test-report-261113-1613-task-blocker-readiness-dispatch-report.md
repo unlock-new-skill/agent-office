@@ -5,7 +5,7 @@ Requirement: /Users/truongpham/Desktop/requiremtn.md (PM pm-live)
 
 ## Run
 
-- `npm test` on Node 24.11.1 (`.nvmrc`): **220 tests, 220 pass, 0 fail** (after review fixes and the pass/override decisions). `npm run lint` clean, `npm run build` ok.
+- `npm test` on Node 24.11.1 (`.nvmrc`): **222 tests, 222 pass, 0 fail** (incl. P1: alerts digest, window expiry). `npm run lint` clean, `npm run build` ok.
 - On Node 26 the backup/restore test fails with `unsupported_node_runtime` (script guard) — environment, not code.
 - New test files: `tests/unit/task-edit.test.ts`, `tests/unit/readiness-dispatch.test.ts`, `tests/unit/channel-visit.test.ts`,
   `tests/integration/task-edit-api.test.ts`. All tests use their own in-memory office (no real task touched).
@@ -58,7 +58,6 @@ Tasks → **By blocker** → *Dispatch*: `suggest` (default: readiness only), `o
 ## Limits (not in this release)
 
 - Agents' machines must run `agent-office.mjs update` to get the new MCP tools (runners do not self-update).
-- P1: overdue / stale / missing-owner alerts, digest for leads/PM, automatic window expiry (today: reopen the blocker).
 - No demo on a dedicated test task in production yet; `t-dev-391` not reassigned (owner choice: likely `unity-ui-chuye-n-hud`).
 - Older builds refuse the v22 database: roll back = restore the backup + `pre-v22` image.
 

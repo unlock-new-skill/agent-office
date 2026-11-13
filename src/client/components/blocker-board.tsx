@@ -3,7 +3,7 @@ import type { Board, BoardGroup, DispatchMode, OrgView, Task } from '../../share
 import { errorText, type Api } from '../api/http.js';
 
 type Props = { api: Api; org: OrgView; tasks: Record<string, Task>; departmentId: string; notify: (text: string) => void };
-const MODE_LABEL: Record<DispatchMode, string> = { off: 'Off — legacy notices only', suggest: 'Suggest — show readiness, send nothing', on: 'On — notify owners when ready' };
+const MODE_LABEL: Record<DispatchMode, string> = { off: 'Off — legacy notices only, no alerts', suggest: 'Suggest — readiness + alert digest, no ready notices', on: 'On — notify owners when ready' };
 
 /**
  * PM / manager board by root cause: "needs action" (someone must remove a blocker, set an owner or estimate, confirm a
@@ -72,6 +72,9 @@ export function BlockerBoard({ api, org, tasks, departmentId, notify }: Props): 
         Scope: {board.scope.departmentId ?? 'all departments'}{board.scope.resolver ? ` · resolver ${board.scope.resolver}` : ''} · snapshot {new Date(board.snapshotAt).toLocaleTimeString()} ·
         {' '}{board.totals.tasks} tasks (each counted once) · {board.totals.blockers} blocker records · {board.totals.groups} causes
       </p>
+      {board.alerts.length > 0 && section('Alerts', <ul className="blocker-tasks">{board.alerts.map(alert => (
+        <li key={alert.key}><span className="pill">{alert.kind}</span> {alert.text} <span className="muted">— owner {alert.owner} — next: {alert.next}</span></li>
+      ))}</ul>, board.alerts.length)}
       {section('Needs action', board.needsAction.map(group), board.needsAction.length)}
       {section('Waiting for dependencies', board.waiting.map(group), board.waiting.length)}
       {section('Ready', taskList(board.ready), board.ready.length)}

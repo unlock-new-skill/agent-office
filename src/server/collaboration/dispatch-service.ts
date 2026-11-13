@@ -127,10 +127,17 @@ export class DispatchService {
     const unique = (groups: ReturnType<typeof groupReasons>): number => new Set(groups.flatMap(group => group.taskIds)).size;
     return {
       snapshotAt: Date.now(), scope: { departmentId, assignee: filter.assignee ?? null, resolver }, dispatch: this.mode(), needsAction, waiting, ready, doing, done, tracking,
+      alerts: [],
       tasks: Object.fromEntries([...shown].map(id => [id, snapshot.byId.get(id)!])),
       readiness: Object.fromEntries([...shown].map(id => [id, this.toReadiness(snapshot, id, snapshot.evals.get(id)!)])),
       totals: { tasks: shown.size, needsActionTasks: unique(needsAction), waitingTasks: unique(waiting), readyTasks: ready.length, blockers: new Set([...needsAction, ...waiting].map(group => group.blockerId).filter(Boolean)).size, groups: needsAction.length + waiting.length },
     };
+  }
+
+  /** Every task with its current evaluation, for the exception alerts. */
+  evaluations(): Array<{ task: Task; evaluation: Evaluation }> {
+    const snapshot = this.snapshot();
+    return snapshot.tasks.map(task => ({ task, evaluation: snapshot.evals.get(task.id)! }));
   }
 
   private snapshot(): Snapshot {

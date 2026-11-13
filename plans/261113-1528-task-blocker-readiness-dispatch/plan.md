@@ -1,6 +1,6 @@
 # Task edit, blockers, readiness & dispatch
 
-Status: P0-A, P0-B, P0-C, P0-D done on branch feat/task-edit-rbac (dispatch default `suggest`); P1 pending · Source: /Users/truongpham/Desktop/requiremtn.md (PM pm-live, 13/11/2026) · Order: P0-A → P0-B/C → P0-D → P1
+Status: P0-A, P0-B, P0-C, P0-D done on branch feat/task-edit-rbac (dispatch default `suggest`); P1 done (alerts digest, window expiry, status check uses flagged coordinator) · Source: /Users/truongpham/Desktop/requiremtn.md (PM pm-live, 13/11/2026) · Order: P0-A → P0-B/C → P0-D → P1
 
 ## Dev Office xác nhận (từ code, commit b4ce79a)
 

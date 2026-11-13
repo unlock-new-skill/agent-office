@@ -6,7 +6,7 @@ import type { OrgService } from './org-service.js';
 import type { TaskService } from './task-service.js';
 
 type BlockerRow = Omit<Blocker, 'refs' | 'taskIds'> & { refs: string };
-const COLUMNS = 'id,kind,description,resolver_seat_id AS resolverSeatId,resolver_role AS resolverRole,next_step AS nextStep,due_at AS dueAt,origin_task_id AS originTaskId,refs,status,opened_by AS openedBy,opened_at AS openedAt,updated_at AS updatedAt,resolved_by AS resolvedBy,resolved_at AS resolvedAt,resolution';
+const COLUMNS = 'id,kind,description,resolver_seat_id AS resolverSeatId,resolver_role AS resolverRole,next_step AS nextStep,due_at AS dueAt,origin_task_id AS originTaskId,refs,status,opened_by AS openedBy,opened_at AS openedAt,updated_at AS updatedAt,resolved_by AS resolvedBy,resolved_at AS resolvedAt,resolution,valid_until AS validUntil';
 const MAX_TASKS = 50; const MAX_REFS = 10;
 const actorId = (actor: Actor): string => actor.kind === 'manager' ? 'manager' : actor.seatId;
 const actorLabel = (actor: Actor): string => actor.kind === 'manager' ? 'manager' : `@${actor.seatId}`;
@@ -102,21 +102,44 @@ export class BlockerService {
     return this.changed(blocker);
   }
 
-  resolve(actor: Actor, id: string, resolution: string): Blocker { return this.setStatus(actor, id, 'resolved', resolution); }
+  /** validUntil: the grant or window ends then; the blocker opens again by itself (see expireDue). */
+  resolve(actor: Actor, id: string, resolution: string, validUntil: number | null = null): Blocker {
+    if (validUntil !== null && (!Number.isInteger(validUntil) || validUntil <= Date.now())) throw invalid('valid_until_must_be_in_the_future');
+    return this.setStatus(actor, id, 'resolved', resolution, validUntil);
+  }
+
+  /**
+   * Grants and windows that ran out open their blocker again: tasks not started lose readiness, tasks in progress get a
+   * warning from the dispatcher. Nothing is stopped. Returns how many blockers expired.
+   */
+  expireDue(now = Date.now()): number {
+    const due = this.db.raw.prepare("SELECT id FROM blockers WHERE status='resolved' AND valid_until IS NOT NULL AND valid_until<=?").all(now) as Array<{ id: string }>;
+    for (const { id } of due) {
+      const blocker = this.db.transaction(() => {
+        const expired = this.get(id);
+        this.db.raw.prepare("UPDATE blockers SET status='open',resolved_by=NULL,resolved_at=NULL,resolution='',valid_until=NULL,updated_at=? WHERE id=?").run(now, id);
+        const reopened = this.get(id);
+        this.tell(reopened, null, `opened again: the grant or window "${expired.resolution}" ended at ${new Date(expired.validUntil!).toISOString()}`, reopened.taskIds);
+        return reopened;
+      });
+      this.changed(blocker);
+    }
+    return due.length;
+  }
 
   /** Reopens a resolved blocker (a revoked grant, a fix that did not hold): tasks lose readiness again. */
   reopen(actor: Actor, id: string, reason: string): Blocker { return this.setStatus(actor, id, 'open', reason); }
 
-  private setStatus(actor: Actor, id: string, status: 'open' | 'resolved', text: string): Blocker {
+  private setStatus(actor: Actor, id: string, status: 'open' | 'resolved', text: string, validUntil: number | null = null): Blocker {
     const current = this.get(id); this.assertManages(actor, current);
     if (text.trim().length < 5 || text.length > 1000) throw invalid(status === 'resolved' ? 'resolution_required: give the evidence or the reason it is resolved' : 'reason_required: say why it is open again');
     if (current.status === status) throw invalid(`already_${status}`);
     const blocker = this.db.transaction(() => {
       const now = Date.now();
-      if (status === 'resolved') this.db.raw.prepare("UPDATE blockers SET status='resolved',resolved_by=?,resolved_at=?,resolution=?,updated_at=? WHERE id=?").run(actorId(actor), now, text.trim(), now, id);
-      else this.db.raw.prepare("UPDATE blockers SET status='open',resolved_by=NULL,resolved_at=NULL,resolution='',updated_at=? WHERE id=?").run(now, id);
+      if (status === 'resolved') this.db.raw.prepare("UPDATE blockers SET status='resolved',resolved_by=?,resolved_at=?,resolution=?,valid_until=?,updated_at=? WHERE id=?").run(actorId(actor), now, text.trim(), validUntil, now, id);
+      else this.db.raw.prepare("UPDATE blockers SET status='open',resolved_by=NULL,resolved_at=NULL,resolution='',valid_until=NULL,updated_at=? WHERE id=?").run(now, id);
       const updated = this.get(id);
-      this.tell(updated, actor, `${status === 'resolved' ? 'resolved' : 'reopened'} by ${actorLabel(actor)}: ${text.trim()}`, updated.taskIds);
+      this.tell(updated, actor, `${status === 'resolved' ? 'resolved' : 'reopened'} by ${actorLabel(actor)}: ${text.trim()}${validUntil ? ` (valid until ${new Date(validUntil).toISOString()})` : ''}`, updated.taskIds);
       return updated;
     });
     return this.changed(blocker);
@@ -150,12 +173,12 @@ export class BlockerService {
   }
 
   /** One line in each affected task's thread; the resolver and the task's leader are mentioned (never the actor). */
-  private tell(blocker: Blocker, actor: Actor, what: string, taskIds: string[]): void {
+  private tell(blocker: Blocker, actor: Actor | null, what: string, taskIds: string[]): void {
     const who = blocker.resolverSeatId ? `@${blocker.resolverSeatId}` : blocker.resolverRole ?? 'nobody yet — assign a resolver';
     for (const taskId of taskIds) {
       const task = this.tasks.get(taskId); const leader = this.org.view().seats.find(seat => seat.departmentId === task.departmentId && seat.role === 'leader');
       const mentions = new Set([...(blocker.resolverSeatId ? [blocker.resolverSeatId] : []), ...(leader ? [leader.id] : [])]);
-      if (actor.kind === 'seat') mentions.delete(actor.seatId);
+      if (actor?.kind === 'seat') mentions.delete(actor.seatId);
       const open = blocker.status === 'open' ? ` Resolver: ${who}. Next step: ${blocker.nextStep || '(not set)'}.${blocker.dueAt ? ` Due: ${new Date(blocker.dueAt).toISOString()}.` : ''}` : '';
       this.tasks.postLine(task, `Blocker ${blocker.id} (${blocker.kind}) on ${task.id} ${what}. ${blocker.description}.${open}`, [...mentions]);
     }

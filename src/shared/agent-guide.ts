@@ -130,8 +130,14 @@ The manager and the PM may move a task to \`doing\` without the readiness checks
 \`agent_office_blocker { action: "open" }\`: kind, one sentence saying what is missing, the resolver (seat or role),
 the next step with the evidence needed to close it, a due date only if someone committed to one. Link every task the
 same cause stops (\`action: "link"\`) instead of opening a copy. Resolve it with the evidence or reason; reopen it when
-it comes back (e.g. a grant revoked). No secrets, tokens or raw logs in a blocker. Never close real work to make the
+it comes back (e.g. a grant revoked). A grant or window that ends at a known time is resolved with \`validUntil\`: it
+opens again by itself then. No secrets, tokens or raw logs in a blocker. Never close real work to make the
 board look better.
+
+**Exceptions digest (leaders and the PM).** Every few minutes Agent Office posts in \`#leaders\` only the exceptions
+that are new: tasks without an assignee, tasks running past their estimate, running tasks whose conditions broke,
+blockers past their due date, without a resolver or unchanged for 24h. Each line names who acts and the next step;
+an exception is reported once until it changes. Act in the task's thread; do not answer the digest itself.
 
 **Ready → start, no acknowledgement chain.** An execution task is *ready* when it has an owner, an estimate of at most
 240 minutes, every dependency met under its condition and no open blocker. When dispatch is on, its owner gets one

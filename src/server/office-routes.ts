@@ -179,7 +179,10 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
     const input = z.object({ generation: z.number().int().min(0).optional(), expectedRevision: z.number().int().min(0).optional() }).strict().parse(await c.req.json());
     return c.json(office.dispatch.start(actor, c.req.param('id'), input, sourceOf(actor)));
   }));
-  app.get('/v1/board', c => withActor(c, ({ actor }) => c.json(office.dispatch.board(actor, z.object({ departmentId: z.string().max(64).optional(), assignee: z.string().max(64).optional(), resolver: z.string().max(65).optional() }).parse(c.req.query())))));
+  app.get('/v1/board', c => withActor(c, ({ actor }) => {
+    const board = office.dispatch.board(actor, z.object({ departmentId: z.string().max(64).optional(), assignee: z.string().max(64).optional(), resolver: z.string().max(65).optional() }).parse(c.req.query()));
+    return c.json({ ...board, alerts: office.alerts.current(Date.now(), board.scope.departmentId) });
+  }));
   app.get('/v1/settings/dispatch', c => managerOnly(c, () => c.json({ mode: office.dispatch.mode() })));
   app.put('/v1/settings/dispatch', c => managerOnly(c, async () => c.json({ mode: office.dispatch.setMode(z.object({ mode: z.enum(['off', 'suggest', 'on']) }).strict().parse(await c.req.json()).mode) })));
 
@@ -197,7 +200,10 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
   app.patch('/v1/blockers/:id', c => withActor(c, async ({ actor }) => c.json(office.blockers.update(actor, c.req.param('id'), z.object(BlockerFields).partial().strict().parse(await c.req.json())))));
   app.post('/v1/blockers/:id/link', c => withActor(c, async ({ actor }) => c.json(office.blockers.link(actor, c.req.param('id'), z.object({ taskIds: z.array(z.string().min(1).max(80)).min(1).max(50) }).strict().parse(await c.req.json()).taskIds))));
   app.post('/v1/blockers/:id/unlink', c => withActor(c, async ({ actor }) => c.json(office.blockers.unlink(actor, c.req.param('id'), z.object({ taskId: z.string().min(1).max(80) }).strict().parse(await c.req.json()).taskId))));
-  app.post('/v1/blockers/:id/resolve', c => withActor(c, async ({ actor }) => c.json(office.blockers.resolve(actor, c.req.param('id'), z.object({ resolution: z.string().max(1000) }).strict().parse(await c.req.json()).resolution))));
+  app.post('/v1/blockers/:id/resolve', c => withActor(c, async ({ actor }) => {
+    const input = z.object({ resolution: z.string().max(1000), validUntil: z.number().int().positive().nullable().optional() }).strict().parse(await c.req.json());
+    return c.json(office.blockers.resolve(actor, c.req.param('id'), input.resolution, input.validUntil ?? null));
+  }));
   app.post('/v1/blockers/:id/reopen', c => withActor(c, async ({ actor }) => c.json(office.blockers.reopen(actor, c.req.param('id'), z.object({ reason: z.string().max(1000) }).strict().parse(await c.req.json()).reason))));
   app.post('/v1/tasks/:id/thread', c => withActor(c, ({ actor }) => c.json(office.tasks.thread(actor, c.req.param('id')))));
   app.patch('/v1/tasks/:id', c => withActor(c, async ({ actor }) => {
