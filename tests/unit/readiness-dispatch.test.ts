@@ -1,0 +1,180 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createOffice } from '../../src/server/collaboration/office.js';
+import { createSeededOffice, insertAgent, type Fixture } from '../helpers/office-fixture.js';
+
+const seat = (seatId: string) => ({ kind: 'seat' as const, seatId });
+const manager = { kind: 'manager' as const };
+const REQ = 'Goal, inputs, expected output and acceptance criteria.';
+const seatAll = (fixture: Fixture, seatIds: string[]): void => { for (const seatId of seatIds) fixture.office.org.assignAgent(seatId, insertAgent(fixture.db, `agent-${seatId}`)); };
+const exec = (fixture: Fixture, title: string, assigneeSeatId: string, extra: { dependsOn?: string[]; passRequired?: string[]; estimateMinutes?: number } = {}) =>
+  fixture.office.tasks.create(seat('dev-lead'), { title, body: REQ, assigneeSeatId, kind: 'execution', estimateMinutes: 60, ...extra });
+const readyLines = (fixture: Fixture, taskId: string): number => fixture.office.messages.list(manager, 'dev', { limit: 200 }).filter(message => message.body.includes(`ready to start: ${taskId} `)).length;
+const finish = (fixture: Fixture, taskId: string, result?: 'pass' | 'fail' | 'inconclusive'): void => {
+  const { tasks } = fixture.office; const owner = tasks.get(taskId).assigneeSeatId!;
+  tasks.update(seat(owner), taskId, { status: 'doing' });
+  tasks.update(seat(owner), taskId, { status: 'done', note: 'delivered', ...(result ? { result } : {}) });
+};
+const dispatched = (): Fixture => { const fixture = createSeededOffice(); seatAll(fixture, ['dev-lead', 'dev-be', 'dev-fe', 'dev-unity']); fixture.office.dispatch.setMode('on'); return fixture; };
+
+test('DONE is not PASS: a test task done with FAIL does not open the step that needs PASS', () => {
+  const fixture = dispatched(); const { dispatch } = fixture.office;
+  const probe = exec(fixture, 'Probe 503', 'dev-be');
+  const gate = exec(fixture, 'Gate 487', 'dev-fe', { dependsOn: [probe.id], passRequired: [probe.id] });
+  finish(fixture, probe.id, 'fail');
+  const readiness = dispatch.readiness(gate.id);
+  assert.equal(readiness.state, 'waiting'); assert.match(readiness.reasons[0]!.text, /result fail; this task needs pass/);
+  assert.equal(readyLines(fixture, gate.id), 0);
+  assert.throws(() => dispatch.start(seat('dev-fe'), gate.id, {}, 'mcp'), /not_ready/);
+  const unknown = exec(fixture, 'Gate unknown', 'dev-unity', { dependsOn: [probe.id], passRequired: [probe.id] });
+  fixture.office.tasks.update(seat('dev-lead'), probe.id, { result: 'unknown' });
+  assert.equal(dispatch.readiness(unknown.id).state, 'needs-action', 'a missing result needs confirmation, not a guess');
+  fixture.office.tasks.update(seat('dev-be'), probe.id, { result: 'pass' });
+  assert.equal(dispatch.readiness(gate.id).state, 'ready');
+  fixture.close();
+});
+
+test('a dependency that only needs completed is met by DONE whatever the result', () => {
+  const fixture = dispatched(); const { dispatch } = fixture.office;
+  const a = exec(fixture, 'A', 'dev-be'); const b = exec(fixture, 'B', 'dev-fe', { dependsOn: [a.id] });
+  finish(fixture, a.id, 'fail');
+  assert.equal(dispatch.readiness(b.id).state, 'ready');
+  assert.equal(readyLines(fixture, b.id), 1);
+  fixture.close();
+});
+
+test('dependencies met but an open permission, input or window blocker: not ready, START refused; resolving it offers once', () => {
+  const fixture = dispatched(); const { dispatch, blockers, tasks } = fixture.office;
+  const task = exec(fixture, 'Deploy check', 'dev-be');
+  assert.equal(readyLines(fixture, task.id), 1);
+  const blocker = blockers.open(seat('dev-lead'), { kind: 'permission', description: 'Staging write access not granted', taskIds: [task.id], resolverSeatId: 'ops-lead', nextStep: 'ops-lead grants staging write, link the decision' });
+  assert.equal(dispatch.readiness(task.id).state, 'needs-action');
+  assert.throws(() => dispatch.start(seat('dev-be'), task.id, { generation: 1 }, 'mcp'), /readiness_changed|not_ready/);
+  assert.throws(() => tasks.update(seat('dev-be'), task.id, { status: 'doing' }), /not_ready/);
+  blockers.resolve(manager, blocker.id, 'grant #pm204 for staging until Friday');
+  const readiness = dispatch.readiness(task.id);
+  assert.equal(readiness.state, 'ready'); assert.equal(readiness.generation, 2);
+  assert.equal(readyLines(fixture, task.id), 2, 'one offer per generation');
+  fixture.close();
+});
+
+test('ready and owner free: exactly one notice, the task stays todo until START; START claims once', () => {
+  const fixture = dispatched(); const { dispatch, tasks, wake } = fixture.office;
+  const task = exec(fixture, 'Login API', 'dev-be');
+  assert.equal(readyLines(fixture, task.id), 1); assert.equal(tasks.get(task.id).status, 'todo');
+  assert.equal(wake.check('dev-be').wake, true);
+  dispatch.refresh(); dispatch.refresh();
+  assert.equal(readyLines(fixture, task.id), 1);
+  const started = dispatch.start(seat('dev-be'), task.id, { generation: 1 }, 'mcp');
+  assert.equal(started.status, 'doing'); assert.ok(started.actualStart);
+  assert.throws(() => dispatch.start(seat('dev-be'), task.id, { generation: 1 }, 'mcp'), /already_started/);
+  assert.throws(() => dispatch.start(seat('dev-fe'), task.id, {}, 'mcp'), /start_by_assignee_only|already_started/);
+  fixture.close();
+});
+
+test('a busy owner gets the next ready task queued, offered when free; never two executions at once', () => {
+  const fixture = dispatched(); const { dispatch, tasks } = fixture.office;
+  const first = exec(fixture, 'First', 'dev-be'); dispatch.start(seat('dev-be'), first.id, {}, 'mcp');
+  const second = exec(fixture, 'Second', 'dev-be'); const third = exec(fixture, 'Third', 'dev-be');
+  assert.equal(dispatch.readiness(second.id).queued, true);
+  assert.equal(readyLines(fixture, second.id), 0);
+  assert.throws(() => dispatch.start(seat('dev-be'), second.id, {}, 'mcp'), /owner_busy/);
+  tasks.update(seat('dev-be'), first.id, { status: 'done', note: 'shipped' });
+  assert.equal(readyLines(fixture, second.id), 1, 'oldest ready offered first'); assert.equal(readyLines(fixture, third.id), 0);
+  assert.equal(dispatch.readiness(third.id).queued, true);
+  dispatch.start(seat('dev-be'), second.id, {}, 'mcp');
+  assert.equal(tasks.list(manager, { status: 'doing', assignee: 'dev-be' }).length, 1);
+  fixture.close();
+});
+
+test('restart and replay: readiness is reconciled from the database without duplicate notices or lost offers', () => {
+  const fixture = dispatched();
+  const task = exec(fixture, 'Survives restart', 'dev-be');
+  const before = fixture.db.raw.prepare('SELECT COUNT(*) AS count FROM messages').get() as { count: number };
+  const restarted = createOffice(fixture.db, { maxAutoWakes: 15, emit: () => undefined, afterTask: 'off' });
+  restarted.dispatch.refresh();
+  assert.equal((fixture.db.raw.prepare('SELECT COUNT(*) AS count FROM messages').get() as { count: number }).count, before.count);
+  assert.equal(readyLines(fixture, task.id), 1);
+  // An offer missed while dispatch was off is sent once on reconcile.
+  restarted.dispatch.setMode('off');
+  const missed = restarted.tasks.create(seat('dev-lead'), { title: 'While off', body: REQ, assigneeSeatId: 'dev-fe', kind: 'execution', estimateMinutes: 30 });
+  assert.equal(readyLines(fixture, missed.id), 0);
+  restarted.dispatch.setMode('on'); restarted.dispatch.refresh();
+  assert.equal(readyLines(fixture, missed.id), 1);
+  restarted.close(); fixture.close();
+});
+
+test('a dependency reopened or a grant revoked before START cancels readiness; the old offer is refused with the reason', () => {
+  const fixture = dispatched(); const { dispatch, tasks, blockers } = fixture.office;
+  const a = exec(fixture, 'A', 'dev-unity'); finish(fixture, a.id);
+  const b = exec(fixture, 'B', 'dev-be', { dependsOn: [a.id] });
+  const offered = dispatch.readiness(b.id).generation;
+  tasks.update(seat('dev-lead'), a.id, { status: 'todo', note: 'reopened: regression' });
+  assert.equal(dispatch.readiness(b.id).state, 'waiting');
+  assert.throws(() => dispatch.start(seat('dev-be'), b.id, { generation: offered }, 'mcp'), /readiness_changed/);
+  const grant = blockers.open(manager, { kind: 'environment', description: 'Test window closed', taskIds: [b.id], resolverRole: 'manager', nextStep: 'open the window' });
+  blockers.resolve(manager, grant.id, 'window open 14:00-16:00');
+  finish(fixture, a.id);
+  const regained = dispatch.readiness(b.id);
+  assert.equal(regained.state, 'ready'); assert.ok(regained.generation > offered, 'ready again is a new generation');
+  blockers.reopen(manager, grant.id, 'window revoked early');
+  assert.throws(() => dispatch.start(seat('dev-be'), b.id, { generation: regained.generation }, 'mcp'), /readiness_changed/);
+  fixture.close();
+});
+
+test('a task in progress whose grant is revoked only warns its owner and leader; nothing is changed', () => {
+  const fixture = dispatched(); const { dispatch, tasks, blockers, messages } = fixture.office;
+  const task = exec(fixture, 'Running', 'dev-be');
+  const grant = blockers.open(manager, { kind: 'permission', description: 'Prod read grant', taskIds: [task.id], resolverRole: 'manager', nextStep: 'grant' });
+  blockers.resolve(manager, grant.id, 'standing grant G-7');
+  dispatch.start(seat('dev-be'), task.id, {}, 'mcp');
+  blockers.reopen(manager, grant.id, 'grant G-7 revoked');
+  dispatch.refresh();
+  const warnings = messages.list(manager, 'dev', { limit: 200 }).filter(message => message.body.startsWith(`⚠ ${task.id}`));
+  assert.equal(warnings.length, 1); assert.deepEqual([...warnings[0]!.mentions].sort(), ['dev-be', 'dev-lead']);
+  assert.equal(tasks.get(task.id).status, 'doing');
+  fixture.close();
+});
+
+test('board: 3 tasks sharing 2 blockers count 3 tasks and 2 blockers; waiting is apart from needs-action; tracking apart', () => {
+  const fixture = dispatched(); const { dispatch, blockers, tasks } = fixture.office;
+  const [x, y, z] = [exec(fixture, 'X', 'dev-be'), exec(fixture, 'Y', 'dev-fe'), exec(fixture, 'Z', 'dev-unity')];
+  const hud = blockers.open(seat('dev-lead'), { kind: 'defect', description: 'HUD crashes on load', taskIds: [x.id, y.id, z.id], resolverSeatId: 'dev-unity', nextStep: 'fix crash, attach repro run' });
+  blockers.open(seat('dev-lead'), { kind: 'missing-input', description: 'Map tiles not delivered', taskIds: [y.id, z.id], resolverSeatId: 'design-map', nextStep: 'deliver tiles to assets/map' });
+  const dep = exec(fixture, 'Upstream', 'dev-lead'); const waiter = exec(fixture, 'Waiter', 'dev-be', { dependsOn: [dep.id] });
+  tasks.create(seat('dev-lead'), { title: 'HUD umbrella', body: REQ, assigneeSeatId: 'dev-lead', kind: 'tracking', estimateMinutes: 4800 });
+  const board = dispatch.board(manager, { departmentId: 'dev' });
+  assert.equal(board.totals.needsActionTasks, 3); assert.equal(board.totals.blockers, 2);
+  assert.deepEqual(board.needsAction.find(group => group.id === hud.id)!.taskIds.sort(), [x.id, y.id, z.id].sort());
+  assert.equal(board.needsAction.find(group => group.id === hud.id)!.resolver, '@dev-unity');
+  assert.deepEqual(board.waiting.map(group => group.id), [`dep:${dep.id}`]); assert.deepEqual(board.waiting[0]!.taskIds, [waiter.id]);
+  assert.equal(board.tracking.length, 1); assert.ok(!board.ready.includes(board.tracking[0]!));
+  assert.equal(board.tasks[board.tracking[0]!]!.estimateMinutes, 4800);
+  assert.deepEqual(dispatch.board(manager, { resolver: 'design-map' }).needsAction.map(group => group.title), ['Map tiles not delivered']);
+  assert.throws(() => dispatch.board(seat('ba-docs'), { departmentId: 'dev' }), /forbidden_task_read/);
+  fixture.close();
+});
+
+test('legacy BLOCKED tasks without metadata show as unresolved and are never auto-run or closed', () => {
+  const fixture = dispatched(); const { dispatch, tasks } = fixture.office;
+  const legacy = tasks.create(seat('dev-lead'), { title: 'Old blocked', body: REQ, assigneeSeatId: 'dev-be' });
+  tasks.update(seat('dev-be'), legacy.id, { status: 'blocked', note: 'waiting on someone' });
+  const board = dispatch.board(manager, { departmentId: 'dev' });
+  const groups = board.needsAction.filter(group => group.taskIds.includes(legacy.id)).map(group => group.id).sort();
+  assert.deepEqual(groups, ['blocked-without-record', 'estimate', 'unclassified']);
+  assert.equal(readyLines(fixture, legacy.id), 0); assert.equal(tasks.get(legacy.id).status, 'blocked');
+  assert.throws(() => dispatch.start(seat('dev-be'), legacy.id, {}, 'mcp'), /start_needs_execution_task/);
+  fixture.close();
+});
+
+test('blockers: only people who may change the tasks open them; resolving needs evidence; members cannot resolve others', () => {
+  const fixture = dispatched(); const { blockers } = fixture.office;
+  const task = exec(fixture, 'T', 'dev-be');
+  assert.throws(() => blockers.open(seat('ba-docs'), { kind: 'decision', description: 'Pick a stack', taskIds: [task.id] }), /forbidden_task_change/);
+  const blocker = blockers.open(seat('dev-be'), { kind: 'decision', description: 'Pick a stack', taskIds: [task.id], resolverSeatId: 'ba-lead', nextStep: 'ba-lead decides' });
+  assert.throws(() => blockers.resolve(seat('dev-be'), blocker.id, 'decided myself'), /forbidden_blocker/);
+  assert.throws(() => blockers.resolve(seat('ba-lead'), blocker.id, 'ok'), /resolution_required/);
+  assert.equal(blockers.resolve(seat('ba-lead'), blocker.id, 'decision in #leaders 4225: use Hono').status, 'resolved');
+  assert.equal(blockers.get(blocker.id).resolvedBy, 'ba-lead');
+  fixture.close();
+});

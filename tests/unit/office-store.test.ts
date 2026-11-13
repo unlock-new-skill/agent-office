@@ -8,8 +8,8 @@ import type { AgentSnapshot, ChatMessage, OrgView, Task } from '../../src/shared
 const org: OrgView = {
   departments: [{ id: 'dev', name: 'Dev', color: '#22c55e', sort: 0, paused: false, deputySeatId: null }],
   seats: [
-    { id: 'dev-lead', departmentId: 'dev', title: 'Dev Lead', description: '', role: 'leader', sort: 0, agentId: 'cc-1', consecutiveWakes: 0, wakeState: 'listening', workMs: 0, afterTask: null },
-    { id: 'dev-be', departmentId: 'dev', title: 'Dev BE', description: '', role: 'member', sort: 1, agentId: null, consecutiveWakes: 0, wakeState: 'idle', workMs: 0, afterTask: null },
+    { id: 'dev-lead', departmentId: 'dev', title: 'Dev Lead', description: '', role: 'leader', sort: 0, agentId: 'cc-1', consecutiveWakes: 0, wakeState: 'listening', workMs: 0, afterTask: null, coordinator: false },
+    { id: 'dev-be', departmentId: 'dev', title: 'Dev BE', description: '', role: 'member', sort: 1, agentId: null, consecutiveWakes: 0, wakeState: 'idle', workMs: 0, afterTask: null, coordinator: false },
   ],
   channels: [{ id: 'dev', name: 'dev', kind: 'department', departmentId: 'dev', memberSeatIds: ['dev-lead', 'dev-be'], lastSeq: 2 }],
 };
@@ -40,7 +40,7 @@ test('org events replace org; snapshot loads org and agents; reset clears histor
 });
 
 test('task events upsert tasks by id', () => {
-  const task: Task = { id: 't-dev-1', departmentId: 'dev', number: 1, assigneeSeatId: 'dev-be', requesterSeatId: null, createdByKind: 'manager', createdById: 'manager', title: 'A', body: '', status: 'todo', createdAt: 1, updatedAt: 1, estimateMinutes: null, dependsOn: [], parentId: null, step: null, threadSeq: null };
+  const task: Task = { id: 't-dev-1', departmentId: 'dev', number: 1, assigneeSeatId: 'dev-be', requesterSeatId: null, createdByKind: 'manager', createdById: 'manager', title: 'A', body: '', status: 'todo', createdAt: 1, updatedAt: 1, estimateMinutes: null, dependsOn: [], parentId: null, step: null, threadSeq: null, revision: 0, kind: null, passRequired: [], result: 'unknown', resultBy: null, resultAt: null, actualStart: null };
   let state = officeReducer(initialOfficeState, { type: 'tasks', tasks: [task] });
   state = officeReducer(state, { type: 'collab', event: { type: 'collab', kind: 'task', task: { ...task, status: 'done' } } });
   assert.equal(Object.keys(state.tasks).length, 1); assert.equal(state.tasks['t-dev-1']?.status, 'done');

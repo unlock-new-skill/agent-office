@@ -1,13 +1,16 @@
 import type { Database } from '../db/database.js';
 import type { AfterTask, Channel, CollabEvent, Department, OfficeConfig, OrgView, Seat, SeatRole } from '../../shared/contracts.js';
-import { conflict, invalid, notFound, slugify } from './office-error.js';
+import { conflict, forbidden, invalid, notFound, slugify } from './office-error.js';
 
 export const LEADERS_CHANNEL_ID = 'leaders';
 export const OUTPUTS_CHANNEL_ID = 'outputs';
-type SeatRow = Omit<Seat, 'wakeState'>;
-const SEAT_COLUMNS = 'id,department_id AS departmentId,title,description,role,sort,agent_id AS agentId,consecutive_wakes AS consecutiveWakes,work_ms AS workMs,after_task AS afterTask';
+type SeatRow = Omit<Seat, 'wakeState' | 'coordinator'> & { coordinator: number };
+const SEAT_COLUMNS = 'id,department_id AS departmentId,title,description,role,sort,agent_id AS agentId,consecutive_wakes AS consecutiveWakes,work_ms AS workMs,after_task AS afterTask,coordinator';
 
-/** Departments, seats and channel membership. Membership is always derived: department channel = its seats, leaders channel = all leader seats. */
+/**
+ * Departments, seats and channel membership. Membership is always derived: department channel = its seats plus the
+ * leaders and coordinators that joined it (channel_visitors), leaders channel = all leader, deputy and coordinator seats.
+ */
 /**
  * A session counts as running while it has not ended and reached the daemon recently: live sessions always do, since
  * their Stop-hook listener asks for work at least once a minute. A crashed or abandoned terminal stops holding its seat.
@@ -22,12 +25,15 @@ export class OrgService {
   /** Invoked after structural changes (not after publish-only refreshes) so parked waiters can re-evaluate. */
   onMutated: () => void = () => undefined;
 
-  constructor(private readonly db: Database, private readonly emit: (event: CollabEvent) => void, private readonly maxAutoWakes: number) {
+  /** envCoordinatorSeatId: seat that is coordinator from AGENT_OFFICE_COORDINATOR_SEAT, on top of the seats flagged in the database. */
+  constructor(private readonly db: Database, private readonly emit: (event: CollabEvent) => void, private readonly maxAutoWakes: number, private readonly envCoordinatorSeatId: string | null = null) {
     this.db.raw.prepare("INSERT OR IGNORE INTO channels(id,name,kind,department_id) VALUES (?,?,'leaders',NULL)").run(LEADERS_CHANNEL_ID, LEADERS_CHANNEL_ID);
     if (!this.db.raw.prepare('SELECT 1 FROM channels WHERE id=?').get(OUTPUTS_CHANNEL_ID)) {
       this.db.raw.prepare("INSERT OR IGNORE INTO channels(id,name,kind,department_id) VALUES (?,?,'outputs',NULL)").run(OUTPUTS_CHANNEL_ID, OUTPUTS_CHANNEL_ID);
       this.db.raw.prepare('INSERT OR IGNORE INTO channel_members(channel_id,seat_id) SELECT ?,id FROM seats').run(OUTPUTS_CHANNEL_ID);
     }
+    // Membership derives from config too (the env coordinator joins #leaders), so rebuild it once at start.
+    this.db.transaction(() => this.syncMembership());
   }
 
   view(): OrgView {
@@ -75,7 +81,7 @@ export class OrgService {
   seed(config: OfficeConfig): void {
     this.mutate(() => config.departments.forEach((department, index) => {
       this.insertDepartment(department.id, department.name, department.color, index);
-      department.seats.forEach((seat, seatIndex) => this.insertSeat(department.id, seat.id, seat.title, seat.description, seat.role, seatIndex));
+      department.seats.forEach((seat, seatIndex) => this.insertSeat(department.id, seat.id, seat.title, seat.description, seat.role, seatIndex, seat.coordinator ?? false));
     }));
   }
 
@@ -107,18 +113,19 @@ export class OrgService {
     this.mutate(() => this.db.raw.prepare('DELETE FROM departments WHERE id=?').run(id));
   }
 
-  createSeat(departmentId: string, input: { id?: string | undefined; title: string; description: string; role: SeatRole }): Seat {
+  createSeat(departmentId: string, input: { id?: string | undefined; title: string; description: string; role: SeatRole; coordinator?: boolean | undefined }): Seat {
     this.department(departmentId);
     const id = input.id ?? this.uniqueId('seats', slugify(input.title));
     const sort = (this.db.raw.prepare('SELECT COALESCE(MAX(sort),-1)+1 AS next FROM seats WHERE department_id=?').get(departmentId) as { next: number }).next;
-    this.mutate(() => this.insertSeat(departmentId, id, input.title, input.description, input.role, sort));
+    this.mutate(() => this.insertSeat(departmentId, id, input.title, input.description, input.role, sort, input.coordinator ?? false));
     return this.seat(id);
   }
 
-  updateSeat(id: string, patch: { title?: string | undefined; description?: string | undefined; role?: SeatRole | undefined }): Seat {
+  updateSeat(id: string, patch: { title?: string | undefined; description?: string | undefined; role?: SeatRole | undefined; coordinator?: boolean | undefined }): Seat {
     const current = this.seat(id);
     if (patch.role === 'leader' && current.role !== 'leader') this.assertNoLeader(current.departmentId);
-    this.mutate(() => this.db.raw.prepare('UPDATE seats SET title=?,description=?,role=? WHERE id=?').run(patch.title ?? current.title, patch.description ?? current.description, patch.role ?? current.role, id));
+    const flagged = patch.coordinator ?? this.flaggedCoordinator(id);
+    this.mutate(() => this.db.raw.prepare('UPDATE seats SET title=?,description=?,role=?,coordinator=? WHERE id=?').run(patch.title ?? current.title, patch.description ?? current.description, patch.role ?? current.role, flagged ? 1 : 0, id));
     return this.seat(id);
   }
 
@@ -126,6 +133,33 @@ export class OrgService {
     this.seat(id);
     this.mutate(() => this.db.raw.prepare('UPDATE seats SET after_task=? WHERE id=?').run(mode, id));
     return this.seat(id);
+  }
+
+  /** Seats that may join another department's channel to talk with its members directly: leaders and coordinators. */
+  canVisit(seat: Seat): boolean { return seat.role === 'leader' || seat.coordinator; }
+
+  /**
+   * A leader or coordinator joins another department's channel: it reads and posts there and can mention its members
+   * (and be mentioned). @all of that channel still reaches only the department's own seats. Joining the own channel is a no-op.
+   */
+  joinChannel(seatId: string, channelId: string): Channel {
+    const seat = this.seat(seatId); const channel = this.channel(channelId);
+    if (channel.kind !== 'department') throw invalid('only_department_channels_can_be_joined');
+    if (!this.canVisit(seat)) throw forbidden('join_channel_leaders_only');
+    if (channel.departmentId !== seat.departmentId) this.mutate(() => this.db.raw.prepare('INSERT OR IGNORE INTO channel_visitors(channel_id,seat_id,joined_at) VALUES (?,?,?)').run(channelId, seatId, Date.now()));
+    return this.channel(channelId);
+  }
+
+  leaveChannel(seatId: string, channelId: string): void {
+    const seat = this.seat(seatId); this.channel(channelId);
+    if (this.db.raw.prepare('SELECT 1 FROM channel_visitors WHERE channel_id=? AND seat_id=?').get(channelId, seat.id)) this.mutate(() => this.db.raw.prepare('DELETE FROM channel_visitors WHERE channel_id=? AND seat_id=?').run(channelId, seatId));
+  }
+
+  /** A seat of the channel's own department (not a visiting leader). */
+  isHomeMember(channelId: string, seatId: string): boolean {
+    const channel = this.db.raw.prepare('SELECT kind,department_id AS departmentId FROM channels WHERE id=?').get(channelId) as { kind: string; departmentId: string | null } | undefined;
+    if (!channel || channel.kind !== 'department') return this.isMember(channelId, seatId);
+    return Boolean(this.db.raw.prepare('SELECT 1 FROM seats WHERE id=? AND department_id=?').get(seatId, channel.departmentId));
   }
 
   deleteSeat(id: string): void { this.seat(id); this.mutate(() => this.db.raw.prepare('DELETE FROM seats WHERE id=?').run(id)); }
@@ -201,16 +235,23 @@ export class OrgService {
       UPDATE departments SET deputy_seat_id=NULL WHERE deputy_seat_id IN (SELECT id FROM seats WHERE role='leader' OR department_id<>departments.id);
       INSERT OR IGNORE INTO channel_members(channel_id,seat_id) SELECT '${LEADERS_CHANNEL_ID}',deputy_seat_id FROM departments WHERE deputy_seat_id IS NOT NULL;
     `);
+    const env = this.envCoordinatorSeatId ?? '';
+    this.db.raw.prepare(`INSERT OR IGNORE INTO channel_members(channel_id,seat_id) SELECT '${LEADERS_CHANNEL_ID}',id FROM seats WHERE coordinator=1 OR id=?`).run(env);
+    // A visitor stays a member only while it may visit (a leader demoted to member loses the channels it joined).
+    this.db.raw.prepare(`INSERT OR IGNORE INTO channel_members(channel_id,seat_id) SELECT v.channel_id,v.seat_id FROM channel_visitors v
+      JOIN seats s ON s.id=v.seat_id JOIN channels c ON c.id=v.channel_id WHERE c.kind='department' AND (s.role='leader' OR s.coordinator=1 OR s.id=?)`).run(env);
   }
+
+  private flaggedCoordinator(id: string): boolean { return (this.db.raw.prepare('SELECT coordinator FROM seats WHERE id=?').get(id) as { coordinator: number } | undefined)?.coordinator === 1; }
 
   private insertDepartment(id: string, name: string, color: string, sort: number): void {
     this.db.raw.prepare('INSERT INTO departments(id,name,color,sort) VALUES (?,?,?,?)').run(id, name, color, sort);
     this.db.raw.prepare("INSERT INTO channels(id,name,kind,department_id) VALUES (?,?,'department',?)").run(id, id, id);
   }
 
-  private insertSeat(departmentId: string, id: string, title: string, description: string, role: SeatRole, sort: number): void {
+  private insertSeat(departmentId: string, id: string, title: string, description: string, role: SeatRole, sort: number, coordinator: boolean): void {
     if (role === 'leader') this.assertNoLeader(departmentId);
-    this.db.raw.prepare('INSERT INTO seats(id,department_id,title,description,role,sort) VALUES (?,?,?,?,?,?)').run(id, departmentId, title, description, role, sort);
+    this.db.raw.prepare('INSERT INTO seats(id,department_id,title,description,role,sort,coordinator) VALUES (?,?,?,?,?,?,?)').run(id, departmentId, title, description, role, sort, coordinator ? 1 : 0);
   }
 
   private assertNoLeader(departmentId: string): void {
@@ -225,6 +266,6 @@ export class OrgService {
 
   private toSeat(row: SeatRow): Seat {
     const wakeState = row.consecutiveWakes >= this.maxAutoWakes ? 'wake_limited' : this.listening.has(row.id) ? 'listening' : 'idle';
-    return { ...row, wakeState };
+    return { ...row, wakeState, coordinator: row.coordinator === 1 || row.id === this.envCoordinatorSeatId };
   }
 }

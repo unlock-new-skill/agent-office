@@ -159,8 +159,8 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .task-step-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .task-step-head select { width: auto; padding: 1px 4px; font-size: 11px; }
 .step-form { margin-top: 4px; }
-.task-form .check { display: flex; align-items: center; gap: 6px; flex-direction: row; }
-.task-form .check input { width: auto; }
+.task-form .check, .seat-form .check { display: flex; align-items: center; gap: 6px; flex-direction: row; }
+.task-form .check input, .seat-form .check input { width: auto; }
 .task-body { font-size: 12px; color: var(--text-mute); white-space: pre-wrap; }
 
 /* Org */
@@ -472,3 +472,16 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .switch.on { border-color: var(--ok); color: var(--ok); }
 .switch.on .switch-knob { background: var(--ok); }
 .switch:disabled { opacity: .55; cursor: default; }
+
+/* Board by blocker */
+.segmented { display: inline-flex; gap: 4px; }
+.blocker-board { display: grid; gap: 12px; }
+.blocker-scope { font-size: 12px; margin: 0; }
+.blocker-section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-mute); margin: 0 0 6px; }
+.blocker-group { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 6px; }
+.blocker-group summary { cursor: pointer; overflow-wrap: anywhere; }
+.blocker-group dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 10px; font-size: 12px; margin: 8px 0; }
+.blocker-group dt { color: var(--text-mute); }
+.blocker-tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 12px; overflow-wrap: anywhere; }
+.blocker-tasks .pill { margin-left: 6px; }
+.pill.result-pass { color: var(--ok); } .pill.result-fail { color: var(--warn); } .pill.result-inconclusive { color: var(--warn); }

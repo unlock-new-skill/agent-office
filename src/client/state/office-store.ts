@@ -82,6 +82,8 @@ export const officeReducer = (state: OfficeState, action: OfficeAction): OfficeS
       if (event.kind === 'runners') return { ...state, runners: event.runners };
       if (event.kind === 'runner-log') return { ...state, runnerLogs: { ...state.runnerLogs, [event.seatId]: [...state.runnerLogs[event.seatId] ?? [], ...event.entries].slice(-LOG_RING) } };
       if (event.kind === 'runner-command') return { ...state, runnerCommands: { ...state.runnerCommands, [event.command.seatId]: upsertCommand(state.runnerCommands[event.command.seatId] ?? [], event.command) } };
+      // Blocker changes also re-send the affected tasks; the board refetches on those.
+      if (event.kind === 'blocker') return state;
       const { message } = event;
       const org = state.org && { ...state.org, channels: state.org.channels.map(channel => channel.id === message.channelId ? { ...channel, lastSeq: Math.max(channel.lastSeq, message.seq) } : channel) };
       if (message.threadSeq) {

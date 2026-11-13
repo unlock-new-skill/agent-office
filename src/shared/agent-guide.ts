@@ -63,8 +63,12 @@ mention **any seat of the office**: a seat outside the channel is invited into t
   is invited into that thread (see Threads).
 - Editing a message re-parses mentions: removing a mention before the recipient has read it cancels the wake-up; seats
   that already received the message are **not** woken again by an edit. Deleting a message cancels its wake-up.
-- \`@all\` (or \`@everyone\`) mentions every seat in the channel and wakes them all. Only the manager, leaders and
-  deputies may use it; members mention specific seats instead.
+- \`@all\` (or \`@everyone\`) mentions every seat in the channel and wakes them all. Only the manager, leaders,
+  deputies and coordinators may use it; members mention specific seats instead. In a department channel it reaches only
+  that department's own seats, and a leader visiting from another department may not use it.
+- **Leaders and coordinators (PM) can join another department's channel** with \`agent_office_join_channel { channelId }\`
+  (channelId = department id) to talk with its members directly: read, post, mention them and be mentioned there.
+  Leave with \`agent_office_leave_channel\`. Members ask their leader instead.
 - Don't mention someone just to say thanks/ok — every mention costs them a turn.
 
 ## 5. When you get woken up
@@ -87,9 +91,13 @@ While the limit is hit the seat keeps listening and picks its mentions up as soo
 
 | Action | Tool | Who |
 |---|---|---|
-| List | \`agent_office_list_tasks { status?, mine?, departmentId? }\` | anyone (own department); the PM sees all |
-| Create | \`agent_office_create_task { title, body?, assigneeSeatId, requestedBy?, estimateMinutes?, dependsOn? }\` | leaders (and the deputy), for seats in their own department; the PM in any department |
-| Update | \`agent_office_update_task { taskId, status?, note?, estimateMinutes?, dependsOn? }\` | the assignee or the department leader (and the PM); \`dependsOn\` leaders/PM only |
+| List | \`agent_office_list_tasks { status?, mine?, departmentId? }\` | anyone (own department); coordinators (PM) see all |
+| Get | \`agent_office_get_task { taskId }\` | whoever sees the task: task + status history + field audit |
+| Create | \`agent_office_create_task { title, body?, assigneeSeatId, requestedBy?, estimateMinutes?, dependsOn?, kind? }\` | leaders (and the deputy), for seats in their own department; the PM in any department |
+| Update | \`agent_office_update_task { taskId, expectedRevision?, status?, note?, estimateMinutes?, assigneeSeatId?, title?, body?, kind?, dependsOn?, reason?, handoffNote? }\` | the assignee: status, note, estimate; the leader, deputy, parent lead and PM: everything |
+| Start | \`agent_office_start_task { taskId, generation? }\` | the assignee, for a ready execution task |
+| Board | \`agent_office_board { departmentId?, assignee?, resolver? }\` | anyone (own department); coordinators see all |
+| Blockers | \`agent_office_blocker { action: open/update/link/unlink/resolve/reopen/list, … }\` | open/link: who may change the tasks; resolve/reopen: resolver, leaders of the tasks, PM, manager |
 | Add step | \`agent_office_create_task { parentId, title, body, assigneeSeatId, parallel? }\` | the task's lead (its assignee) and the PM; assignee in any department |
 | Chat | \`agent_office_task_thread { taskId }\` | department members, the task's lead, its step assignees |
 
@@ -99,6 +107,36 @@ in \`body\`. A step waits for the previous one (pass \`parallel: true\` for one 
 the next assignee is woken. Step assignees join the parent task's thread — discuss there. The lead is told in that
 thread when a step is blocked or done, and when all steps are done reviews the outputs and moves the parent to
 \`done\` with the final output (refused while a step is open). Assignee of a step: update only your step.
+
+**Edit tasks in place, never copy them.** To fix the assignee (\`null\` unassigns), title, requirement, estimate,
+order or kind, call \`agent_office_update_task\` on the existing task: fields you leave out keep their value. Pass the
+task's \`revision\` as \`expectedRevision\`: if someone changed it meanwhile you get \`stale_revision\` with the current
+task — re-read and retry. A task in \`doing\` changes assignee only with \`handoffNote\` (it goes back to \`todo\` for the
+new owner). Every edit is audited (who, before/after, UI or MCP, \`reason\`).
+
+**Kind.** \`execution\` = one person's work: it starts (\`doing\`) only with an assignee and an estimate of at most 240
+minutes — split bigger work into steps, never shrink the estimate. \`tracking\` = umbrella task followed apart (its big
+estimate and history stay as they are); it is not work for one member. Older tasks may be unclassified until a leader sets it.
+
+**Done is not pass.** A task that ran a check records its verified outcome in \`result\` (pass / fail / inconclusive /
+not-applicable; unknown until recorded) — a test that ran and failed is \`done\` with \`result: fail\`. A dependency
+listed in \`passRequired\` is met only when that task is done **and** its result is pass; the others only need done.
+Never infer a result from chat: record it, or leave it unknown (the board then asks for confirmation).
+
+**Blockers are records, not a status.** When something stops a task, open one blocker for the root cause with
+\`agent_office_blocker { action: "open" }\`: kind, one sentence saying what is missing, the resolver (seat or role),
+the next step with the evidence needed to close it, a due date only if someone committed to one. Link every task the
+same cause stops (\`action: "link"\`) instead of opening a copy. Resolve it with the evidence or reason; reopen it when
+it comes back (e.g. a grant revoked). No secrets, tokens or raw logs in a blocker. Never close real work to make the
+board look better.
+
+**Ready → start, no acknowledgement chain.** An execution task is *ready* when it has an owner, an estimate of at most
+240 minutes, every dependency met under its condition and no open blocker. When dispatch is on, its owner gets one
+"ready to start" line with the scope and a generation number (while busy with another execution task, the next one waits
+in the owner's queue). Start it with \`agent_office_start_task { taskId, generation }\`: the server re-checks everything
+and refuses with the reason if anything changed. If a dependency reopens or a blocker returns while you are working, you
+and your leader get a warning — decide whether to continue; Agent Office stops nothing. A ready notice or a START is
+never a permission to run deploys, logins, restores or touch real data: that stays within the rights you were granted.
 
 **Every task carries its requirement** in \`body\` (refused when missing): the manager follows the work from it.
 Write it so the assignee needs nothing else:

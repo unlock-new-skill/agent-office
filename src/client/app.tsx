@@ -83,7 +83,7 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
         {route.view === 'map' && <MapView state={office.state} notify={notify} onDismiss={office.dismissAgent} onResetWakes={seatId => api.send('POST', `/v1/seats/${seatId}/reset-wakes`).then(() => undefined)} music={music} />}
         {route.view === 'org' && <OrgView state={office.state} api={api} notify={notify} onDismiss={office.dismissAgent} />}
         {route.view === 'machines' && <MachinesView state={office.state} api={api} notify={notify} />}
-        {route.view === 'requests' && <RequestsView state={office.state} />}
+        {route.view === 'requests' && <RequestsView state={office.state} api={api} notify={notify} />}
         {route.view === 'setup' && <SetupView state={office.state} api={api} notify={notify} />}
       </Suspense>
       <MusicDock music={music} />

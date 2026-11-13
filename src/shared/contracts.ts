@@ -48,7 +48,9 @@ export type Department = { id: string; name: string; color: string; sort: number
 /** workMs: total time this seat's sessions spent in turns (working), across sessions and machines. */
 export type Seat = { id: string; departmentId: string; title: string; description: string; role: SeatRole; sort: number; agentId: string | null; consecutiveWakes: number; wakeState: WakeState; workMs: number;
   /** After this member finishes a task: compact, clear (new session) or nothing; null = the office default. */
-  afterTask: AfterTask | null };
+  afterTask: AfterTask | null;
+  /** Coordinator (PM): leader rights over the tasks of every department; set by the manager (or AGENT_OFFICE_COORDINATOR_SEAT). */
+  coordinator: boolean };
 export type AfterTask = 'compact' | 'clear' | 'off';
 /** A saved YouTube track for the pantry speaker; id is the video id. */
 export type MusicTrack = { id: string; videoId: string; startSeconds: number; title: string; addedAt: number };
@@ -60,6 +62,39 @@ export type SenderKind = 'seat' | 'manager' | 'system';
 /** threadSeq: seq of the root this message replies to (null on top-level messages); replyCount/lastReplyAt describe a root's thread. */
 export type ChatMessage = { id: string; channelId: string; seq: number; senderKind: SenderKind; senderId: string; body: string; mentions: string[]; createdAt: number; editedAt?: number | null; deletedAt?: number | null; threadSeq?: number | null; replyCount?: number; lastReplyAt?: number | null };
 export type TaskStatus = 'todo' | 'doing' | 'blocked' | 'done';
+/** execution: one assignee's work, estimate <= 4h to start; tracking: umbrella followed apart, never dispatched. null = not classified (legacy). */
+export type TaskKind = 'execution' | 'tracking';
+export const MAX_EXECUTION_MINUTES = 240;
+/** Where a task change came from, kept in the task audit. */
+export type ChangeSource = 'ui' | 'mcp' | 'api';
+/** Verified outcome of a task, separate from done: DONE does not mean PASS. */
+export const TASK_RESULTS = ['not-applicable', 'pass', 'fail', 'inconclusive', 'unknown'] as const;
+export type TaskResult = typeof TASK_RESULTS[number];
+export const BLOCKER_KINDS = ['dependency', 'missing-input', 'permission', 'environment', 'defect', 'owner-missing', 'decision'] as const;
+export type BlockerKind = typeof BLOCKER_KINDS[number];
+/**
+ * One cause that stops work, shared by every task it affects. resolver: the seat (or a role, e.g. "manager") that
+ * removes it; nextStep: the action and the evidence needed to close it. Never put secrets, tokens or raw logs here.
+ */
+export type Blocker = { id: string; kind: BlockerKind; description: string; resolverSeatId: string | null; resolverRole: string | null; nextStep: string; dueAt: number | null;
+  originTaskId: string | null; refs: string[]; status: 'open' | 'resolved'; openedBy: string; openedAt: number; updatedAt: number;
+  resolvedBy: string | null; resolvedAt: number | null; resolution: string; taskIds: string[] };
+/**
+ * Computed, never stored as a status: ready = an execution task that may START now; waiting = only dependencies are
+ * missing; needs-action = someone must act (owner, estimate, blocker, a result to confirm, classification).
+ */
+export type ReadinessState = 'ready' | 'waiting' | 'needs-action' | 'doing' | 'done' | 'tracking';
+/** group: stable key that gathers every task stopped by the same root cause (blocker id, predecessor, missing owner…). */
+export type ReadinessReason = { code: string; group: string; text: string; action: 'needs-action' | 'waiting' };
+export type Readiness = { taskId: string; state: ReadinessState; reasons: ReadinessReason[]; generation: number; queued: boolean };
+export type DispatchMode = 'off' | 'suggest' | 'on';
+export type BoardGroup = { id: string; title: string; kind: string; resolver: string | null; nextStep: string; dueAt: number | null; blockerId: string | null; taskIds: string[] };
+/** Board of one scope at one moment: tasks are counted once by id even when they sit under several groups. */
+export type Board = { snapshotAt: number; scope: { departmentId: string | null; assignee: string | null; resolver: string | null }; dispatch: DispatchMode;
+  needsAction: BoardGroup[]; waiting: BoardGroup[]; ready: string[]; doing: string[]; done: string[]; tracking: string[];
+  tasks: Record<string, Task>; readiness: Record<string, Readiness>;
+  totals: { tasks: number; needsActionTasks: number; waitingTasks: number; readyTasks: number; blockers: number; groups: number } };
+export type TaskChange = { taskId: string; revision: number; actorKind: string; actorId: string; source: ChangeSource; field: string; before: unknown; after: unknown; reason: string; createdAt: number };
 export type SeatHandoff = { seatId: string; body: string; updatedAt: number; updatedBy: string };
 /** requesterSeatId: leader of another department this task was requested by; told when it is blocked or done. */
 export type Task = { id: string; departmentId: string; number: number; assigneeSeatId: string | null; requesterSeatId: string | null; createdByKind: 'seat' | 'manager'; createdById: string; title: string; body: string; status: TaskStatus; createdAt: number; updatedAt: number;
@@ -70,7 +105,13 @@ export type Task = { id: string; departmentId: string; number: number; assigneeS
   /** Step of this parent task (null for a top-level task); the parent's assignee leads and coordinates its steps. */
   parentId: string | null; step: number | null;
   /** Root seq of the task's discussion thread in its department channel (null until the first line is posted). */
-  threadSeq: number | null };
+  threadSeq: number | null;
+  /** Bumped on every change; send it back as expectedRevision so a stale edit conflicts instead of overwriting. */
+  revision: number; kind: TaskKind | null;
+  /** Dependencies (subset of dependsOn) that need the predecessor done AND its result pass; the others only need done. */
+  passRequired: string[]; result: TaskResult; resultBy: string | null; resultAt: number | null;
+  /** When the task first moved to doing. */
+  actualStart: number | null };
 /** Realtime collaboration notifications; state lives in SQLite, clients refetch over REST after reconnect. */
 export type PermissionStatus = 'pending' | 'allowed' | 'denied' | 'expired';
 export type PermissionBehavior = 'allow' | 'deny';
@@ -107,13 +148,14 @@ export type CollabEvent =
   | { type: 'collab'; kind: 'message'; message: ChatMessage }
   | { type: 'collab'; kind: 'org'; org: OrgView }
   | { type: 'collab'; kind: 'task'; task: Task }
+  | { type: 'collab'; kind: 'blocker'; blocker: Blocker }
   | { type: 'collab'; kind: 'permission'; pending: PermissionRequest[] }
   | { type: 'collab'; kind: 'runners'; runners: RunnerView[] }
   | { type: 'collab'; kind: 'runner-command'; command: RunnerCommand }
   | { type: 'collab'; kind: 'runner-log'; seatId: string; entries: RunnerLogEntry[] };
 
 const slug = z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]*$/, 'lowercase slug');
-export const SeatInputSchema = z.object({ id: slug.optional(), title: z.string().min(1).max(80), description: z.string().max(2000).default(''), role: z.enum(['leader', 'member']) }).strict();
+export const SeatInputSchema = z.object({ id: slug.optional(), title: z.string().min(1).max(80), description: z.string().max(2000).default(''), role: z.enum(['leader', 'member']), coordinator: z.boolean().optional() }).strict();
 export const DepartmentInputSchema = z.object({ id: slug.optional(), name: z.string().min(1).max(80), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#64748b') }).strict();
 export const OfficeConfigSchema = z.object({
   departments: z.array(DepartmentInputSchema.extend({ id: slug, seats: z.array(SeatInputSchema.extend({ id: slug })).default([]) })).min(1).max(50),

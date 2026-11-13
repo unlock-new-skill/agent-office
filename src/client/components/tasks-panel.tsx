@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
-import type { Channel, Seat, Task, TaskStatus } from '../../shared/contracts.js';
+import { MAX_EXECUTION_MINUTES, TASK_RESULTS, type Channel, type Seat, type Task, type TaskKind, type TaskResult, type TaskStatus } from '../../shared/contracts.js';
 import { errorText, type Api } from '../api/http.js';
 import type { OfficeState } from '../state/office-store.js';
 import { workLabel } from '../state/office-store.js';
@@ -29,6 +29,61 @@ function StepForm({ parent, seats, api, notify, onDone }: { parent: Task; seats:
   );
 }
 
+const ids = (text: string): string[] => text.split(/[\s,]+/).filter(Boolean);
+const sameIds = (a: string[], b: string[]): boolean => a.length === b.length && a.every((value, index) => value === b[index]);
+
+/**
+ * Edits the task in place (title, requirement, assignee, estimate, order, kind). Only changed fields are sent, with the
+ * revision the form was opened at: if someone changed the task meanwhile the server refuses and the card shows the new state.
+ */
+function EditForm({ task, seats, api, notify, onDone }: { task: Task; seats: Seat[]; api: Api; notify: (text: string) => void; onDone: () => void }): ReactNode {
+  const [title, setTitle] = useState(task.title); const [body, setBody] = useState(task.body); const [assignee, setAssignee] = useState(task.assigneeSeatId ?? '');
+  const [estimate, setEstimate] = useState(task.estimateMinutes === null ? '' : String(task.estimateMinutes / 60)); const [dependsOn, setDependsOn] = useState(task.dependsOn.join(', '));
+  const [kind, setKind] = useState<TaskKind | ''>(task.kind ?? ''); const [reason, setReason] = useState(''); const [handoffNote, setHandoffNote] = useState('');
+  const [passRequired, setPassRequired] = useState(task.passRequired.join(', ')); const [result, setResult] = useState<TaskResult>(task.result);
+  const owner = assignee || null; const handingOver = task.status === 'doing' && owner !== task.assigneeSeatId;
+  const minutes = estimate.trim() === '' ? null : Math.round(Number(estimate) * 60);
+  const submit = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    const patch: Record<string, unknown> = { expectedRevision: task.revision };
+    if (title !== task.title) patch.title = title;
+    if (body !== task.body) patch.body = body;
+    if (owner !== task.assigneeSeatId) patch.assigneeSeatId = owner;
+    if (minutes !== task.estimateMinutes) patch.estimateMinutes = minutes;
+    if (!sameIds(ids(dependsOn), task.dependsOn)) patch.dependsOn = ids(dependsOn);
+    if (kind && kind !== task.kind) patch.kind = kind;
+    if (!sameIds(ids(passRequired), task.passRequired)) patch.passRequired = ids(passRequired);
+    if (result !== task.result) patch.result = result;
+    if (reason.trim()) patch.reason = reason.trim();
+    if (handingOver) patch.handoffNote = handoffNote;
+    try { await api.send('PATCH', `/v1/tasks/${encodeURIComponent(task.id)}`, patch); onDone(); }
+    catch (error) { notify(errorText(error)); }
+  };
+  return (
+    <form className="task-form" onSubmit={event => void submit(event)}>
+      <label>Title<input value={title} onChange={event => setTitle(event.target.value)} maxLength={200} required autoFocus /></label>
+      <label>Assignee<select value={assignee} onChange={event => setAssignee(event.target.value)}>
+        <option value="">Unassigned</option>
+        {seats.map(seat => <option key={seat.id} value={seat.id}>{seat.title} (@{seat.id})</option>)}
+      </select></label>
+      <label>Kind<select value={kind} onChange={event => setKind(event.target.value as TaskKind)}>
+        {kind === '' && <option value="" disabled>Not classified</option>}
+        <option value="execution">execution — one person, ≤ 4h</option>
+        <option value="tracking">tracking — umbrella, followed apart</option>
+      </select></label>
+      <label>Estimate (hours)<input type="number" min="0.25" step="0.25" value={estimate} onChange={event => setEstimate(event.target.value)} /></label>
+      {kind === 'execution' && minutes !== null && minutes > MAX_EXECUTION_MINUTES && <p className="task-no-estimate">Over 4h: it cannot start as one execution task — split it into steps or make it tracking.</p>}
+      <label>Waits for (task ids)<input value={dependsOn} onChange={event => setDependsOn(event.target.value)} placeholder="t-design-3, t-dev-2" /></label>
+      <label>Needs PASS from (subset of waits for)<input value={passRequired} onChange={event => setPassRequired(event.target.value)} placeholder="t-dev-503" /></label>
+      <label>Result (separate from done)<select value={result} onChange={event => setResult(event.target.value as TaskResult)}>{TASK_RESULTS.map(option => <option key={option} value={option}>{option}</option>)}</select></label>
+      <label>Requirement<textarea value={body} onChange={event => setBody(event.target.value)} rows={5} maxLength={8000} /></label>
+      {handingOver && <label>Handoff (required: the task is in progress)<textarea value={handoffNote} onChange={event => setHandoffNote(event.target.value)} rows={3} maxLength={2000} required placeholder={'Done so far:\nLeft:\nWhere the work is:'} /></label>}
+      <label>Reason (kept in the task history)<input value={reason} onChange={event => setReason(event.target.value)} maxLength={2000} /></label>
+      <div className="row-actions"><button type="submit" className="btn btn-primary">Save</button><button type="button" className="btn" onClick={onDone}>Cancel</button></div>
+    </form>
+  );
+}
+
 export function TasksPanel({ state, channel, api, notify, onOpenThread }: Props): ReactNode {
   const allSeats = state.org?.seats ?? [];
   const seats = allSeats.filter(seat => channel.departmentId === null || seat.departmentId === channel.departmentId);
@@ -37,15 +92,16 @@ export function TasksPanel({ state, channel, api, notify, onOpenThread }: Props)
   const tasks = Object.values(state.tasks).filter(task => inChannel(task) && !(task.parentId && state.tasks[task.parentId] && inChannel(state.tasks[task.parentId]!))).sort((a, b) => b.updatedAt - a.updatedAt);
   const stepsOf = (parentId: string): Task[] => Object.values(state.tasks).filter(task => task.parentId === parentId).sort((a, b) => (a.step ?? 0) - (b.step ?? 0));
   const [title, setTitle] = useState(''); const [body, setBody] = useState(''); const [assignee, setAssignee] = useState(''); const [open, setOpen] = useState(false);
-  const [estimate, setEstimate] = useState(''); const [dependsOn, setDependsOn] = useState(''); const [stepFor, setStepFor] = useState<string | null>(null);
+  const [estimate, setEstimate] = useState(''); const [dependsOn, setDependsOn] = useState(''); const [stepFor, setStepFor] = useState<string | null>(null); const [editing, setEditing] = useState<string | null>(null);
+  const [kind, setKind] = useState<TaskKind>('execution');
   const isOpen = (taskId: string): boolean => state.tasks[taskId]?.status !== 'done';
   const seatTitle = (seatId: string | null): string => allSeats.find(seat => seat.id === seatId)?.title ?? 'unassigned';
 
   const create = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
-    const minutes = Math.round(Number(estimate) * 60); const after = dependsOn.split(/[\s,]+/).filter(Boolean);
+    const minutes = Math.round(Number(estimate) * 60); const after = ids(dependsOn);
     try {
-      await api.send('POST', '/v1/tasks', { title, body, assigneeSeatId: assignee, ...(minutes > 0 ? { estimateMinutes: minutes } : {}), ...(after.length ? { dependsOn: after } : {}) });
+      await api.send('POST', '/v1/tasks', { title, body, assigneeSeatId: assignee, kind, ...(minutes > 0 ? { estimateMinutes: minutes } : {}), ...(after.length ? { dependsOn: after } : {}) });
       setTitle(''); setBody(''); setEstimate(''); setDependsOn(''); setOpen(false);
     }
     catch (error) { notify(errorText(error)); }
@@ -67,24 +123,25 @@ export function TasksPanel({ state, channel, api, notify, onOpenThread }: Props)
               <option value="" disabled>Choose seat…</option>
               {seats.map(seat => <option key={seat.id} value={seat.id}>{seat.title} (@{seat.id})</option>)}
             </select></label>
+            <label>Kind<select value={kind} onChange={event => setKind(event.target.value as TaskKind)}><option value="execution">execution — one person, ≤ 4h</option><option value="tracking">tracking — umbrella, followed apart</option></select></label>
             <label>Estimate (hours)<input type="number" min="0.25" step="0.25" value={estimate} onChange={event => setEstimate(event.target.value)} placeholder="e.g. 1.5" /></label>
             <label>Waits for (task ids)<input value={dependsOn} onChange={event => setDependsOn(event.target.value)} placeholder="t-design-3, t-dev-2" /></label>
             <label>Requirement<textarea value={body} onChange={event => setBody(event.target.value)} rows={5} maxLength={8000} required placeholder={'Goal:\nInput:\nOutput:\nAcceptance:'} /></label>
             <div className="row-actions"><button type="submit" className="btn btn-primary">Create task</button><button type="button" className="btn" onClick={() => setOpen(false)}>Cancel</button></div>
           </form>
         : <button type="button" className="btn btn-block" onClick={() => setOpen(true)}>+ New task</button>}
-      {STATUSES.map(status => {
-        const group = tasks.filter(task => task.status === status);
+      {[...STATUSES.map(status => ({ key: status, label: status, group: tasks.filter(task => task.kind !== 'tracking' && task.status === status) })),
+        { key: 'tracking', label: 'tracking', group: tasks.filter(task => task.kind === 'tracking') }].map(({ key, label, group }) => {
         if (group.length === 0) return null;
         return (
-          <section key={status} className="task-group">
-            <h3 className={`task-group-title status-${status}`}>{status} <span>{group.length}</span></h3>
+          <section key={key} className="task-group">
+            <h3 className={`task-group-title status-${key}`}>{label} <span>{group.length}</span></h3>
             <ul>
               {group.map(task => {
                 const steps = stepsOf(task.id); const parent = task.parentId ? state.tasks[task.parentId] : undefined;
                 return (
                   <li key={task.id} className="task-card">
-                    <div className="task-top"><code>{task.id}</code>{statusSelect(task)}</div>
+                    <div className="task-top"><code>{task.id}</code>{task.kind === 'tracking' && <span className="pill">tracking</span>}{task.kind === null && <span className="pill" title="Not classified as execution or tracking yet">?</span>}{task.result !== 'unknown' && <span className={`pill result-${task.result}`}>{task.result}</span>}{statusSelect(task)}</div>
                     <strong className="task-title">{task.title}</strong>
                     {task.parentId && <span className="task-assignee">step {task.step} of {task.parentId}{parent ? ` "${parent.title}"` : ''}</span>}
                     <span className="task-assignee">→ {seatTitle(task.assigneeSeatId)}{steps.length > 0 && ' (lead)'}{task.requesterSeatId && <> · requested by @{task.requesterSeatId}</>}</span>
@@ -102,9 +159,11 @@ export function TasksPanel({ state, channel, api, notify, onOpenThread }: Props)
                         </li>
                       ))}
                     </ol>}
-                    {stepFor === task.id
+                    {editing === task.id
+                      ? <EditForm task={task} seats={allSeats.filter(seat => seat.departmentId === task.departmentId)} api={api} notify={notify} onDone={() => setEditing(null)} />
+                      : stepFor === task.id
                       ? <StepForm parent={task} seats={allSeats} api={api} notify={notify} onDone={() => setStepFor(null)} />
-                      : <div className="row-actions">{chatButton(task)}{!task.parentId && task.status !== 'done' && <button type="button" className="btn btn-small" onClick={() => setStepFor(task.id)}>+ Step</button>}</div>}
+                      : <div className="row-actions">{chatButton(task)}<button type="button" className="btn btn-small" aria-label={`Edit ${task.id}`} onClick={() => { setStepFor(null); setEditing(task.id); }}>✎ Edit</button>{!task.parentId && task.status !== 'done' && <button type="button" className="btn btn-small" onClick={() => setStepFor(task.id)}>+ Step</button>}</div>}
                   </li>
                 );
               })}

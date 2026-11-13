@@ -187,7 +187,7 @@ export class MessageService {
   /**
    * Seat ids mentioned in a body — only seats that are members of the channel count (a seat elsewhere could not read
    * it). Inside a thread any seat of the office counts: outsiders are invited into that thread. `@all` / `@everyone`
-   * expands to every member except the sender; only the manager, leaders and deputies may use it, so one member cannot
+   * expands to every member except the sender (in a department channel: its own seats, not visiting leaders); only the manager, leaders, deputies and coordinators may use it, so one member cannot
    * wake a whole department (or loop agents).
    */
   private parseMentions(body: string, channelId: string, actor: Actor, threadSeq?: number): string[] {
@@ -195,17 +195,21 @@ export class MessageService {
     const counts = (id: string): boolean => this.org.isMember(channelId, id) || (threadSeq !== undefined && !ALL_MENTIONS.includes(id) && this.seatExists(id));
     const mentions = new Set(candidates.filter(counts));
     if (candidates.some(id => ALL_MENTIONS.includes(id) && !mentions.has(id))) {
-      if (actor.kind === 'seat' && !this.mayMentionAll(actor.seatId)) throw forbidden('mention_all_not_allowed');
+      if (actor.kind === 'seat' && !this.mayMentionAll(actor.seatId, channelId)) throw forbidden('mention_all_not_allowed');
+      // Leaders visiting a department channel are not part of its @all: only the department's own seats are woken.
       const members = this.db.raw.prepare('SELECT seat_id AS seatId FROM channel_members WHERE channel_id=?').all(channelId) as Array<{ seatId: string }>;
-      for (const { seatId } of members) if (actor.kind === 'manager' || seatId !== actor.seatId) mentions.add(seatId);
+      for (const { seatId } of members) if ((actor.kind === 'manager' || seatId !== actor.seatId) && this.org.isHomeMember(channelId, seatId)) mentions.add(seatId);
     }
     return [...mentions];
   }
 
   private seatExists(seatId: string): boolean { return Boolean(this.db.raw.prepare('SELECT 1 FROM seats WHERE id=?').get(seatId)); }
 
-  private mayMentionAll(seatId: string): boolean {
+  /** A visiting leader may not @all another department's channel; the coordinator may. */
+  private mayMentionAll(seatId: string, channelId: string): boolean {
     const seat = this.org.seat(seatId);
+    if (seat.coordinator) return true;
+    if (!this.org.isHomeMember(channelId, seatId)) return false;
     return seat.role === 'leader' || this.org.department(seat.departmentId).deputySeatId === seatId;
   }
 }

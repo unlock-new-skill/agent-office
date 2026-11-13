@@ -1,9 +1,11 @@
 import { useState, type ReactNode } from 'react';
 import type { Seat, Task, TaskStatus } from '../../shared/contracts.js';
+import { BlockerBoard } from '../components/blocker-board.js';
 import { StatusDot } from '../components/status-dot.js';
+import type { Api } from '../api/http.js';
 import { seatStatus, workLabel, type OfficeState } from '../state/office-store.js';
 
-type Props = { state: OfficeState };
+type Props = { state: OfficeState; api: Api; notify: (text: string) => void };
 /** Open tasks older than this are flagged: probably stuck. */
 const STALE_MS = 2 * 3_600_000;
 const ORDER: Record<TaskStatus, number> = { doing: 0, blocked: 1, todo: 2, done: 3 };
@@ -18,7 +20,8 @@ const age = (ms: number): string => {
  * Task board grouped by seat: each seat's open tasks (in progress first) with estimate, order and the full requirement
  * one click away. Filters by department, text and whether recently finished tasks are shown.
  */
-export function RequestsView({ state }: Props): ReactNode {
+export function RequestsView({ state, api, notify }: Props): ReactNode {
+  const [layout, setLayout] = useState<'person' | 'blocker'>('person');
   const [department, setDepartment] = useState<string>('all');
   const [query, setQuery] = useState('');
   const [showDone, setShowDone] = useState(false);
@@ -118,12 +121,19 @@ export function RequestsView({ state }: Props): ReactNode {
           <option value="all">All departments</option>
           {org.departments.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name} ({openCount(candidate.id)})</option>)}
         </select>
+        <div className="segmented" role="group" aria-label="Group tasks">
+          <button type="button" className={`btn btn-small ${layout === 'person' ? 'btn-primary' : ''}`} aria-pressed={layout === 'person'} onClick={() => setLayout('person')}>By person</button>
+          <button type="button" className={`btn btn-small ${layout === 'blocker' ? 'btn-primary' : ''}`} aria-pressed={layout === 'blocker'} onClick={() => setLayout('blocker')}>By blocker</button>
+        </div>
+        {layout === 'person' && <>
         <input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search id, title, requirement…" aria-label="Search tasks" />
         <label className="board-toggle"><input type="checkbox" checked={showDone} onChange={event => setShowDone(event.target.checked)} /> Show recently done</label>
         <span className="spacer" />
         <button type="button" className="btn btn-small" onClick={() => setExpanded(new Set(expanded.size ? [] : allTasks.filter(task => task.status !== 'done').map(task => task.id)))}>{expanded.size ? 'Collapse all' : 'Expand all'}</button>
+        </>}
       </div>
-      {sections.length ? sections : <p className="muted">No tasks match.</p>}
+      {layout === 'blocker' ? <BlockerBoard api={api} org={org} tasks={state.tasks} departmentId={department} notify={notify} />
+        : sections.length ? sections : <p className="muted">No tasks match.</p>}
     </div>
   );
 }

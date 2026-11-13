@@ -1,5 +1,7 @@
 import type { Database } from '../db/database.js';
 import type { AfterTask, CollabEvent, Department, Seat, SeatHandoff, Task } from '../../shared/contracts.js';
+import { BlockerService } from './blocker-service.js';
+import { DispatchService } from './dispatch-service.js';
 import { HandoffService } from './handoff-service.js';
 import { PermissionService } from './permission-service.js';
 import { RunnerService } from './runner-service.js';
@@ -16,13 +18,13 @@ export type { AfterTask };
 const AFTER_TASK_KEY = 'after_task.default';
 /** handoff = the seat's raw note; handoffBrief = note + open tasks + unread, ready to inject into a session's context. */
 export type WhoAmI = { agentId: string; seat: Seat | null; department: Department | null; channels: ChannelSummary[]; handoff: SeatHandoff | null; handoffBrief: string | null };
-export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; trackWork: (agentId: string, kind: string, ts: string) => void; onTurnStop: (agentId: string) => void;
+export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; blockers: BlockerService; dispatch: DispatchService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; trackWork: (agentId: string, kind: string, ts: string) => void; onTurnStop: (agentId: string) => void;
   /** Office-wide default for what members do after a task (manager setting, else the env default). */
   afterTaskDefault: () => AfterTask; setAfterTaskDefault: (mode: AfterTask | null) => AfterTask; close: () => void };
 
 /** Wires the collaboration services around one database and one realtime emitter. */
 export const createOffice = (db: Database, options: OfficeOptions): Office => {
-  const org = new OrgService(db, options.emit, options.maxAutoWakes);
+  const org = new OrgService(db, options.emit, options.maxAutoWakes, options.coordinatorSeatId ?? null);
   let wake: WakeService | null = null;
   const messages = new MessageService(db, org, options.emit, message => wake?.onPosted(message), () => wake?.notify());
   wake = new WakeService(db, org, messages, options.maxAutoWakes);
@@ -46,7 +48,15 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
     if (afterTaskOf(seat) === 'off' || seat.role === 'leader' || org.department(seat.departmentId).deputySeatId === seat.id) return;
     clearPending.set(seat.id, task.id);
   };
-  const tasks = new TaskService(db, org, messages, options.emit, options.coordinatorSeatId ?? null, markForClear);
+  const tasks = new TaskService(db, org, messages, options.emit, markForClear);
+  const blockers = new BlockerService(db, org, tasks, options.emit);
+  const dispatch = new DispatchService(db, org, tasks, blockers);
+  tasks.startGate = candidate => dispatch.gate(candidate); tasks.dispatching = () => dispatch.mode() === 'on';
+  tasks.onChanged = () => dispatch.refresh(); blockers.onChanged = () => dispatch.refresh();
+  // A removed seat unassigns its tasks: readiness follows org changes too.
+  org.onMutated = () => { wakeService.notify(); dispatch.refresh(); };
+  // Reconcile at start: readiness and offers missed while the server was down are computed again (idempotent).
+  dispatch.refresh();
   const handoffs = new HandoffService(db, org, messages);
   const permissions = new PermissionService(db, org, options.emit, options.remoteApproval ?? false);
   const runners = new RunnerService(db, org, options.emit);
@@ -86,5 +96,5 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
     try { runners.enqueue(seat.id, mode === 'clear' ? 'fresh' : 'prompt', mode === 'clear' ? null : focus, `auto: ${done} done`); } catch { /* not run by an online runner: keep the session */ }
   };
   const touchAgent = (agentId: string): void => { db.raw.prepare('UPDATE agents SET last_contact_at=? WHERE id=?').run(Date.now(), agentId); };
-  return { org, messages, wake: wakeService, tasks, handoffs, permissions, runners, whoami, touchAgent, trackWork, onTurnStop, afterTaskDefault, setAfterTaskDefault, close: () => { clearInterval(sweep); if (statusTimer) clearInterval(statusTimer); wakeService.close(); permissions.close(); runners.close(); } };
+  return { org, messages, wake: wakeService, tasks, blockers, dispatch, handoffs, permissions, runners, whoami, touchAgent, trackWork, onTurnStop, afterTaskDefault, setAfterTaskDefault, close: () => { clearInterval(sweep); if (statusTimer) clearInterval(statusTimer); wakeService.close(); permissions.close(); runners.close(); } };
 };

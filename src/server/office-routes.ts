@@ -1,7 +1,7 @@
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 import { agentGuide } from '../shared/agent-guide.js';
-import { DepartmentInputSchema, SeatInputSchema } from '../shared/contracts.js';
+import { BLOCKER_KINDS, DepartmentInputSchema, SeatInputSchema, TASK_RESULTS } from '../shared/contracts.js';
 import type { AuthService, Credential } from './auth/auth-service.js';
 import type { Actor } from './collaboration/message-service.js';
 import type { Office } from './collaboration/office.js';
@@ -17,7 +17,7 @@ const PageSchema = z.object({ after: z.coerce.number().int().min(0).optional(), 
 const handle = async (run: () => Promise<Response> | Response): Promise<Response> => {
   try { return await run(); }
   catch (error) {
-    if (error instanceof OfficeError) return json(error.code, error.status);
+    if (error instanceof OfficeError) return Response.json({ ...error.details, error: error.code }, { status: error.status });
     if (error instanceof z.ZodError || error instanceof SyntaxError) return json('invalid_request', 400);
     logger.error(error); return json('internal_error', 500);
   }
@@ -167,16 +167,48 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
     const filter = z.object({ departmentId: z.string().max(64).optional(), status: TaskStatusSchema.optional(), assignee: z.string().max(64).optional() }).parse(c.req.query());
     return c.json({ tasks: office.tasks.list(actor, filter) });
   }));
+  const TaskKindSchema = z.enum(['execution', 'tracking']);
+  const TaskIdList = z.array(z.string().min(1).max(80)).max(20);
+  const sourceOf = (actor: Actor): 'ui' | 'mcp' => actor.kind === 'manager' ? 'ui' : 'mcp';
   app.post('/v1/tasks', c => withActor(c, async ({ actor }) => {
-    const input = z.object({ departmentId: z.string().max(64).optional(), title: z.string().max(200), body: z.string().max(8000).default(''), assigneeSeatId: z.string().min(1).max(64), requestedBy: z.string().min(1).max(64).optional(), parentId: z.string().min(1).max(80).optional(), parallel: z.boolean().optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
+    const input = z.object({ departmentId: z.string().max(64).optional(), title: z.string().max(200), body: z.string().max(8000).default(''), assigneeSeatId: z.string().min(1).max(64), requestedBy: z.string().min(1).max(64).optional(), parentId: z.string().min(1).max(80).optional(), parallel: z.boolean().optional(), kind: TaskKindSchema.optional(), passRequired: TaskIdList.optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
     return c.json(office.tasks.create(actor, input), 201);
   }));
+  app.get('/v1/tasks/:id', c => withActor(c, ({ actor }) => c.json({ ...office.tasks.read(actor, c.req.param('id')), readiness: office.dispatch.readiness(c.req.param('id')), blockers: office.blockers.list({ taskId: c.req.param('id') }) })));
+  app.post('/v1/tasks/:id/start', c => withActor(c, async ({ actor }) => {
+    const input = z.object({ generation: z.number().int().min(0).optional(), expectedRevision: z.number().int().min(0).optional() }).strict().parse(await c.req.json());
+    return c.json(office.dispatch.start(actor, c.req.param('id'), input, sourceOf(actor)));
+  }));
+  app.get('/v1/board', c => withActor(c, ({ actor }) => c.json(office.dispatch.board(actor, z.object({ departmentId: z.string().max(64).optional(), assignee: z.string().max(64).optional(), resolver: z.string().max(65).optional() }).parse(c.req.query())))));
+  app.get('/v1/settings/dispatch', c => managerOnly(c, () => c.json({ mode: office.dispatch.mode() })));
+  app.put('/v1/settings/dispatch', c => managerOnly(c, async () => c.json({ mode: office.dispatch.setMode(z.object({ mode: z.enum(['off', 'suggest', 'on']) }).strict().parse(await c.req.json()).mode) })));
+
+  const BlockerFields = { description: z.string().min(1).max(500), resolverSeatId: z.string().min(1).max(65).nullable().optional(), resolverRole: z.string().max(80).nullable().optional(), nextStep: z.string().max(1000).optional(), dueAt: z.number().int().positive().nullable().optional(), refs: z.array(z.string().min(1).max(300)).max(10).optional() };
+  /** Seats see blockers on tasks they can see; coordinators and the manager see all. */
+  app.get('/v1/blockers', c => withActor(c, ({ actor }) => {
+    const filter = z.object({ status: z.enum(['open', 'resolved']).optional(), taskId: z.string().max(80).optional() }).parse(c.req.query());
+    const visible = office.blockers.list(filter).filter(blocker => blocker.taskIds.some(taskId => office.tasks.canRead(actor, office.tasks.get(taskId))));
+    return c.json({ blockers: visible });
+  }));
+  app.post('/v1/blockers', c => withActor(c, async ({ actor }) => {
+    const input = z.object({ kind: z.enum(BLOCKER_KINDS), taskIds: z.array(z.string().min(1).max(80)).min(1).max(50), originTaskId: z.string().max(80).nullable().optional(), ...BlockerFields }).strict().parse(await c.req.json());
+    return c.json(office.blockers.open(actor, input), 201);
+  }));
+  app.patch('/v1/blockers/:id', c => withActor(c, async ({ actor }) => c.json(office.blockers.update(actor, c.req.param('id'), z.object(BlockerFields).partial().strict().parse(await c.req.json())))));
+  app.post('/v1/blockers/:id/link', c => withActor(c, async ({ actor }) => c.json(office.blockers.link(actor, c.req.param('id'), z.object({ taskIds: z.array(z.string().min(1).max(80)).min(1).max(50) }).strict().parse(await c.req.json()).taskIds))));
+  app.post('/v1/blockers/:id/unlink', c => withActor(c, async ({ actor }) => c.json(office.blockers.unlink(actor, c.req.param('id'), z.object({ taskId: z.string().min(1).max(80) }).strict().parse(await c.req.json()).taskId))));
+  app.post('/v1/blockers/:id/resolve', c => withActor(c, async ({ actor }) => c.json(office.blockers.resolve(actor, c.req.param('id'), z.object({ resolution: z.string().max(1000) }).strict().parse(await c.req.json()).resolution))));
+  app.post('/v1/blockers/:id/reopen', c => withActor(c, async ({ actor }) => c.json(office.blockers.reopen(actor, c.req.param('id'), z.object({ reason: z.string().max(1000) }).strict().parse(await c.req.json()).reason))));
   app.post('/v1/tasks/:id/thread', c => withActor(c, ({ actor }) => c.json(office.tasks.thread(actor, c.req.param('id')))));
   app.patch('/v1/tasks/:id', c => withActor(c, async ({ actor }) => {
-    const patch = z.object({ status: TaskStatusSchema.optional(), note: z.string().max(2000).optional(), assigneeSeatId: z.string().min(1).max(64).optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
-    return c.json(office.tasks.update(actor, c.req.param('id'), patch));
+    const patch = z.object({ status: TaskStatusSchema.optional(), note: z.string().max(2000).optional(), assigneeSeatId: z.string().min(1).max(64).nullable().optional(), title: z.string().min(1).max(200).optional(), body: z.string().max(8000).optional(), kind: TaskKindSchema.optional(), expectedRevision: z.number().int().min(0).optional(), reason: z.string().max(2000).optional(), handoffNote: z.string().max(2000).optional(), passRequired: TaskIdList.optional(), result: z.enum(TASK_RESULTS).optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
+    // The web UI acts as the manager; agents call through their MCP tools with a bearer token.
+    return c.json(office.tasks.update(actor, c.req.param('id'), patch, sourceOf(actor)));
   }));
 
+  /** Leaders and coordinators join (or leave) another department's channel to talk with its members directly. */
+  app.post('/v1/channels/:id/join', c => withActor(c, ({ actor }) => actor.kind === 'seat' ? c.json(office.org.joinChannel(actor.seatId, c.req.param('id'))) : json('seat_only', 400)));
+  app.post('/v1/channels/:id/leave', c => withActor(c, ({ actor }) => { if (actor.kind !== 'seat') return json('seat_only', 400); office.org.leaveChannel(actor.seatId, c.req.param('id')); return c.json({ ok: true }); }));
   app.get('/v1/channels', c => withActor(c, ({ actor }) => c.json({ channels: actor.kind === 'manager' ? office.org.view().channels : office.messages.channelsForSeat(actor.seatId) })));
   app.get('/v1/channels/:id/messages', c => withActor(c, ({ actor }) => {
     const { view, ...page } = PageSchema.parse(c.req.query());

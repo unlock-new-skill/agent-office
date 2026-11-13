@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -89,6 +89,51 @@ const V21_TABLES = `CREATE TABLE thread_guests(
 CREATE INDEX thread_guests_seat ON thread_guests(seat_id);
 ALTER TABLE tasks ADD COLUMN parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE;
 ALTER TABLE tasks ADD COLUMN step INTEGER;`;
+/**
+ * v22: coordinator flag on seats (PM rights over every department), task revision (stale updates conflict) and kind
+ * (execution | tracking, NULL = not classified yet), field-level task audit, department channels a leader joined,
+ * task result + dependencies that need a PASS, structured blockers linked to tasks, the persisted readiness of each
+ * task (generation bumps on every real not-ready → ready) and the ledger of readiness notifications (one per key).
+ */
+const V22_TABLES = `ALTER TABLE seats ADD COLUMN coordinator INTEGER NOT NULL DEFAULT 0 CHECK(coordinator IN (0,1));
+ALTER TABLE tasks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN kind TEXT CHECK(kind IN ('execution','tracking'));
+CREATE TABLE task_changes(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, revision INTEGER NOT NULL,
+  actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, source TEXT NOT NULL CHECK(source IN ('ui','mcp','api')), field TEXT NOT NULL,
+  before_json TEXT, after_json TEXT, reason TEXT NOT NULL DEFAULT '' CHECK(length(reason) <= 2000), created_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX task_changes_task ON task_changes(task_id, id);
+ALTER TABLE tasks ADD COLUMN pass_required TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE tasks ADD COLUMN result TEXT NOT NULL DEFAULT 'unknown' CHECK(result IN ('not-applicable','pass','fail','inconclusive','unknown'));
+ALTER TABLE tasks ADD COLUMN result_by TEXT;
+ALTER TABLE tasks ADD COLUMN result_at INTEGER;
+ALTER TABLE tasks ADD COLUMN actual_start INTEGER;
+CREATE TABLE blockers(
+  id TEXT PRIMARY KEY, number INTEGER NOT NULL UNIQUE,
+  kind TEXT NOT NULL CHECK(kind IN ('dependency','missing-input','permission','environment','defect','owner-missing','decision')),
+  description TEXT NOT NULL CHECK(length(description) BETWEEN 1 AND 500), resolver_seat_id TEXT REFERENCES seats(id) ON DELETE SET NULL,
+  resolver_role TEXT CHECK(length(resolver_role) <= 80), next_step TEXT NOT NULL DEFAULT '' CHECK(length(next_step) <= 1000), due_at INTEGER,
+  origin_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL, refs TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL CHECK(status IN ('open','resolved')),
+  opened_by TEXT NOT NULL, opened_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, resolved_by TEXT, resolved_at INTEGER,
+  resolution TEXT NOT NULL DEFAULT '' CHECK(length(resolution) <= 1000)
+) STRICT;
+CREATE TABLE task_blockers(
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, blocker_id TEXT NOT NULL REFERENCES blockers(id) ON DELETE CASCADE, PRIMARY KEY(task_id, blocker_id)
+) STRICT;
+CREATE INDEX task_blockers_blocker ON task_blockers(blocker_id);
+CREATE TABLE task_readiness(
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE, ready INTEGER NOT NULL, generation INTEGER NOT NULL, gate_ok INTEGER NOT NULL,
+  ready_since INTEGER, reasons TEXT NOT NULL, updated_at INTEGER NOT NULL
+) STRICT;
+CREATE TABLE task_notifications(
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, kind TEXT NOT NULL, generation INTEGER NOT NULL, recipient TEXT NOT NULL,
+  created_at INTEGER NOT NULL, PRIMARY KEY(task_id, kind, generation, recipient)
+) STRICT;
+CREATE TABLE channel_visitors(
+  channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, seat_id TEXT NOT NULL REFERENCES seats(id) ON DELETE CASCADE,
+  joined_at INTEGER NOT NULL, PRIMARY KEY(channel_id, seat_id)
+) STRICT;`;
 const V15_COLUMNS = "ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER; ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';";
 const THREAD_INDEX = 'CREATE INDEX messages_thread ON messages(channel_id, thread_seq);';
 
@@ -139,14 +184,21 @@ export class Database {
     }
   }
 
+  private depth = 0;
+
+  /** Runs `operation` atomically. A nested call becomes a savepoint, so a step and the lines it posts commit together. */
   transaction<T>(operation: () => T): T {
-    this.raw.exec('BEGIN IMMEDIATE');
+    const savepoint = this.depth > 0 ? `sp_${this.depth}` : null;
+    this.raw.exec(savepoint ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+    this.depth++;
     try {
       const result = operation();
-      this.raw.exec('COMMIT');
+      this.depth--;
+      this.raw.exec(savepoint ? `RELEASE ${savepoint}` : 'COMMIT');
       return result;
     } catch (error) {
-      this.raw.exec('ROLLBACK');
+      this.depth--;
+      this.raw.exec(savepoint ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK');
       throw error;
     }
   }
@@ -184,6 +236,7 @@ export class Database {
         if (from < 19) this.raw.exec(V19_CHANNELS);
         if (from < 20) this.raw.exec(V20_COLUMNS);
         if (from < 21) this.raw.exec(V21_TABLES);
+        if (from < 22) this.raw.exec(V22_TABLES);
         if ((this.raw.prepare('PRAGMA foreign_key_check').all() as unknown[]).length > 0) throw new Error('migration_foreign_key_violation');
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
@@ -285,6 +338,7 @@ export class Database {
       ${V18_TABLES}
       ${V20_COLUMNS}
       ${V21_TABLES}
+      ${V22_TABLES}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

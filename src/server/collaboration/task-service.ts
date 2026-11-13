@@ -1,17 +1,24 @@
 import type { Database } from '../db/database.js';
-import type { CollabEvent, Seat, Task, TaskStatus } from '../../shared/contracts.js';
+import { MAX_EXECUTION_MINUTES, type ChangeSource, type CollabEvent, type Seat, type Task, type TaskChange, type TaskKind, type TaskResult, type TaskStatus } from '../../shared/contracts.js';
 import type { Actor, MessageService } from './message-service.js';
-import { forbidden, invalid, notFound } from './office-error.js';
+import { conflict, forbidden, invalid, notFound } from './office-error.js';
 import { LEADERS_CHANNEL_ID, OUTPUTS_CHANNEL_ID, type OrgService } from './org-service.js';
 
 export type TaskEvent = { taskId: string; actorKind: string; actorId: string; fromStatus: TaskStatus | null; toStatus: TaskStatus; note: string; createdAt: number };
 type TaskFilter = { departmentId?: string | undefined; status?: TaskStatus | undefined; assignee?: string | undefined };
 type TaskPlan = { estimateMinutes?: number | null | undefined; dependsOn?: string[] | undefined };
-const TASK_COLUMNS = 'id,department_id AS departmentId,number,assignee_seat_id AS assigneeSeatId,requester_seat_id AS requesterSeatId,created_by_kind AS createdByKind,created_by_id AS createdById,title,body,status,created_at AS createdAt,updated_at AS updatedAt,estimate_minutes AS estimateMinutes,depends_on AS dependsOn,parent_id AS parentId,step,thread_seq AS threadSeq';
-const toTask = (row: Omit<Task, 'dependsOn'> & { dependsOn: string }): Task => ({ ...row, dependsOn: JSON.parse(row.dependsOn) as string[] });
+/** A field left out keeps its value; assigneeSeatId null unassigns; dependsOn [] clears (leaders only). */
+export type TaskPatch = { status?: TaskStatus | undefined; note?: string | undefined; assigneeSeatId?: string | null | undefined; title?: string | undefined; body?: string | undefined; kind?: TaskKind | undefined;
+  expectedRevision?: number | undefined; reason?: string | undefined; handoffNote?: string | undefined; passRequired?: string[] | undefined; result?: TaskResult | undefined } & TaskPlan;
+type AuditField = 'title' | 'body' | 'assigneeSeatId' | 'estimateMinutes' | 'dependsOn' | 'passRequired' | 'kind' | 'status' | 'result';
+type TaskRow = Omit<Task, 'dependsOn' | 'passRequired'> & { dependsOn: string; passRequired: string };
+const TASK_COLUMNS = 'id,department_id AS departmentId,number,assignee_seat_id AS assigneeSeatId,requester_seat_id AS requesterSeatId,created_by_kind AS createdByKind,created_by_id AS createdById,title,body,status,created_at AS createdAt,updated_at AS updatedAt,estimate_minutes AS estimateMinutes,depends_on AS dependsOn,parent_id AS parentId,step,thread_seq AS threadSeq,revision,kind,pass_required AS passRequired,result,result_by AS resultBy,result_at AS resultAt,actual_start AS actualStart';
+const toTask = (row: TaskRow): Task => ({ ...row, dependsOn: JSON.parse(row.dependsOn) as string[], passRequired: JSON.parse(row.passRequired) as string[] });
 const MAX_ESTIMATE = 7 * 24 * 60; const MAX_DEPENDENCIES = 20;
 /** Agents must write what the task needs (goal, inputs, expected output, acceptance) so the manager can follow it. */
 const MIN_REQUIREMENT = 20;
+const MAX_NOTE = 2000;
+const stale = (task: Task): Error => conflict('stale_revision', { task });
 /** Short human estimate for system lines: 45m, 2h, 1h 30m. */
 export const estimateLabel = (minutes: number): string => minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ''}`;
 const actorId = (actor: Actor): string => actor.kind === 'manager' ? 'manager' : actor.seatId;
@@ -23,16 +30,24 @@ const actorLabel = (actor: Actor): string => actor.kind === 'manager' ? 'manager
  * new/reassigned → assignee, blocked/done → leader, leader/manager status change → assignee. The actor is never mentioned.
  * Planning: every task carries the assignee's estimate and the tasks it waits for (any department). A task cannot move
  * to doing while one of those is open, and finishing the last one tells the waiting assignee to start. The coordinator
- * seat (the PM) has leader rights over the tasks of every department so it can order the work across teams.
+ * seats (the PM, see Seat.coordinator) have leader rights over the tasks of every department so they can order the work across teams.
+ * Edits are field-level (title, requirement, assignee, estimate, order, kind), guarded by the task revision and audited in task_changes.
  */
 export class TaskService {
-  constructor(private readonly db: Database, private readonly org: OrgService, private readonly messages: MessageService, private readonly emit: (event: CollabEvent) => void, private readonly coordinatorSeatId: string | null = null, private readonly onDoneByAssignee: (task: Task) => void = () => undefined) {}
+  /** Checks an execution task about to start (readiness, owner free); throws with the reason. Set by the dispatcher. */
+  startGate: (candidate: Task, actor: Actor) => void = () => undefined;
+  /** Invoked after every task change so readiness is recomputed. */
+  onChanged: () => void = () => undefined;
+  /** True while the dispatcher sends ready notices for execution tasks (the legacy "ready to start" line is then skipped for them). */
+  dispatching: () => boolean = () => false;
+
+  constructor(private readonly db: Database, private readonly org: OrgService, private readonly messages: MessageService, private readonly emit: (event: CollabEvent) => void, private readonly onDoneByAssignee: (task: Task) => void = () => undefined) {}
 
   list(actor: Actor, filter: TaskFilter): Task[] {
     let departmentId = filter.departmentId;
     if (actor.kind === 'seat' && !this.isCoordinator(actor)) {
       const own = this.org.seat(actor.seatId).departmentId;
-      if (departmentId && departmentId !== own) throw forbidden('forbidden_task');
+      if (departmentId && departmentId !== own) throw forbidden('forbidden_task_read');
       departmentId = own;
     }
     const assignee = filter.assignee === 'me' && actor.kind === 'seat' ? actor.seatId : filter.assignee;
@@ -44,20 +59,32 @@ export class TaskService {
     else if (departmentId) { clauses.push('department_id=?'); params.push(departmentId); }
     if (filter.status) { clauses.push('status=?'); params.push(filter.status); }
     if (assignee) { clauses.push('assignee_seat_id=?'); params.push(assignee); }
-    return (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY status='done',updated_at DESC LIMIT 500`).all(...params) as Array<Omit<Task, 'dependsOn'> & { dependsOn: string }>).map(toTask);
+    return (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY status='done',updated_at DESC LIMIT 500`).all(...params) as TaskRow[]).map(toTask);
   }
 
   get(taskId: string): Task {
-    const row = this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE id=?`).get(taskId) as (Omit<Task, 'dependsOn'> & { dependsOn: string }) | undefined;
+    const row = this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE id=?`).get(taskId) as TaskRow | undefined;
     if (!row) throw notFound('task');
     return toTask(row);
+  }
+
+  /** One task with its status history and field audit, for anyone who may see the task. */
+  read(actor: Actor, taskId: string): { task: Task; history: TaskEvent[]; changes: TaskChange[] } {
+    const task = this.get(taskId);
+    if (!this.canRead(actor, task)) throw forbidden('forbidden_task_read');
+    return { task, history: this.history(taskId), changes: this.changes(taskId) };
+  }
+
+  changes(taskId: string): TaskChange[] {
+    return (this.db.raw.prepare('SELECT task_id AS taskId,revision,actor_kind AS actorKind,actor_id AS actorId,source,field,before_json AS beforeJson,after_json AS afterJson,reason,created_at AS createdAt FROM task_changes WHERE task_id=? ORDER BY id').all(taskId) as Array<Omit<TaskChange, 'before' | 'after'> & { beforeJson: string | null; afterJson: string | null }>)
+      .map(({ beforeJson, afterJson, ...row }) => ({ ...row, before: beforeJson === null ? null : JSON.parse(beforeJson) as unknown, after: afterJson === null ? null : JSON.parse(afterJson) as unknown }));
   }
 
   history(taskId: string): TaskEvent[] {
     return this.db.raw.prepare('SELECT task_id AS taskId,actor_kind AS actorKind,actor_id AS actorId,from_status AS fromStatus,to_status AS toStatus,note,created_at AS createdAt FROM task_events WHERE task_id=? ORDER BY id').all(taskId) as TaskEvent[];
   }
 
-  create(actor: Actor, input: { departmentId?: string | undefined; title: string; body: string; assigneeSeatId: string; requestedBy?: string | undefined; parentId?: string | undefined; parallel?: boolean | undefined } & TaskPlan): Task {
+  create(actor: Actor, input: { departmentId?: string | undefined; title: string; body: string; assigneeSeatId: string; requestedBy?: string | undefined; parentId?: string | undefined; parallel?: boolean | undefined; kind?: TaskKind | undefined; passRequired?: string[] | undefined } & TaskPlan): Task {
     if (input.title.trim().length === 0 || input.title.length > 200 || input.body.length > 8000) throw invalid('invalid_task');
     if (input.parentId !== undefined) return this.createStep(actor, { ...input, parentId: input.parentId });
     const assignee = this.org.seat(input.assigneeSeatId);
@@ -73,12 +100,14 @@ export class TaskService {
     const requester = input.requestedBy ? this.org.seat(input.requestedBy.replace(/^@/, '')) : null;
     if (requester && (requester.role !== 'leader' || requester.departmentId === departmentId)) throw invalid('requester_must_be_other_department_leader');
     const estimate = this.checkEstimate(input.estimateMinutes); const dependsOn = this.checkDependencies(null, input.dependsOn ?? []);
+    const passRequired = [...new Set(input.passRequired ?? [])];
+    if (passRequired.some(id => !dependsOn.includes(id))) throw invalid('pass_required_not_in_depends_on');
     const timestamp = Date.now();
     const task = this.db.transaction(() => {
       const number = (this.db.raw.prepare('SELECT COALESCE(MAX(number),0)+1 AS next FROM tasks WHERE department_id=?').get(departmentId) as { next: number }).next;
       const id = `t-${departmentId}-${number}`;
-      this.db.raw.prepare('INSERT INTO tasks(id,department_id,number,assignee_seat_id,requester_seat_id,created_by_kind,created_by_id,title,body,status,created_at,updated_at,estimate_minutes,depends_on) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-        .run(id, departmentId, number, assignee.id, requester?.id ?? null, actor.kind, actorId(actor), input.title, input.body, 'todo', timestamp, timestamp, estimate, JSON.stringify(dependsOn));
+      this.db.raw.prepare('INSERT INTO tasks(id,department_id,number,assignee_seat_id,requester_seat_id,created_by_kind,created_by_id,title,body,status,created_at,updated_at,estimate_minutes,depends_on,kind,pass_required) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(id, departmentId, number, assignee.id, requester?.id ?? null, actor.kind, actorId(actor), input.title, input.body, 'todo', timestamp, timestamp, estimate, JSON.stringify(dependsOn), input.kind ?? null, JSON.stringify(passRequired));
       this.record(id, actor, null, 'todo', '');
       return this.get(id);
     });
@@ -87,7 +116,8 @@ export class TaskService {
       const accepted = this.messages.postSystem(LEADERS_CHANNEL_ID, `Request from @${requester.id} accepted as task ${task.id} "${task.title}" (assignee @${assignee.id}). You will be told in this thread when it is blocked or done.`, [requester.id]);
       this.db.raw.prepare('UPDATE tasks SET request_thread_seq=? WHERE id=?').run(accepted.seq, task.id);
     }
-    return task;
+    this.onChanged();
+    return this.get(task.id);
   }
 
   /**
@@ -95,7 +125,7 @@ export class TaskService {
    * The manager, the PM and the parent's assignee (the lead who coordinates it) add steps. Steps run in order: each
    * waits for the previous one unless `parallel`. The step's assignee is invited into the parent's thread.
    */
-  private createStep(actor: Actor, input: { title: string; body: string; assigneeSeatId: string; parentId: string; parallel?: boolean | undefined } & TaskPlan): Task {
+  private createStep(actor: Actor, input: { title: string; body: string; assigneeSeatId: string; parentId: string; parallel?: boolean | undefined; kind?: TaskKind | undefined } & TaskPlan): Task {
     const parent = this.get(input.parentId);
     if (parent.parentId !== null) throw invalid('steps_are_one_level: add the step to the parent task');
     if (parent.status === 'done') throw invalid('parent_task_done');
@@ -108,8 +138,8 @@ export class TaskService {
     const task = this.db.transaction(() => {
       const number = (this.db.raw.prepare('SELECT COALESCE(MAX(number),0)+1 AS next FROM tasks WHERE department_id=?').get(departmentId) as { next: number }).next;
       const id = `t-${departmentId}-${number}`; const step = (previous?.step ?? 0) + 1;
-      this.db.raw.prepare('INSERT INTO tasks(id,department_id,number,assignee_seat_id,requester_seat_id,created_by_kind,created_by_id,title,body,status,created_at,updated_at,estimate_minutes,depends_on,parent_id,step) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-        .run(id, departmentId, number, assignee.id, null, actor.kind, actorId(actor), input.title, input.body, 'todo', timestamp, timestamp, estimate, JSON.stringify(dependsOn), parent.id, step);
+      this.db.raw.prepare('INSERT INTO tasks(id,department_id,number,assignee_seat_id,requester_seat_id,created_by_kind,created_by_id,title,body,status,created_at,updated_at,estimate_minutes,depends_on,parent_id,step,kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(id, departmentId, number, assignee.id, null, actor.kind, actorId(actor), input.title, input.body, 'todo', timestamp, timestamp, estimate, JSON.stringify(dependsOn), parent.id, step, input.kind ?? null);
       this.record(id, actor, null, 'todo', '');
       return this.get(id);
     });
@@ -119,12 +149,13 @@ export class TaskService {
     this.messages.invite(parent.departmentId, parentThread, [assignee.id]);
     this.postInTaskThread(parent, `Step ${task.step} added: ${task.id} "${task.title}" → @${assignee.id}${dependsOn.length ? ` (after ${dependsOn.join(', ')})` : ' (can start now)'}. Discuss the whole task here.`, []);
     this.emit({ type: 'collab', kind: 'task', task: this.get(parent.id) });
+    this.onChanged();
     return this.get(task.id);
   }
 
   /** Steps of a parent task in order. */
   steps(parentId: string): Task[] {
-    return (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE parent_id=? ORDER BY step`).all(parentId) as Array<Omit<Task, 'dependsOn'> & { dependsOn: string }>).map(toTask);
+    return (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE parent_id=? ORDER BY step`).all(parentId) as TaskRow[]).map(toTask);
   }
 
   /**
@@ -135,51 +166,91 @@ export class TaskService {
     const task = this.get(taskId); const seq = this.ensureThread(task);
     if (actor.kind === 'seat' && !this.org.isMember(task.departmentId, actor.seatId) && !this.messages.guests(task.departmentId, seq).includes(actor.seatId)) {
       const leadsParent = task.parentId !== null && this.get(task.parentId).assigneeSeatId === actor.seatId;
-      if (!this.isCoordinator(actor) && !leadsParent && !this.steps(task.id).some(step => step.assigneeSeatId === actor.seatId)) throw forbidden('forbidden_task');
+      if (!this.isCoordinator(actor) && !leadsParent && !this.steps(task.id).some(step => step.assigneeSeatId === actor.seatId)) throw forbidden('forbidden_task_read');
       this.messages.invite(task.departmentId, seq, [actor.seatId]);
     }
     return { channelId: task.departmentId, seq };
   }
 
-  update(actor: Actor, taskId: string, patch: { status?: TaskStatus | undefined; note?: string | undefined; assigneeSeatId?: string | undefined } & TaskPlan): Task {
-    const task = this.get(taskId); const leader = this.leaderOf(task.departmentId); const note = patch.note ?? '';
-    if (note.length > 2000) throw invalid('invalid_task');
+  /**
+   * Field-level edit of an existing task (never a copy): every field left out keeps its value. Everything is validated
+   * before anything is written; with expectedRevision a stale edit conflicts (409 stale_revision + the current task).
+   * The assignee moves status and sets the estimate; leaders, the deputy, the parent's lead and coordinators also edit
+   * title, requirement, assignee, order and kind. A task in progress changes hands only with a handoff note and goes
+   * back to todo for its new owner. An execution task starts only with an estimate of at most 4h.
+   */
+  update(actor: Actor, taskId: string, patch: TaskPatch, source: ChangeSource = 'api'): Task {
+    const task = this.get(taskId); const leader = this.leaderOf(task.departmentId); const note = patch.note ?? ''; const reason = patch.reason ?? ''; const handoff = patch.handoffNote?.trim() ?? '';
+    if (note.length > MAX_NOTE || reason.length > MAX_NOTE || handoff.length > MAX_NOTE) throw invalid('invalid_task');
+    if (patch.expectedRevision !== undefined && patch.expectedRevision !== task.revision) throw stale(task);
     const parent = task.parentId ? this.get(task.parentId) : null;
-    const isLeader = actor.kind === 'manager' || actor.seatId === leader?.id || this.isCoordinator(actor) || actor.seatId === parent?.assigneeSeatId || this.isDeputy(this.org.seat(actor.seatId), task.departmentId);
-    if (!isLeader && (actor.kind !== 'seat' || actor.seatId !== task.assigneeSeatId)) throw forbidden('forbidden_task');
-    if (patch.assigneeSeatId !== undefined && !isLeader) throw forbidden('leader_only');
+    const authority = this.authority(actor, task); const isLeader = authority === 'leader';
+    if (!authority) throw forbidden('forbidden_task_change');
+    // Order of work across teams and what the task is are the leaders' call; the assignee owns status, estimate and result.
+    if (!isLeader && (['assigneeSeatId', 'dependsOn', 'passRequired', 'title', 'body', 'kind'] as const).some(field => patch[field] !== undefined)) throw forbidden('leader_only');
     if (task.status === 'done' && patch.status && patch.status !== 'done' && !isLeader) throw forbidden('reopen_requires_leader');
-    const assignee = patch.assigneeSeatId !== undefined ? this.org.seat(patch.assigneeSeatId) : null;
-    if (assignee && assignee.departmentId !== task.departmentId) throw forbidden('assignee_outside_department');
-    // Order of work across teams is the leaders' call; the assignee owns the estimate.
-    if (patch.dependsOn !== undefined && !isLeader) throw forbidden('leader_only');
+    const title = patch.title !== undefined ? patch.title.trim() : task.title; const body = patch.body ?? task.body;
+    if (title.length === 0 || title.length > 200 || body.length > 8000) throw invalid('invalid_task');
+    if (patch.body !== undefined && actor.kind === 'seat' && body.trim().length < MIN_REQUIREMENT) throw invalid('requirement_required: write the requirement in body (goal, inputs, expected output, acceptance criteria)');
+    let assigneeId = task.assigneeSeatId;
+    if (patch.assigneeSeatId !== undefined) {
+      const seat = patch.assigneeSeatId === null ? null : this.org.seat(patch.assigneeSeatId);
+      if (seat && seat.departmentId !== task.departmentId) throw forbidden('assignee_outside_department');
+      assigneeId = seat?.id ?? null;
+    }
+    const reassigned = assigneeId !== task.assigneeSeatId;
+    let status = patch.status ?? task.status;
+    if (reassigned && task.status === 'doing') {
+      if (!handoff) throw conflict('reassign_doing_requires_handoff', { task });
+      if (patch.status === undefined) status = 'todo';
+    }
+    const kind = patch.kind ?? task.kind;
     const estimate = patch.estimateMinutes !== undefined ? this.checkEstimate(patch.estimateMinutes) : task.estimateMinutes;
     const dependsOn = patch.dependsOn !== undefined ? this.checkDependencies(taskId, patch.dependsOn) : task.dependsOn;
-    const status = patch.status ?? task.status;
+    // passRequired names the dependencies that need a PASS; dropping a dependency drops its condition too.
+    const passRequired = patch.passRequired !== undefined ? [...new Set(patch.passRequired)] : task.passRequired.filter(id => dependsOn.includes(id));
+    if (passRequired.some(id => !dependsOn.includes(id))) throw invalid('pass_required_not_in_depends_on');
+    const result = patch.result ?? task.result;
     if (status === 'done' && task.status !== 'done') {
       const open = this.steps(task.id).filter(step => step.status !== 'done').map(step => step.id);
       if (open.length > 0) throw invalid(`steps_open: ${open.join(', ')} not done yet`);
     }
     if (status === 'doing' && task.status !== 'doing' && actor.kind === 'seat') {
-      const waiting = this.openDependencies(dependsOn);
+      const waiting = this.unmetDependencies(dependsOn, passRequired);
       if (waiting.length > 0) throw invalid(`waiting_for_dependencies: ${waiting.join(', ')} not done yet; ask your leader or the PM to reorder`);
+      if (kind === 'execution' && assigneeId === null) throw invalid('assignee_required: an execution task needs an assignee before it starts');
+      if (kind === 'execution' && (estimate === null || estimate > MAX_EXECUTION_MINUTES)) throw invalid(`execution_estimate_required: set estimateMinutes (at most ${MAX_EXECUTION_MINUTES}) before starting; split bigger work into steps`);
+      if (kind === 'execution') this.startGate({ ...task, title, body, assigneeSeatId: assigneeId, estimateMinutes: estimate, dependsOn, passRequired, kind, result }, actor);
     }
-    const replanned = estimate !== task.estimateMinutes || JSON.stringify(dependsOn) !== JSON.stringify(task.dependsOn);
+    const after: Record<AuditField, unknown> = { title, body, assigneeSeatId: assigneeId, estimateMinutes: estimate, dependsOn, passRequired, kind, status, result };
+    const changed = (Object.keys(after) as AuditField[]).filter(field => JSON.stringify(after[field]) !== JSON.stringify(task[field]));
+    const replanned = changed.includes('estimateMinutes') || changed.includes('dependsOn');
     const updated = this.db.transaction(() => {
-      this.db.raw.prepare('UPDATE tasks SET status=?,assignee_seat_id=?,estimate_minutes=?,depends_on=?,updated_at=? WHERE id=?').run(status, assignee?.id ?? task.assigneeSeatId, estimate, JSON.stringify(dependsOn), Date.now(), taskId);
-      this.record(taskId, actor, task.status, status, note);
+      const now = Date.now(); const resultChanged = changed.includes('result');
+      const written = this.db.raw.prepare('UPDATE tasks SET title=?,body=?,status=?,assignee_seat_id=?,estimate_minutes=?,depends_on=?,pass_required=?,kind=?,result=?,result_by=?,result_at=?,actual_start=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?')
+        .run(title, body, status, assigneeId, estimate, JSON.stringify(dependsOn), JSON.stringify(passRequired), kind, result, resultChanged ? actorId(actor) : task.resultBy, resultChanged ? now : task.resultAt, status === 'doing' && task.actualStart === null ? now : task.actualStart, now, taskId, task.revision);
+      if (Number(written.changes) === 0) throw stale(this.get(taskId));
+      this.record(taskId, actor, task.status, status, handoff && reassigned ? `${note}${note ? ' · ' : ''}handoff: ${handoff}` : note);
+      const audit = this.db.raw.prepare('INSERT INTO task_changes(task_id,revision,actor_kind,actor_id,source,field,before_json,after_json,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)');
+      for (const field of changed) audit.run(taskId, task.revision + 1, actor.kind, actorId(actor), source, field, JSON.stringify(task[field]), JSON.stringify(after[field]), reason, Date.now());
       return this.get(taskId);
     });
+    const edited = changed.filter(field => field === 'title' || field === 'body' || field === 'kind' || field === 'passRequired' || field === 'result');
     const mentions = new Set<string>();
-    if (assignee && assignee.id !== task.assigneeSeatId) mentions.add(assignee.id);
+    // The new owner is told once; the previous owner is told the work left them.
+    if (reassigned && assigneeId) mentions.add(assigneeId);
+    if (reassigned && task.assigneeSeatId) mentions.add(task.assigneeSeatId);
     if ((status === 'blocked' || status === 'done') && status !== task.status && leader) mentions.add(leader.id);
-    if (isLeader && (status !== task.status || replanned) && updated.assigneeSeatId) mentions.add(updated.assigneeSeatId);
+    if (isLeader && (status !== task.status || replanned || edited.length > 0) && updated.assigneeSeatId) mentions.add(updated.assigneeSeatId);
     if (actor.kind === 'seat') mentions.delete(actor.seatId);
     const change = status !== task.status ? `${task.status} → ${status}` : 'updated';
-    const reassigned = assignee && assignee.id !== task.assigneeSeatId ? ` Reassigned to @${assignee.id}.` : '';
-    this.announce(updated, `Task ${task.id} "${task.title}" ${change} by ${actorLabel(actor)}.${reassigned}${replanned ? this.planLine(updated) : ''}${note ? ` Note: ${note}` : ''}`, [...mentions]);
+    const owner = reassigned ? (assigneeId ? ` Reassigned to @${assigneeId}${task.assigneeSeatId ? ` (was @${task.assigneeSeatId})` : ''}.` : ` Unassigned (was @${task.assigneeSeatId}).`) : '';
+    const handoffLine = reassigned && handoff ? ` Handoff: ${handoff}` : '';
+    const editLine = edited.length ? ` Edited: ${edited.map(field => field === 'body' ? 'requirement' : field === 'kind' ? `kind=${kind}` : field === 'result' ? `result=${result}` : field === 'passRequired' ? `needs pass from ${passRequired.join(', ') || 'none'}` : field).join(', ')}.` : '';
+    const name = title !== task.title ? `"${task.title}" → "${title}"` : `"${task.title}"`;
+    this.announce(updated, `Task ${task.id} ${name} ${change} by ${actorLabel(actor)}.${owner}${handoffLine}${editLine}${replanned ? this.planLine(updated) : ''}${note ? ` Note: ${note}` : ''}${reason ? ` Reason: ${reason}` : ''}`, [...mentions]);
+    if ((status === 'done' && task.status !== 'done') || (status === 'done' && result === 'pass' && task.result !== 'pass')) this.releaseDependents(updated);
     if (status === 'done' && task.status !== 'done') {
-      this.releaseDependents(updated);
       this.postOutput(updated, actor, note);
       if (actor.kind === 'seat' && actor.seatId === updated.assigneeSeatId) this.onDoneByAssignee(updated);
     }
@@ -188,7 +259,8 @@ export class TaskService {
     if (updated.requesterSeatId && (status === 'blocked' || status === 'done') && status !== task.status) {
       this.messages.postSystem(LEADERS_CHANNEL_ID, `@${updated.requesterSeatId} your request ${task.id} "${task.title}" is ${status}${note ? `: ${note}` : '.'}`.slice(0, 16_000), [updated.requesterSeatId], this.threadOf(task.id, 'request_thread_seq'));
     }
-    return updated;
+    this.onChanged();
+    return this.get(taskId);
   }
 
   /** A step blocked or done is reported in the parent's thread to its lead; the last step asks the lead to close it. */
@@ -211,11 +283,19 @@ export class TaskService {
 
   /** Tells the assignee of each open task that was waiting only on `done` that it can start now. */
   private releaseDependents(done: Task): void {
-    const waiting = (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE status!='done' AND depends_on LIKE ?`).all(`%"${done.id}"%`) as Array<Omit<Task, 'dependsOn'> & { dependsOn: string }>).map(toTask);
+    const waiting = (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE status!='done' AND depends_on LIKE ?`).all(`%"${done.id}"%`) as TaskRow[]).map(toTask);
     for (const task of waiting) {
-      if (!task.dependsOn.includes(done.id) || this.openDependencies(task.dependsOn).length > 0) continue;
+      if (!task.dependsOn.includes(done.id) || this.unmetDependencies(task.dependsOn, task.passRequired).length > 0) continue;
+      if (task.kind === 'execution' && this.dispatching()) continue;
       this.postInTaskThread(task, `Task ${task.id} "${task.title}" is ready to start: ${task.dependsOn.join(', ')} done (last: ${done.id}).${task.assigneeSeatId ? ` @${task.assigneeSeatId} move it to doing when you pick it up.` : ''}`, task.assigneeSeatId ? [task.assigneeSeatId] : []);
     }
+  }
+
+  /** Dependencies not met yet: not done, or done without the PASS this task needs from them. */
+  private unmetDependencies(ids: string[], passRequired: string[]): string[] {
+    if (ids.length === 0) return [];
+    return (this.db.raw.prepare(`SELECT id,status,result FROM tasks WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as Array<{ id: string; status: string; result: string }>)
+      .filter(row => row.status !== 'done' || (passRequired.includes(row.id) && row.result !== 'pass')).map(row => row.id);
   }
 
   private openDependencies(ids: string[]): string[] {
@@ -252,7 +332,33 @@ export class TaskService {
     return `${estimate}${task.dependsOn.length ? ` Waits for: ${task.dependsOn.join(', ')}${open.length ? ` (open: ${open.join(', ')})` : ' (all done)'}.` : ''}`;
   }
 
-  private isCoordinator(actor: Actor): boolean { return actor.kind === 'seat' && actor.seatId === this.coordinatorSeatId; }
+  private isCoordinator(actor: Actor): boolean { return actor.kind === 'seat' && this.org.seat(actor.seatId).coordinator; }
+
+  /**
+   * Who may change a task: 'leader' (manager, the department's leader or deputy, the lead of the parent task, a
+   * coordinator) edits everything; 'assignee' moves status, estimate and result; null may not change it.
+   */
+  authority(actor: Actor, task: Task): 'leader' | 'assignee' | null {
+    if (actor.kind === 'manager' || this.isCoordinator(actor)) return 'leader';
+    const seat = this.org.seat(actor.seatId);
+    if (this.leaderOf(task.departmentId)?.id === seat.id || this.isDeputy(seat, task.departmentId)) return 'leader';
+    if (task.parentId !== null && this.get(task.parentId).assigneeSeatId === seat.id) return 'leader';
+    return task.assigneeSeatId === seat.id ? 'assignee' : null;
+  }
+
+  /** Posts a line in the task's thread (blockers and the dispatcher talk about a task there too). */
+  postLine(task: Task, body: string, mentions: string[]): void { this.postInTaskThread(task, body, mentions); }
+
+  /** All tasks (any department), for readiness. */
+  all(): Task[] { return (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks`).all() as TaskRow[]).map(toTask); }
+
+  /** The manager, coordinators, the task's department, its assignee, the lead of its parent and the assignees of its steps see a task. */
+  canRead(actor: Actor, task: Task): boolean {
+    if (actor.kind === 'manager' || this.isCoordinator(actor)) return true;
+    if (this.org.seat(actor.seatId).departmentId === task.departmentId || task.assigneeSeatId === actor.seatId) return true;
+    if (task.parentId !== null && this.get(task.parentId).assigneeSeatId === actor.seatId) return true;
+    return this.steps(task.id).some(step => step.assigneeSeatId === actor.seatId);
+  }
 
   /** The department's deputy acts with the leader's task rights inside that department. */
   private isDeputy(seat: Seat, departmentId = seat.departmentId): boolean { return seat.departmentId === departmentId && this.org.department(departmentId).deputySeatId === seat.id; }
