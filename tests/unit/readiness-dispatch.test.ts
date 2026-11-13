@@ -178,3 +178,46 @@ test('blockers: only people who may change the tasks open them; resolving needs 
   assert.equal(blockers.get(blocker.id).resolvedBy, 'ba-lead');
   fixture.close();
 });
+
+test('an assignee cannot unlink a blocker from its own task; a leader can, and the task is told', () => {
+  const fixture = dispatched(); const { blockers, messages } = fixture.office;
+  const [a, b] = [exec(fixture, 'A', 'dev-be'), exec(fixture, 'B', 'dev-fe')];
+  const blocker = blockers.open(seat('dev-lead'), { kind: 'permission', description: 'No staging grant', taskIds: [a.id, b.id], resolverRole: 'manager', nextStep: 'grant' });
+  assert.throws(() => blockers.unlink(seat('dev-be'), blocker.id, a.id), /forbidden_blocker/);
+  assert.deepEqual(blockers.unlink(seat('dev-lead'), blocker.id, a.id).taskIds, [b.id]);
+  assert.ok(messages.list(manager, 'dev', { limit: 200 }).some(message => message.body.includes(`unlinked from this task`)));
+  fixture.close();
+});
+
+test('reopening a done task clears its result, so a stale pass opens nothing', () => {
+  const fixture = dispatched(); const { tasks, dispatch } = fixture.office;
+  const a = exec(fixture, 'A', 'dev-be'); finish(fixture, a.id, 'pass');
+  const b = exec(fixture, 'B', 'dev-fe', { dependsOn: [a.id], passRequired: [a.id] });
+  assert.equal(dispatch.readiness(b.id).state, 'ready');
+  assert.equal(tasks.update(seat('dev-lead'), a.id, { status: 'todo', note: 'regression' }).result, 'unknown');
+  tasks.update(seat('dev-be'), a.id, { status: 'doing' }); tasks.update(seat('dev-be'), a.id, { status: 'done', note: 'closed again' });
+  assert.equal(dispatch.readiness(b.id).state, 'needs-action', 'no new verification recorded');
+  fixture.close();
+});
+
+test('handing a running task to someone already doing an execution task is refused', () => {
+  const fixture = dispatched(); const { tasks, dispatch } = fixture.office;
+  const busy = exec(fixture, 'Busy', 'dev-fe'); dispatch.start(seat('dev-fe'), busy.id, {}, 'mcp');
+  const live = exec(fixture, 'Live', 'dev-be'); dispatch.start(seat('dev-be'), live.id, {}, 'mcp');
+  assert.throws(() => tasks.update(seat('dev-lead'), live.id, { assigneeSeatId: 'dev-fe', status: 'doing', handoffNote: 'take over the API work' }), /owner_busy/);
+  assert.equal(tasks.get(live.id).assigneeSeatId, 'dev-be');
+  fixture.close();
+});
+
+test('a failed nested step rolls back alone and the database keeps working', () => {
+  const fixture = dispatched(); const { db } = fixture;
+  db.transaction(() => {
+    db.raw.prepare("INSERT INTO app_settings(key,value) VALUES ('outer','1')").run();
+    assert.throws(() => db.transaction(() => { db.raw.prepare("INSERT INTO app_settings(key,value) VALUES ('inner','1')").run(); throw new Error('boom'); }), /boom/);
+  });
+  assert.ok(db.raw.prepare("SELECT 1 FROM app_settings WHERE key='outer'").get());
+  assert.equal(db.raw.prepare("SELECT 1 FROM app_settings WHERE key='inner'").get(), undefined);
+  assert.throws(() => db.transaction(() => { throw new Error('outer boom'); }), /outer boom/);
+  assert.equal(db.transaction(() => 42), 42, 'depth back to zero: a new top-level transaction starts');
+  fixture.close();
+});

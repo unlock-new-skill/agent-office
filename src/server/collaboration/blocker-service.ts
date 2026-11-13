@@ -30,8 +30,9 @@ export class BlockerService {
     if (filter.status) { clauses.push('status=?'); params.push(filter.status); }
     if (filter.taskId) { clauses.push('id IN (SELECT blocker_id FROM task_blockers WHERE task_id=?)'); params.push(filter.taskId); }
     const rows = this.db.raw.prepare(`SELECT ${COLUMNS} FROM blockers ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY number`).all(...params) as BlockerRow[];
-    const links = this.db.raw.prepare('SELECT task_id AS taskId,blocker_id AS blockerId FROM task_blockers ORDER BY task_id').all() as Array<{ taskId: string; blockerId: string }>;
-    return rows.map(row => ({ ...row, refs: JSON.parse(row.refs) as string[], taskIds: links.filter(link => link.blockerId === row.id).map(link => link.taskId) }));
+    const links = new Map<string, string[]>();
+    for (const link of this.db.raw.prepare('SELECT task_id AS taskId,blocker_id AS blockerId FROM task_blockers ORDER BY task_id').all() as Array<{ taskId: string; blockerId: string }>) links.set(link.blockerId, [...links.get(link.blockerId) ?? [], link.taskId]);
+    return rows.map(row => ({ ...row, refs: JSON.parse(row.refs) as string[], taskIds: links.get(row.id) ?? [] }));
   }
 
   get(id: string): Blocker {
@@ -85,12 +86,20 @@ export class BlockerService {
     return this.changed(blocker);
   }
 
+  /** Unlinking frees a task from the cause, so it needs the same rights as resolving (not just the task's assignee). */
   unlink(actor: Actor, id: string, taskId: string): Blocker {
-    const current = this.get(id); this.checkTasks(actor, [taskId]);
+    const current = this.get(id); this.assertManages(actor, current);
     if (!current.taskIds.includes(taskId)) throw notFound('blocker_link');
     if (current.taskIds.length === 1) throw invalid('last_task: resolve the blocker instead of unlinking its last task');
-    this.db.raw.prepare('DELETE FROM task_blockers WHERE task_id=? AND blocker_id=?').run(taskId, id);
-    return this.changed(this.get(id));
+    const blocker = this.db.transaction(() => {
+      this.db.raw.prepare('DELETE FROM task_blockers WHERE task_id=? AND blocker_id=?').run(taskId, id);
+      this.db.raw.prepare('UPDATE blockers SET updated_at=? WHERE id=?').run(Date.now(), id);
+      const updated = this.get(id);
+      this.tell({ ...updated, status: 'resolved' }, actor, `unlinked from this task by ${actorLabel(actor)} (still open on ${updated.taskIds.join(', ')})`, [taskId]);
+      return updated;
+    });
+    this.emit({ type: 'collab', kind: 'task', task: this.tasks.get(taskId) });
+    return this.changed(blocker);
   }
 
   resolve(actor: Actor, id: string, resolution: string): Blocker { return this.setStatus(actor, id, 'resolved', resolution); }

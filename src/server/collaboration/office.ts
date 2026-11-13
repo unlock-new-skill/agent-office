@@ -1,5 +1,6 @@
 import type { Database } from '../db/database.js';
 import type { AfterTask, CollabEvent, Department, Seat, SeatHandoff, Task } from '../../shared/contracts.js';
+import { logger } from '../logger.js';
 import { BlockerService } from './blocker-service.js';
 import { DispatchService } from './dispatch-service.js';
 import { HandoffService } from './handoff-service.js';
@@ -52,9 +53,11 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
   const blockers = new BlockerService(db, org, tasks, options.emit);
   const dispatch = new DispatchService(db, org, tasks, blockers);
   tasks.startGate = candidate => dispatch.gate(candidate); tasks.dispatching = () => dispatch.mode() === 'on';
-  tasks.onChanged = () => dispatch.refresh(); blockers.onChanged = () => dispatch.refresh();
+  // The change itself is committed already: a failed recompute is logged (and redone on the next change or restart), not returned as an error.
+  const refresh = (): void => { try { dispatch.refresh(); } catch (error) { logger.error(error); } };
+  tasks.onChanged = refresh; blockers.onChanged = refresh;
   // A removed seat unassigns its tasks: readiness follows org changes too.
-  org.onMutated = () => { wakeService.notify(); dispatch.refresh(); };
+  org.onMutated = () => { wakeService.notify(); refresh(); };
   // Reconcile at start: readiness and offers missed while the server was down are computed again (idempotent).
   dispatch.refresh();
   const handoffs = new HandoffService(db, org, messages);

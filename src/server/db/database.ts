@@ -193,14 +193,13 @@ export class Database {
     this.depth++;
     try {
       const result = operation();
-      this.depth--;
       this.raw.exec(savepoint ? `RELEASE ${savepoint}` : 'COMMIT');
       return result;
     } catch (error) {
-      this.depth--;
-      this.raw.exec(savepoint ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK');
+      // A failed COMMIT/RELEASE leaves the transaction open: roll it back too (ignore "no transaction" if it already ended).
+      try { this.raw.exec(savepoint ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK'); } catch { /* already closed */ }
       throw error;
-    }
+    } finally { this.depth--; }
   }
 
   close(): void { this.raw.close(); }

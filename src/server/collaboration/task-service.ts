@@ -210,12 +210,13 @@ export class TaskService {
     // passRequired names the dependencies that need a PASS; dropping a dependency drops its condition too.
     const passRequired = patch.passRequired !== undefined ? [...new Set(patch.passRequired)] : task.passRequired.filter(id => dependsOn.includes(id));
     if (passRequired.some(id => !dependsOn.includes(id))) throw invalid('pass_required_not_in_depends_on');
-    const result = patch.result ?? task.result;
+    // A reopened task's old result no longer describes it: back to unknown unless one is recorded with the change.
+    const result = patch.result ?? (task.status === 'done' && status !== 'done' ? 'unknown' : task.result);
     if (status === 'done' && task.status !== 'done') {
       const open = this.steps(task.id).filter(step => step.status !== 'done').map(step => step.id);
       if (open.length > 0) throw invalid(`steps_open: ${open.join(', ')} not done yet`);
     }
-    if (status === 'doing' && task.status !== 'doing' && actor.kind === 'seat') {
+    if (status === 'doing' && (task.status !== 'doing' || reassigned) && actor.kind === 'seat') {
       const waiting = this.unmetDependencies(dependsOn, passRequired);
       if (waiting.length > 0) throw invalid(`waiting_for_dependencies: ${waiting.join(', ')} not done yet; ask your leader or the PM to reorder`);
       if (kind === 'execution' && assigneeId === null) throw invalid('assignee_required: an execution task needs an assignee before it starts');

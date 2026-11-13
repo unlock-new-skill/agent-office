@@ -54,7 +54,7 @@ export class DispatchService {
           const becameReady = ready && previous?.ready !== 1;
           const generation = (previous?.generation ?? 0) + (becameReady ? 1 : 0);
           const readySince = ready ? (becameReady ? now : previous?.readySince ?? now) : null;
-          if (task.status === 'doing' && previous?.gateOk === 1 && !gateOk) this.warn(task, evaluation);
+          if (task.status === 'doing' && previous?.gateOk === 1 && !gateOk && this.mode() !== 'off') this.warn(task, evaluation);
           const unchanged = previous && previous.ready === Number(ready) && previous.gateOk === Number(gateOk) && previous.generation === generation;
           if (!unchanged) upsert.run(task.id, ready ? 1 : 0, generation, gateOk ? 1 : 0, readySince, JSON.stringify(evaluation.reasons), now);
         }
@@ -114,8 +114,10 @@ export class DispatchService {
     const entries = open.filter(task => task.status !== 'doing').map(task => ({ task, reasons: snapshot.evals.get(task.id)!.reasons }));
     const resolver = filter.resolver ? `@${filter.resolver.replace(/^@/, '')}` : null;
     const keep = (groups: ReturnType<typeof groupReasons>): ReturnType<typeof groupReasons> => resolver ? groups.filter(group => group.resolver === resolver) : groups;
-    const needsAction = keep(groupReasons(entries, 'needs-action', id => snapshot.blockers.get(id), id => snapshot.byId.get(id)));
-    const waiting = keep(groupReasons(entries, 'waiting', id => snapshot.blockers.get(id), id => snapshot.byId.get(id)));
+    // Group titles name the predecessor; a seat only sees the details of tasks it may read.
+    const visible = (id: string): Task | undefined => { const task = snapshot.byId.get(id); return task && this.tasks.canRead(actor, task) ? task : undefined; };
+    const needsAction = keep(groupReasons(entries, 'needs-action', id => snapshot.blockers.get(id), visible));
+    const waiting = keep(groupReasons(entries, 'waiting', id => snapshot.blockers.get(id), visible));
     const stateOf = (task: Task): string => snapshot.evals.get(task.id)!.state;
     const ready = open.filter(task => stateOf(task) === 'ready').map(task => task.id);
     const doing = open.filter(task => task.status === 'doing').map(task => task.id);

@@ -36,7 +36,9 @@ const sameIds = (a: string[], b: string[]): boolean => a.length === b.length && 
  * Edits the task in place (title, requirement, assignee, estimate, order, kind). Only changed fields are sent, with the
  * revision the form was opened at: if someone changed the task meanwhile the server refuses and the card shows the new state.
  */
-function EditForm({ task, seats, api, notify, onDone }: { task: Task; seats: Seat[]; api: Api; notify: (text: string) => void; onDone: () => void }): ReactNode {
+function EditForm({ task: live, seats, api, notify, onDone }: { task: Task; seats: Seat[]; api: Api; notify: (text: string) => void; onDone: () => void }): ReactNode {
+  // The version the form was opened on: edits are compared and sent against it, so a change made meanwhile conflicts.
+  const [task] = useState(live); const changedMeanwhile = live.revision !== task.revision;
   const [title, setTitle] = useState(task.title); const [body, setBody] = useState(task.body); const [assignee, setAssignee] = useState(task.assigneeSeatId ?? '');
   const [estimate, setEstimate] = useState(task.estimateMinutes === null ? '' : String(task.estimateMinutes / 60)); const [dependsOn, setDependsOn] = useState(task.dependsOn.join(', '));
   const [kind, setKind] = useState<TaskKind | ''>(task.kind ?? ''); const [reason, setReason] = useState(''); const [handoffNote, setHandoffNote] = useState('');
@@ -79,6 +81,7 @@ function EditForm({ task, seats, api, notify, onDone }: { task: Task; seats: Sea
       <label>Requirement<textarea value={body} onChange={event => setBody(event.target.value)} rows={5} maxLength={8000} /></label>
       {handingOver && <label>Handoff (required: the task is in progress)<textarea value={handoffNote} onChange={event => setHandoffNote(event.target.value)} rows={3} maxLength={2000} required placeholder={'Done so far:\nLeft:\nWhere the work is:'} /></label>}
       <label>Reason (kept in the task history)<input value={reason} onChange={event => setReason(event.target.value)} maxLength={2000} /></label>
+      {changedMeanwhile && <p className="task-no-estimate" role="status">Someone changed this task while you were editing. Saving will be refused: cancel and edit again on the latest version.</p>}
       <div className="row-actions"><button type="submit" className="btn btn-primary">Save</button><button type="button" className="btn" onClick={onDone}>Cancel</button></div>
     </form>
   );

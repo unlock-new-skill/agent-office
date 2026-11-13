@@ -63,6 +63,16 @@ SessionStart with `source=compact` calls `/v1/me?source=compact`; the brief then
 
 Tasks may carry `requesterSeatId` (a leader of another department, set via `requestedBy`). Creation posts an acceptance line in `#leaders` mentioning the requester; `blocked`/`done` post the result there too, so the serving leader does not relay. A department's optional `deputySeatId` (member) is a `#leaders` member, has the leader's task rights in its department, and `WakeService.standingInFor` wakes it with the leader's mentions while the leader has no session, ended, is wake-limited, or idle > 10 min without a parked wait. Leaders' and deputies' handoff briefs list requests served and requests waiting. Schema v6 adds both columns.
 
+## Task edits, blockers, readiness, dispatch (schema v22)
+
+- **Coordinators**: `seats.coordinator` (set by the manager) or the env seat `AGENT_OFFICE_COORDINATOR_SEAT`; leader rights over every department's tasks, member of `#leaders`. Read refusals are `forbidden_task_read`, change refusals `forbidden_task_change`.
+- **Edits in place** (`TaskService.update`): one PATCH contract for UI (manager cookie → source `ui`) and MCP (bearer → `mcp`). Omitted fields keep their value; everything is validated before the write; `tasks.revision` is compared-and-set (`expectedRevision` → 409 `stale_revision` with the current task); a `doing` task changes assignee only with `handoffNote` and returns to `todo`. Each changed field lands in `task_changes` (actor, source, before/after, reason). `kind`: `execution` (START needs an owner and an estimate ≤ 240), `tracking` (followed apart), NULL = legacy, unclassified.
+- **Results**: `tasks.result` (`unknown` by default) is independent from `done`; `tasks.pass_required` lists the dependencies that need `done` + `pass`.
+- **Blockers** (`BlockerService`): `blockers` + `task_blockers`; kinds dependency, missing-input, permission, environment, defect, owner-missing, decision; resolve needs evidence, reopen models a revoked grant or closed window. Changes are posted in each affected task's thread.
+- **Readiness** (`readiness.ts`, pure): ready / waiting / needs-action / doing / done / tracking with reasons grouped by root cause (blocker id, `dep:`, `result:`, `confirm:`, missing owner/estimate/kind, blocked without record). `GET /v1/board` groups them and counts each task once.
+- **Dispatch** (`DispatchService`): after every task, blocker or org change and once at start, every task is re-evaluated and stored in `task_readiness` (a real not-ready → ready bumps `generation`). Mode (`app_settings` `dispatch.mode`): `off`, `suggest` (default), `on`. With `on`, the oldest ready execution task of a free owner gets one line, keyed in `task_notifications` (task, kind, generation, recipient) and written in the same transaction (nested transactions are savepoints), so restarts and replays neither repeat nor lose it. START (`POST /v1/tasks/:id/start`) checks the offered generation, re-runs the gate (readiness + no other execution `doing` for the owner) and claims by revision. A `doing` task whose gate breaks gets one warning to owner and leader; nothing is stopped or changed.
+- **Channel visitors**: `channel_visitors` lets leaders and coordinators join another department channel (membership derived in `syncMembership`); `@all` there expands to the department's own seats only.
+
 ## Public deployment
 
 `AGENT_OFFICE_PUBLIC_ORIGIN` adds the public host/origin to the allowlists (`src/server/http-policy.ts`, shared by app, static handler and WS upgrade), marks the cookie `Secure` and sends HSTS. Security headers (CSP, frame/sniff/referrer) on every response. `AGENT_OFFICE_TRUST_PROXY` keys login throttling on the proxy-appended `X-Forwarded-For` hop. `/join/:id` and `/agent-guide` require a manager or agent session. Deployment: `docker-compose.prod.yml` + `deploy/Caddyfile`.
@@ -101,6 +111,9 @@ On Stop the hook reads the transcript tail (`transcript_path`) and sends the mod
 | `src/server/collaboration/message-service.ts` | Channel posts, paging, read cursors, mentions, routing |
 | `src/server/collaboration/wake-service.ts` | Wake rules, long-poll waiters, loop guard, reason text |
 | `src/server/collaboration/task-service.ts` | Department tasks, permissions, system lines |
+| `src/server/collaboration/blocker-service.ts` | Blocker records linked to tasks, resolve/reopen, thread lines |
+| `src/server/collaboration/readiness.ts` | Pure readiness evaluation and grouping by root cause |
+| `src/server/collaboration/dispatch-service.ts` | Persisted readiness, ready offers + ledger, owner queue, START, board |
 | `src/server/collaboration/handoff-service.ts` | Seat handoff notes and SessionStart brief |
 | `src/server/collaboration/permission-service.ts` | Remote permission prompts, long-poll decisions |
 | `src/server/http-policy.ts` | Host/origin allowlists, security headers, client peer |

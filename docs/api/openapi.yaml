@@ -188,6 +188,70 @@ paths:
       parameters: [{in: path, name: id, required: true, schema: {type: string}}, {in: header, name: X-CSRF-Token, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [behavior], additionalProperties: false, properties: {behavior: {enum: [allow, deny]}, message: {type: string, maxLength: 500}}}}}}
       responses: {'200': {description: Decided PermissionRequest}, '409': {description: permission_already_resolved}}
+  /v1/tasks/{id}:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: '{task, history, changes (field audit), readiness, blockers}'}, '403': {description: forbidden_task_read}}
+    patch:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: 'Edit in place; omitted fields keep their value. Leader-only fields: assigneeSeatId, title, body, kind, dependsOn, passRequired. Source is ui (manager) or mcp (bearer).'
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TaskPatch'}}}}
+      responses: {'200': {description: Updated task}, '400': {description: 'invalid_*, waiting_for_dependencies, execution_estimate_required, not_ready, pass_required_not_in_depends_on'}, '403': {description: 'forbidden_task_change, leader_only, assignee_outside_department'}, '409': {description: 'stale_revision (+ task), reassign_doing_requires_handoff, owner_busy'}}
+  /v1/tasks/{id}/start:
+    post:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: Assignee claims a ready execution task; re-checks readiness and that the owner has no other execution task in progress.
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, properties: {generation: {type: integer, minimum: 0}, expectedRevision: {type: integer, minimum: 0}}}}}}
+      responses: {'200': {description: Task in doing}, '400': {description: 'not_ready, start_needs_execution_task'}, '403': {description: start_by_assignee_only}, '409': {description: 'already_started, readiness_changed (+ readiness), owner_busy'}}
+  /v1/board:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: Tasks grouped by root cause (needsAction, waiting) plus ready, doing, done, tracking; totals count each task once. Non-coordinator seats see their own department.
+      parameters: [{in: query, name: departmentId, schema: {type: string}}, {in: query, name: assignee, schema: {type: string}}, {in: query, name: resolver, schema: {type: string}}]
+      responses: {'200': {description: Board}, '403': {description: forbidden_task_read}}
+  /v1/blockers:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      parameters: [{in: query, name: status, schema: {enum: [open, resolved]}}, {in: query, name: taskId, schema: {type: string}}]
+      responses: {'200': {description: '{blockers} visible to the caller'}}
+    post:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BlockerInput'}}}}
+      responses: {'201': {description: Blocker}, '403': {description: forbidden_task_change}}
+  /v1/blockers/{id}:
+    patch:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, description: 'description, resolverSeatId, resolverRole, nextStep, dueAt, refs'}}}}
+      responses: {'200': {description: Blocker}, '403': {description: forbidden_blocker}}
+  /v1/blockers/{id}/{action}:
+    post:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: 'link {taskIds}, unlink {taskId}, resolve {resolution: evidence or reason}, reopen {reason}'
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}, {in: path, name: action, required: true, schema: {enum: [link, unlink, resolve, reopen]}}]
+      responses: {'200': {description: Blocker}, '400': {description: 'resolution_required, reason_required, already_open, already_resolved, last_task'}, '403': {description: 'forbidden_blocker, forbidden_task_change'}}
+  /v1/settings/dispatch:
+    get:
+      security: [{cookieAuth: []}]
+      responses: {'200': {description: '{mode: off | suggest | on}'}}
+    put:
+      security: [{cookieAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [mode], properties: {mode: {enum: [off, suggest, on]}}}}}}
+      responses: {'200': {description: '{mode}'}}
+  /v1/channels/{id}/join:
+    post:
+      security: [{bearerAuth: []}]
+      description: Leaders and coordinators join another department channel.
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: Channel}, '400': {description: only_department_channels_can_be_joined}, '403': {description: join_channel_leaders_only}}
+  /v1/channels/{id}/leave:
+    post:
+      security: [{bearerAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: '{ok: true}'}}
 components:
   securitySchemes:
     cookieAuth: {type: apiKey, in: cookie, name: agent_office_session}
@@ -199,6 +263,15 @@ components:
       type: object
       required: [seatId, state, sessionId, restarts, permissionMode, detail]
       properties: {seatId: {type: string}, state: {type: string, enum: [starting, running, idle, stopped, failed]}, sessionId: {type: [string, 'null']}, restarts: {type: integer}, permissionMode: {type: string}, detail: {type: string, maxLength: 300}}
+    TaskPatch:
+      type: object
+      additionalProperties: false
+      properties: {expectedRevision: {type: integer, minimum: 0}, status: {enum: [todo, doing, blocked, done]}, note: {type: string, maxLength: 2000}, title: {type: string, minLength: 1, maxLength: 200}, body: {type: string, maxLength: 8000}, assigneeSeatId: {type: [string, 'null']}, estimateMinutes: {type: [integer, 'null'], minimum: 1, maximum: 10080}, dependsOn: {type: array, maxItems: 20, items: {type: string}}, passRequired: {type: array, maxItems: 20, items: {type: string}}, kind: {enum: [execution, tracking]}, result: {enum: [not-applicable, pass, fail, inconclusive, unknown]}, reason: {type: string, maxLength: 2000}, handoffNote: {type: string, maxLength: 2000}}
+    BlockerInput:
+      type: object
+      required: [kind, description, taskIds]
+      additionalProperties: false
+      properties: {kind: {enum: [dependency, missing-input, permission, environment, defect, owner-missing, decision]}, description: {type: string, minLength: 1, maxLength: 500}, taskIds: {type: array, minItems: 1, maxItems: 50, items: {type: string}}, resolverSeatId: {type: [string, 'null']}, resolverRole: {type: [string, 'null'], maxLength: 80}, nextStep: {type: string, maxLength: 1000}, dueAt: {type: [integer, 'null']}, originTaskId: {type: [string, 'null']}, refs: {type: array, maxItems: 10, items: {type: string, maxLength: 300}}}
     LoginRequest: {type: object, required: [password], additionalProperties: false, properties: {password: {type: string, minLength: 1, maxLength: 256, description: 'Login accepts any non-empty attempt; first-run setup/reset enforces 12+ characters.'}}}
     EnrollmentRequest:
       type: object
