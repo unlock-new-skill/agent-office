@@ -4,6 +4,16 @@ import type { Api } from '../api/http.js';
 import { connectStream } from '../api/stream.js';
 import { initialOfficeState, officeReducer, type OfficeState } from './office-store.js';
 
+/** Every task of the office: the manager pages through the stable snapshot, so lists over 500 are never cut. */
+const allTasks = async (api: Api): Promise<{ tasks: Task[] }> => {
+  const tasks: Task[] = []; let cursor: string | null = null;
+  do {
+    const page: { tasks: Task[]; nextCursor: string | null } = await api.get(`/v1/tasks?limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+    tasks.push(...page.tasks); cursor = page.nextCursor;
+  } while (cursor);
+  return { tasks };
+};
+
 export type OfficeHandle = {
   state: OfficeState;
   api: Api;
@@ -22,7 +32,7 @@ export const useOffice = (api: Api): OfficeHandle => {
   const agentRefresh = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshAll = useCallback(async () => {
-    const [org, agents, tasks, permissions, runners] = await Promise.all([api.get<OrgView>('/v1/org'), api.get<{ agents: AgentSnapshot[] }>('/v1/agents'), api.get<{ tasks: Task[] }>('/v1/tasks'), api.get<{ pending: PermissionRequest[] }>('/v1/permissions'), api.get<{ runners: RunnerView[] }>('/v1/runners')]);
+    const [org, agents, tasks, permissions, runners] = await Promise.all([api.get<OrgView>('/v1/org'), api.get<{ agents: AgentSnapshot[] }>('/v1/agents'), allTasks(api), api.get<{ pending: PermissionRequest[] }>('/v1/permissions'), api.get<{ runners: RunnerView[] }>('/v1/runners')]);
     dispatch({ type: 'org', org }); dispatch({ type: 'agents', agents: agents.agents }); dispatch({ type: 'tasks', tasks: tasks.tasks }); dispatch({ type: 'permissions', pending: permissions.pending }); dispatch({ type: 'runners', runners: runners.runners });
   }, [api]);
 
