@@ -122,7 +122,7 @@ test('expiry is never approval; only the manager decides; requests need a readab
   assert.throws(() => approvals.request(seat('ba-docs'), { taskId: task.id, ...ASK }), /forbidden_task_read/);
   assert.throws(() => approvals.request(seat('ba-docs'), { channelId: 'dev', threadSeq: 1, ...ASK }), /forbidden_channel|not_found/);
   assert.throws(() => approvals.request(seat('dev-be'), { ...ASK }), /approval_needs_task_or_thread/);
-  for (const secret of ['password=hunter2hunter2', 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz', 'use token ghp_abcdefghijklmnopqrstuvwxyz0123', 'postgres://user:pa55word@db:5432/x', '123456789:AAEhBP0av28eRaVbXoCnAbCdEfGhIjKlMnO', 'key AbCdEfGh1234567890IjKlMnOp9876543210Qr', '{"api_key": "abcd1234efgh"}', 'password "hunter2!"', 'the db password is Hunter2!x']) {
+  for (const secret of ['password=hunter2hunter2', 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz', 'use token ghp_abcdefghijklmnopqrstuvwxyz0123', 'postgres://user:pa55word@db:5432/x', '123456789:AAEhBP0av28eRaVbXoCnAbCdEfGhIjKlMnO', 'key AbCdEfGh1234567890IjKlMnOp9876543210Qr', '{"api_key": "abcd1234efgh"}', 'password "hunter2!"', 'the db password is Hunter2!x']) { // gitleaks:allow (synthetic test string)
     assert.throws(() => approvals.request(seat('dev-be'), { taskId: task.id, ...ASK, reason: secret }), /approval_contains_secret/, secret);
   }
   for (const fine of ['/Users/x/Desktop/my-studio/plans/reports/t-pm-1/report.md', 'commit 9641c54a9641c54a9641c54a9641c54a9641c54a', 'set AGENT_OFFICE_PUBLIC_ORIGIN in .env (value not included)']) assert.ok(!looksSecret(fine), fine);
@@ -196,7 +196,7 @@ test('API: a seat asks, a retry returns 200 with the same id, only the manager d
   assert.equal(status.approval.status, 'approved'); assert.deepEqual(status.events.map(event => event.kind), ['requested', 'approved']);
   const other = fixture.seatToken('ba-docs');
   assert.equal((await fixture.agent(other, `/v1/approvals/${approval.id}`)).status, 403);
-  assert.equal((await fixture.agent(token, '/v1/approvals', { body: { taskId: task.id, ...ASK, scope: 'api_key=abcd1234efgh' } })).status, 400);
+  assert.equal((await fixture.agent(token, '/v1/approvals', { body: { taskId: task.id, ...ASK, scope: 'api_key=abcd1234efgh' } })).status, 400); // gitleaks:allow (synthetic test string)
   fixture.close();
 });
 
