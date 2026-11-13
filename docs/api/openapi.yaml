@@ -197,7 +197,7 @@ paths:
   /v1/progress:
     get:
       security: [{cookieAuth: []}, {bearerAuth: []}]
-      description: 'Participants and outputs of tasks the caller can read, plus every seat activity {seatId, state: executing|reviewing|waiting|available|unknown, taskId, taskTitle, role, phase, since, source, stale, reasons, also[]} derived from task records only (stale after 60 min).'
+      description: 'Participants and outputs of tasks the caller can read, plus every seat activity {seatId, state: executing|reviewing|waiting|unknown (available reserved, not derived), taskId, taskTitle, role, phase, since, source, stale, reasons, also[]} derived from task records only (stale after 60 min).'
       responses: {'200': {description: '{participants, outputs, activity}'}}
   /v1/tasks/{id}/participants:
     put:

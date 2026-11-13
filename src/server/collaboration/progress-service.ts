@@ -131,8 +131,8 @@ export class ProgressService {
    *   a task without any participant falls back to its owner's current doing run (legacy), never its first start;
    * - waiting: a recent waiting role, or an active one claimed before its task was blocked (with readiness reasons);
    *   an active role reported after the block stays executing / reviewing, with the task's blockers in `reasons`;
-   * - available: the seat's latest role was finished or stopped recently and nothing else is open for it;
-   * - unknown: nothing recent — the last signal and its time are shown. Online state is reported apart, never here.
+   * - available: never derived — finishing or stopping a phase is not a confirmation of availability (reserved state);
+   * - unknown: nothing recent, or the last role is done / stopped — the last signal and its time are shown. Online state is reported apart, never here.
    * Owning a blocked task says nothing about the person: it is listed under `also`, not used as the state.
    */
   activity(now = Date.now()): SeatActivity[] {
@@ -178,10 +178,10 @@ export class ProgressService {
       }
       const lastActive = [...live.map(row => ({ taskId: row.taskId, role: row.role as ParticipantRole | 'owner', phase: row.phase, at: row.updatedAt, source: `${row.source} by ${row.updatedBy}` })), ...legacy.map(entry => ({ taskId: entry.task.id, role: 'owner' as const, phase: '', at: entry.since, source: 'task status doing (no participants recorded)' }))].sort((a, b) => b.at - a.at)[0];
       if (lastActive) return { ...base, state: 'unknown' as const, taskId: lastActive.taskId, taskTitle: title(lastActive.taskId), role: lastActive.role, phase: lastActive.phase, since: lastActive.at, source: lastActive.source, stale: true, reasons: [`no update for ${Math.round((now - lastActive.at) / 60_000)}m`] };
+      // A finished or stopped phase says what the seat last did, not that it is free: unknown, with that last signal.
       const finished = mine.filter(row => row.state === 'done' || row.state === 'stopped').sort((a, b) => b.updatedAt - a.updatedAt)[0];
-      const ownsOpen = also.some(entry => entry.role === 'owner' && entry.state !== 'blocked' && entry.state !== 'todo');
-      if (finished && fresh(finished.updatedAt) && !ownsOpen) return { ...base, state: 'available' as const, taskId: finished.taskId, taskTitle: title(finished.taskId), role: finished.role, phase: finished.phase, since: finished.updatedAt, source: `${finished.role} ${finished.state} (${finished.source} by ${finished.updatedBy})`, stale: false, reasons: [] };
-      return { ...base, state: 'unknown' as const, taskId: null, taskTitle: null, role: null, phase: '', since: finished?.updatedAt ?? null, source: finished ? `last role ${finished.state} (${finished.source} by ${finished.updatedBy})` : 'no activity recorded', stale: Boolean(finished), reasons: [] };
+      if (finished) return { ...base, state: 'unknown' as const, taskId: finished.taskId, taskTitle: title(finished.taskId), role: finished.role, phase: finished.phase, since: finished.updatedAt, source: `last role ${finished.role} ${finished.state} (${finished.source} by ${finished.updatedBy})`, stale: !fresh(finished.updatedAt), reasons: ['no availability confirmed'] };
+      return { ...base, state: 'unknown' as const, taskId: null, taskTitle: null, role: null, phase: '', since: null, source: 'no activity recorded', stale: false, reasons: [] };
     });
   }
 

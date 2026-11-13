@@ -191,7 +191,7 @@ Open **Tasks** at the top of a channel, or the **Tasks** tab for the whole offic
   intake — with its state and the concrete phase (the owner does not change); **+ Output** records a partial result
   (scope such as local or real-env, evidence, result, what acceptance is still missing). Received is not accepted: the
   lead, the PM or a reviewer clicks **Accept**. Seat cards on Org, Tasks and Map show what each seat is really doing —
-  executing, reviewing, waiting, available or unknown, with task, phase, time and source — from these records only,
+  executing, reviewing, waiting or unknown (a finished role is not availability), with task, phase, time and source — from these records only,
   never from being online; nothing for 60 minutes shows as unknown (stale).
 - **Blockers:** when something stops work, open one blocker for the root cause — kind (dependency, missing-input,
   permission, environment, defect, owner-missing, decision), one sentence on what is missing, the resolver, the next

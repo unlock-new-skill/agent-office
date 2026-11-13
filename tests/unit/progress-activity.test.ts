@@ -95,14 +95,21 @@ test('F: silence is unknown with the last signal time, never assumed from owning
   fixture.close();
 });
 
-test('legacy fallback uses the current doing run, and a finished role is evidence of availability', () => {
+test('legacy fallback uses the current doing run; a done or stopped role alone is unknown, never available', () => {
   const fixture = createSeededOffice(); const { progress, tasks } = fixture.office;
   const task = make(fixture, 'Legacy doing', 'dev-be'); tasks.update(seat('dev-be'), task.id, { status: 'doing' });
   const legacy = activityOf(fixture, 'dev-be');
   assert.equal(legacy.state, 'executing'); assert.equal(legacy.role, 'owner'); assert.match(legacy.source, /no participants recorded/);
   const done = make(fixture, 'Reviewed', 'dev-fe');
-  progress.setParticipant(manager, done.id, { seatId: 'dev-mobile', role: 'reviewer', state: 'done' }, 'ui');
-  assert.equal(activityOf(fixture, 'dev-mobile').state, 'available');
+  progress.setParticipant(manager, done.id, { seatId: 'dev-mobile', role: 'reviewer', state: 'done', phase: 'review r2' }, 'ui');
+  const finished = activityOf(fixture, 'dev-mobile');
+  assert.equal(finished.state, 'unknown', 'finishing a phase is not availability');
+  assert.equal(finished.taskId, done.id); assert.equal(finished.phase, 'review r2'); assert.match(finished.source, /last role reviewer done/); assert.equal(finished.stale, false);
+  const stopped = make(fixture, 'Stopped on error', 'dev-be');
+  progress.setParticipant(manager, stopped.id, { seatId: 'dev-unity', role: 'executor', state: 'stopped', phase: 'export failed', note: 'error' }, 'ui');
+  const halted = activityOf(fixture, 'dev-unity');
+  assert.equal(halted.state, 'unknown', 'a stopped role is not availability'); assert.match(halted.source, /last role executor stopped/);
+  assert.ok(fixture.office.progress.activity().every(entry => entry.state !== 'available'), 'available is never derived');
   fixture.close();
 });
 
