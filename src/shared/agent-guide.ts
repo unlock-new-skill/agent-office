@@ -135,7 +135,7 @@ opens again by itself then. No secrets, tokens or raw logs in a blocker. Never c
 board look better.
 
 **Exceptions digest (leaders and the PM).** Every few minutes Agent Office posts in \`#leaders\` only the exceptions
-that are new: tasks without an assignee, tasks running past their estimate, running tasks whose conditions broke,
+that are new: tasks without an assignee, tasks whose time in doing (summed over runs, not wall-clock) passed their estimate, running tasks whose conditions broke,
 blockers past their due date, without a resolver or unchanged for 24h. Each line names who acts and the next step;
 an exception is reported once until it changes. Act in the task's thread; do not answer the digest itself.
 

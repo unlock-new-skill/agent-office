@@ -7,7 +7,10 @@ import { LEADERS_CHANNEL_ID, type OrgService } from './org-service.js';
 
 /** A blocker with no due date and no change for this long is reported as stale. */
 export const STALE_BLOCKER_MS = 24 * 3_600_000;
-/** A task in progress is overdue once it ran its estimate plus this margin. */
+/**
+ * A task in progress is overdue once its time spent in doing — summed over every doing period from the status history,
+ * not wall-clock since the first start — exceeds its estimate plus this margin. Time blocked, todo or done never counts.
+ */
 const OVERDUE_MARGIN = 1.25;
 const MAX_LINES = 30;
 
@@ -28,11 +31,15 @@ export class AlertService {
     // One org read per scan (view() is heavy), not one per alert.
     const leaders = new Map(this.org.view().seats.filter(seat => seat.role === 'leader').map(seat => [seat.departmentId, seat.id]));
     const leader = (department: string): string => { const id = leaders.get(department); return id ? `@${id}` : 'manager'; };
+    const doing = this.doingTime(entries.filter(entry => entry.task.status === 'doing').map(entry => entry.task.id), now);
     for (const { task, evaluation } of entries) {
       if (task.status === 'done' || task.kind === 'tracking') continue;
       if (task.assigneeSeatId === null) alerts.push({ key: `owner:${task.id}`, kind: 'owner-missing', departmentId: task.departmentId, owner: leader(task.departmentId), taskIds: [task.id], text: `${task.id} "${task.title}" has no assignee`, next: 'set assigneeSeatId (or close it if it is no longer needed — with its output)' });
-      if (task.status === 'doing' && task.actualStart !== null && task.estimateMinutes !== null && now > task.actualStart + task.estimateMinutes * 60_000 * OVERDUE_MARGIN) {
-        alerts.push({ key: `overdue:${task.id}:${task.actualStart}`, kind: 'overdue', departmentId: task.departmentId, owner: task.assigneeSeatId ? `@${task.assigneeSeatId}` : leader(task.departmentId), taskIds: [task.id], text: `${task.id} "${task.title}" runs ${Math.round((now - task.actualStart) / 60_000)}m on an estimate of ${task.estimateMinutes}m`, next: 'post progress, re-estimate or split into steps; the lead decides' });
+      const spent = doing.get(task.id);
+      if (task.status === 'doing' && spent && task.estimateMinutes !== null && spent.totalMs > task.estimateMinutes * 60_000 * OVERDUE_MARGIN) {
+        const minutes = (ms: number): number => Math.round(ms / 60_000);
+        const runs = spent.runs > 1 ? ` over ${spent.runs} runs; this run ${minutes(now - spent.runStart)}m since ${new Date(spent.runStart).toISOString()}` : '';
+        alerts.push({ key: `overdue:${task.id}:${spent.runStart}:${task.estimateMinutes}`, kind: 'overdue', departmentId: task.departmentId, owner: task.assigneeSeatId ? `@${task.assigneeSeatId}` : leader(task.departmentId), taskIds: [task.id], text: `${task.id} "${task.title}" has ${minutes(spent.totalMs)}m in doing${runs} (time blocked/todo/done not counted) on an estimate of ${task.estimateMinutes}m`, next: 'post progress, re-estimate or split into steps; move it out of doing while it only waits; the lead decides' });
       }
       if (task.status === 'doing' && evaluation.gate.length > 0) alerts.push({ key: `gate:${task.id}:${evaluation.gate.map(reason => reason.group).sort().join(',')}`, kind: 'gate-broken', departmentId: task.departmentId, owner: task.assigneeSeatId ? `@${task.assigneeSeatId}` : leader(task.departmentId), taskIds: [task.id], text: `${task.id} "${task.title}" is in progress but ${evaluation.gate.map(reason => reason.text).join('; ')}`, next: `owner and ${leader(task.departmentId)} decide to continue or pause` });
     }
@@ -47,6 +54,22 @@ export class AlertService {
       }
     }
     return departmentId ? alerts.filter(alert => alert.departmentId === departmentId) : alerts;
+  }
+
+  /** Time each task spent in doing, from its status history: total over all doing periods, number of runs, start of the current run. */
+  private doingTime(taskIds: string[], now: number): Map<string, { totalMs: number; runs: number; runStart: number }> {
+    const result = new Map<string, { totalMs: number; runs: number; runStart: number }>();
+    if (taskIds.length === 0) return result;
+    const events = this.db.raw.prepare(`SELECT task_id AS taskId,from_status AS fromStatus,to_status AS toStatus,created_at AS createdAt FROM task_events WHERE task_id IN (${taskIds.map(() => '?').join(',')}) ORDER BY id`).all(...taskIds) as Array<{ taskId: string; fromStatus: string | null; toStatus: string; createdAt: number }>;
+    const open = new Map<string, number>();
+    for (const event of events) {
+      const entry = result.get(event.taskId) ?? { totalMs: 0, runs: 0, runStart: 0 };
+      if (event.toStatus === 'doing' && event.fromStatus !== 'doing') { open.set(event.taskId, event.createdAt); entry.runs++; entry.runStart = event.createdAt; }
+      else if (event.fromStatus === 'doing' && event.toStatus !== 'doing') { entry.totalMs += event.createdAt - (open.get(event.taskId) ?? event.createdAt); open.delete(event.taskId); }
+      result.set(event.taskId, entry);
+    }
+    for (const [taskId, started] of open) result.get(taskId)!.totalMs += now - started;
+    return result;
   }
 
   /** Reports new alerts once in a digest in #leaders. Returns the alerts that were reported (at most MAX_LINES per run). */

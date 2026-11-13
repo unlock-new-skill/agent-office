@@ -270,7 +270,8 @@ node "$env:USERPROFILE\.agent-office\bin\agent-office.mjs" update      # Windows
   back to suggest/off is the rollback: tasks, history and running work stay as they are. Classify open tasks
   (execution / tracking) before turning it on.
 - **Exception digest:** every 5 minutes, new exceptions only are posted in `#leaders`, mentioning the PM and the
-  owners: task without an assignee, task running past 1.25 × its estimate, running task whose conditions broke,
+  owners: task without an assignee, task whose time in doing (summed over its runs; blocked/todo/done time not
+  counted) passed 1.25 × its estimate, running task whose conditions broke,
   blocker past its due date, without a resolver or unchanged for 24h. Each is reported once until it changes.
 - **Expiring grants:** a blocker resolved with *valid until* opens again when the time passes; tasks not started lose
   readiness, running ones only get a warning. Nothing is ever stopped automatically.

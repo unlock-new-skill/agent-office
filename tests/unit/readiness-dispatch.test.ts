@@ -315,3 +315,19 @@ test('a blocker shared by two departments raises its alert on both boards', () =
   assert.deepEqual(alerts.current(Date.now(), 'ba').map(alert => alert.taskIds), [[ba.id]]);
   fixture.close();
 });
+
+test('overdue counts only time spent in doing, summed over runs; blocked time between runs is not counted', () => {
+  const fixture = dispatched(); const { tasks, dispatch, alerts } = fixture.office; const { db } = fixture;
+  const task = exec(fixture, 'Review raw', 'dev-be', { estimateMinutes: 60 });
+  dispatch.start(seat('dev-be'), task.id, {}, 'mcp');
+  tasks.update(seat('dev-be'), task.id, { status: 'blocked', note: 'waiting for raw' });
+  tasks.update(seat('dev-be'), task.id, { status: 'doing', note: 'raw arrived' });
+  const t0 = Date.now() - 10 * 3_600_000; const minute = 60_000;
+  const events = db.raw.prepare("SELECT id,to_status AS toStatus FROM task_events WHERE task_id=? AND to_status!='todo' ORDER BY id").all(task.id) as Array<{ id: number; toStatus: string }>;
+  [t0, t0 + 30 * minute, t0 + 150 * minute].forEach((at, index) => db.raw.prepare('UPDATE task_events SET created_at=? WHERE id=?').run(at, events[index]!.id));
+  assert.deepEqual(alerts.current(t0 + 155 * minute).filter(alert => alert.kind === 'overdue'), [], '35m in doing on 60m: fine, though 155m passed since the first start');
+  const late = alerts.current(t0 + 200 * minute).filter(alert => alert.kind === 'overdue');
+  assert.equal(late.length, 1);
+  assert.match(late[0]!.text, /has 80m in doing over 2 runs; this run 50m/);
+  fixture.close();
+});
