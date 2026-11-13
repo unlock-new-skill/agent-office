@@ -5,7 +5,7 @@ Requirement: /Users/truongpham/Desktop/requiremtn.md (PM pm-live)
 
 ## Run
 
-- `npm test` on Node 24.11.1 (`.nvmrc`): **224 tests, 224 pass, 0 fail** (incl. P1: alerts digest, window expiry, review fixes). `npm run lint` clean, `npm run build` ok.
+- `npm test` on Node 24.11.1 (`.nvmrc`): **225 tests, 225 pass, 0 fail** (incl. P1: alerts digest, window expiry, review fixes, overdue measured on time in doing). `npm run lint` clean, `npm run build` ok.
 - On Node 26 the backup/restore test fails with `unsupported_node_runtime` (script guard) — environment, not code.
 - New test files: `tests/unit/task-edit.test.ts`, `tests/unit/readiness-dispatch.test.ts`, `tests/unit/channel-visit.test.ts`,
   `tests/integration/task-edit-api.test.ts`. All tests use their own in-memory office (no real task touched).
