@@ -14,6 +14,51 @@ const RUNNER_JSON = { unix: '~/.agent-office/runner.json', windows: '"$env:USERP
 type Telegram = { enabled: boolean; paired: boolean; botUsername: string | null };
 type Pairing = { code: string; expiresAt: number; link: string | null };
 
+type ServiceToken = { id: string; label: string; departments: string[] | null; createdAt: number; expiresAt: number; revokedAt: number | null; lastUsedAt: number | null };
+
+/**
+ * Read-only service tokens for server integrations (e.g. a schedule page adapter). The token is shown once here, then
+ * only its label, scope and dates; it reads tasks, task details, the board, blockers and the directory — nothing else.
+ */
+function ServiceTokens({ state, api, notify }: { state: OfficeState; api: Api; notify: (text: string) => void }): ReactNode {
+  const [tokens, setTokens] = useState<ServiceToken[]>([]); const [label, setLabel] = useState(''); const [days, setDays] = useState('90');
+  const [scope, setScope] = useState<string[]>([]); const [created, setCreated] = useState<string | null>(null);
+  const refresh = useCallback((): void => { void api.get<{ serviceTokens: ServiceToken[] }>('/v1/service-tokens').then(result => setTokens(result.serviceTokens)).catch(error => notify(errorText(error))); }, [api, notify]);
+  useEffect(refresh, [refresh]);
+  const create = (event: FormEvent): void => {
+    event.preventDefault();
+    api.send<{ token: string }>('POST', '/v1/service-tokens', { label, expiresInDays: Number(days), departments: scope.length ? scope : null })
+      .then(result => { setCreated(result.token); setLabel(''); setScope([]); refresh(); }).catch(error => notify(errorText(error)));
+  };
+  const revoke = (id: string): void => { api.send('POST', `/v1/service-tokens/${id}/revoke`).then(() => { notify('Token revoked.'); refresh(); }).catch(error => notify(errorText(error))); };
+  const date = (at: number | null): string => at ? new Date(at).toLocaleString() : '—';
+  const departments = state.org?.departments ?? [];
+  return (
+    <>
+      <p>Cho server tích hợp (vd. trang /schedule) đọc task, chi tiết task, board, blocker và danh bạ — <strong>chỉ đọc</strong>, không chat, không sửa, không điều khiển máy. Token chỉ hiện <strong>một lần</strong>: đặt thẳng vào biến môi trường của server, không gửi qua chat hay repo.</p>
+      <form className="task-form" onSubmit={create}>
+        <label>Tên (ai dùng, để làm gì)<input value={label} onChange={event => setLabel(event.target.value)} maxLength={80} required placeholder="schedule-page BE adapter" /></label>
+        <label>Hết hạn sau (ngày)<input type="number" min="1" max="365" value={days} onChange={event => setDays(event.target.value)} required /></label>
+        <fieldset className="token-scope"><legend>Phạm vi (bỏ trống = toàn office)</legend>
+          {departments.map(department => <label key={department.id} className="check"><input type="checkbox" checked={scope.includes(department.id)} onChange={event => setScope(current => event.target.checked ? [...current, department.id] : current.filter(id => id !== department.id))} /> {department.name}</label>)}
+        </fieldset>
+        <div className="row-actions"><button type="submit" className="btn btn-primary">Tạo token chỉ đọc</button></div>
+      </form>
+      {created && <div className="token-created" role="status">
+        <p><strong>Copy ngay — sẽ không hiện lại:</strong></p>
+        <code className="token-value">{created}</code>
+        <div className="row-actions"><button type="button" className="btn btn-small" onClick={() => { void navigator.clipboard.writeText(created).then(() => notify('Copied.')); }}>Copy</button><button type="button" className="btn btn-small" onClick={() => setCreated(null)}>Đã lưu, ẩn đi</button></div>
+      </div>}
+      {tokens.length > 0 && <table className="token-table"><thead><tr><th>Tên</th><th>Phạm vi</th><th>Tạo</th><th>Hết hạn</th><th>Dùng gần nhất</th><th /></tr></thead><tbody>
+        {tokens.map(token => <tr key={token.id} className={token.revokedAt || token.expiresAt < Date.now() ? 'muted' : ''}>
+          <td>{token.label}</td><td>{token.departments?.join(', ') ?? 'toàn office'}</td><td>{date(token.createdAt)}</td><td>{date(token.expiresAt)}</td><td>{date(token.lastUsedAt)}</td>
+          <td>{token.revokedAt ? `thu hồi ${date(token.revokedAt)}` : <button type="button" className="btn btn-small" onClick={() => revoke(token.id)}>Thu hồi</button>}</td>
+        </tr>)}
+      </tbody></table>}
+    </>
+  );
+}
+
 /** Telegram notifications: pairing with the bot, test message, unpair. Token and proxy stay in the server's .env. */
 function TelegramSetup({ api, notify, cmd }: { api: Api; notify: (text: string) => void; cmd: (text: string) => ReactNode }): ReactNode {
   const [status, setStatus] = useState<Telegram | null>(null); const [pairing, setPairing] = useState<Pairing | null>(null);
@@ -159,7 +204,12 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
       </section>
 
       <section className="setup-step">
-        <h2><span>8</span>Cài lại từ đầu</h2>
+        <h2><span>8</span>Token chỉ đọc cho server tích hợp</h2>
+        <ServiceTokens state={state} api={api} notify={notify} />
+      </section>
+
+      <section className="setup-step">
+        <h2><span>9</span>Cài lại từ đầu</h2>
         <p>Dùng khi đổi server, mất credential, hoặc mọi thứ lỗi. Đóng các session Claude trước.</p>
         <ol>
           <li>Gỡ hook, MCP và credential: {cmd(connector(os, 'uninstall'))}</li>
@@ -171,7 +221,7 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
       </section>
 
       <section className="setup-step">
-        <h2><span>9</span>Tuỳ chỉnh</h2>
+        <h2><span>10</span>Tuỳ chỉnh</h2>
         <ul>
           <li><strong>Duyệt quyền từ web</strong>: agent chờ tối đa 120 giây cho Allow/Deny trên web rồi mới hỏi ở terminal. Máy có người ngồi trực nên tắt:
             {cmd(os === 'windows' ? '$env:AGENT_OFFICE_PERMISSION_WAIT_SECONDS="0"; claude' : 'AGENT_OFFICE_PERMISSION_WAIT_SECONDS=0 claude')}
@@ -183,7 +233,7 @@ export function SetupView({ state, api, notify }: Props): ReactNode {
       </section>
 
       <section className="setup-step">
-        <h2><span>10</span>Xử lý sự cố</h2>
+        <h2><span>11</span>Xử lý sự cố</h2>
         <table className="requests-table">
           <thead><tr><th>Triệu chứng</th><th>Cách xử lý</th></tr></thead>
           <tbody>

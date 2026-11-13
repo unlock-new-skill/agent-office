@@ -188,9 +188,33 @@ paths:
       parameters: [{in: path, name: id, required: true, schema: {type: string}}, {in: header, name: X-CSRF-Token, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [behavior], additionalProperties: false, properties: {behavior: {enum: [allow, deny]}, message: {type: string, maxLength: 500}}}}}}
       responses: {'200': {description: Decided PermissionRequest}, '409': {description: permission_already_resolved}}
+  /v1/tasks:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}, {serviceToken: []}]
+      description: 'Service tokens (and the manager with limit/cursor) get a page over a stable snapshot ordered by createdAt, id: tasks created after snapshotAt are left out, total is fixed, changedSinceSnapshot counts tasks updated after it (fetch again for one consistent view). Each task carries activeMs (time in doing summed over runs) and runs. Seats without limit get {tasks} (max 500, their visibility).'
+      parameters: [{in: query, name: departmentId, schema: {type: string}}, {in: query, name: status, schema: {enum: [todo, doing, blocked, done]}}, {in: query, name: assignee, schema: {type: string}}, {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 200, default: 100}}, {in: query, name: cursor, schema: {type: string}}]
+      responses: {'200': {description: '{tasks, total, snapshotAt, nextCursor, changedSinceSnapshot} (paged) or {tasks}'}, '400': {description: 'invalid_cursor, invalid_limit'}, '403': {description: 'forbidden_task_read, outside_token_scope'}}
+  /v1/directory:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}, {serviceToken: []}]
+      responses: {'200': {description: '{departments: [{id, name, color}], seats: [{id, title, departmentId, role, coordinator}]} in the caller scope'}}
+  /v1/service-tokens:
+    get:
+      security: [{cookieAuth: []}]
+      responses: {'200': {description: '{serviceTokens: [{id, label, departments|null, createdAt, expiresAt, revokedAt, lastUsedAt}]} — never the token'}}
+    post:
+      security: [{cookieAuth: []}]
+      description: Manager issues a read-only service token. The token is returned once (Cache-Control no-store); only its SHA-256 is stored.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [label], additionalProperties: false, properties: {label: {type: string, maxLength: 80}, departments: {type: [array, 'null'], items: {type: string}}, expiresInDays: {type: integer, minimum: 1, maximum: 365, default: 90}}}}}}
+      responses: {'201': {description: '{token, serviceToken}'}, '404': {description: department_not_found}}
+  /v1/service-tokens/{id}/revoke:
+    post:
+      security: [{cookieAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: Revoked token record}}
   /v1/tasks/{id}:
     get:
-      security: [{cookieAuth: []}, {bearerAuth: []}]
+      security: [{cookieAuth: []}, {bearerAuth: []}, {serviceToken: []}]
       parameters: [{in: path, name: id, required: true, schema: {type: string}}]
       responses: {'200': {description: '{task, history, changes (field audit), readiness, blockers}'}, '403': {description: forbidden_task_read}}
     patch:
@@ -256,6 +280,7 @@ components:
   securitySchemes:
     cookieAuth: {type: apiKey, in: cookie, name: agent_office_session}
     bearerAuth: {type: http, scheme: bearer}
+    serviceToken: {type: http, scheme: bearer, description: 'Read-only service token (aos_…): GET /v1/tasks, /v1/tasks/{id}, /v1/board, /v1/blockers, /v1/directory only, within its department scope; anything else 403 service_token_read_only; 120 requests/min per token (429); unknown, revoked or expired → 401 invalid_service_token. A department-scoped token reads the board one department at a time (departmentId).'}
   responses:
     Unauthorized: {description: Authentication failed}
   schemas:

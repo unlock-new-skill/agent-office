@@ -286,6 +286,19 @@ node "$env:USERPROFILE\.agent-office\bin\agent-office.mjs" update      # Windows
 - **Telegram:** set `AGENT_OFFICE_TELEGRAM_BOT_TOKEN` (and `AGENT_OFFICE_TELEGRAM_PROXY` if needed) on the server, then
   **Setup → Telegram → Pair**. Paired chats get permission requests (✅ / ❌) and runner failures.
 
+### Read-only access for other servers
+
+A server integration (for example a schedule page that lists every task) uses a **read-only service token**:
+
+1. **Setup → Read-only token for integrations** → name it, choose an expiry (days) and optionally the departments it
+   may read → **Create**. The token (`aos_…`) is shown **once**: put it straight into that server's environment —
+   never in chat or a repository.
+2. The server calls `Authorization: Bearer <token>` on `GET /v1/tasks?limit=&cursor=` (pages over a stable snapshot
+   with `total`, `snapshotAt`, `nextCursor`, `changedSinceSnapshot`; each task has `activeMs` and `runs`),
+   `GET /v1/tasks/:id` (history, field audit, readiness, blockers), `GET /v1/board`, `GET /v1/blockers` and
+   `GET /v1/directory` (department and seat names). Everything else is refused; 120 requests per minute.
+3. **Revoke** it in the same list when it is no longer needed. Only its label, scope and dates are ever shown again.
+
 ### Backups, upgrades and rollback
 
 - Back up before every upgrade: `deploy/backup.sh` (online `VACUUM INTO`, keeps 14 days in `/var/backups/agent-office`;

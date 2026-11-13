@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { agentGuide } from '../shared/agent-guide.js';
 import { BLOCKER_KINDS, DepartmentInputSchema, SeatInputSchema, TASK_RESULTS } from '../shared/contracts.js';
 import type { AuthService, Credential } from './auth/auth-service.js';
+import type { ServiceScope } from './auth/service-token-service.js';
 import type { Actor } from './collaboration/message-service.js';
 import type { Office } from './collaboration/office.js';
 import { OfficeError } from './collaboration/office-error.js';
@@ -163,10 +164,40 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
 
   const TaskStatusSchema = z.enum(['todo', 'doing', 'blocked', 'done']);
   const TaskPlanSchema = { estimateMinutes: z.number().int().min(1).max(10_080).nullable().optional(), dependsOn: z.array(z.string().min(1).max(80)).max(20).optional() };
-  app.get('/v1/tasks', c => withActor(c, ({ actor }) => {
-    const filter = z.object({ departmentId: z.string().max(64).optional(), status: TaskStatusSchema.optional(), assignee: z.string().max(64).optional() }).parse(c.req.query());
-    return c.json({ tasks: office.tasks.list(actor, filter) });
+  /** The read-only service token of the request (validated and limited to read routes by app.ts), if any. */
+  const serviceOf = (request: Request): ServiceScope | null => {
+    const authorization = request.headers.get('authorization') ?? '';
+    return authorization.startsWith('Bearer aos_') ? office.serviceTokens.authenticate(authorization.slice('Bearer '.length)) : null;
+  };
+  const inScope = (scope: ServiceScope, departmentId: string): boolean => scope.departments === null || scope.departments.includes(departmentId);
+  /** Runs a read for a service token; departmentId, when given, must be inside the token's scope. */
+  const asService = (c: Context, run: (scope: ServiceScope) => Response): Promise<Response> | null => {
+    const scope = serviceOf(c.req.raw);
+    if (!scope) return null;
+    return handle(() => {
+      const departmentId = c.req.query('departmentId');
+      if (departmentId && !inScope(scope, departmentId)) return json('outside_token_scope', 403);
+      return run(scope);
+    });
+  };
+  const PageQuery = z.object({ departmentId: z.string().max(64).optional(), status: TaskStatusSchema.optional(), assignee: z.string().max(64).optional(), limit: z.coerce.number().int().min(1).max(200).optional(), cursor: z.string().max(400).optional() });
+  app.get('/v1/tasks', c => asService(c, scope => {
+    const query = PageQuery.parse(c.req.query());
+    return c.json(office.tasks.page({ departments: scope.departments, departmentId: query.departmentId, status: query.status }, query.limit ?? 100, query.cursor));
+  }) ?? withActor(c, ({ actor }) => {
+    const query = PageQuery.parse(c.req.query());
+    // The manager may page the whole office (stable snapshot); without limit/cursor the classic list is returned.
+    if (actor.kind === 'manager' && (query.limit !== undefined || query.cursor !== undefined)) return c.json(office.tasks.page({ departments: null, departmentId: query.departmentId, status: query.status }, query.limit ?? 100, query.cursor));
+    return c.json({ tasks: office.tasks.list(actor, { departmentId: query.departmentId, status: query.status, assignee: query.assignee }) });
   }));
+  /** Departments and seats (names for ids) in the caller's scope. */
+  app.get('/v1/directory', c => {
+    const view = (departments: string[] | null): Response => {
+      const org = office.org.view(); const keep = (id: string): boolean => departments === null || departments.includes(id);
+      return c.json({ departments: org.departments.filter(department => keep(department.id)).map(({ id, name, color }) => ({ id, name, color })), seats: org.seats.filter(seat => keep(seat.departmentId)).map(({ id, title, departmentId, role, coordinator }) => ({ id, title, departmentId, role, coordinator })) });
+    };
+    return asService(c, scope => view(scope.departments)) ?? withActor(c, () => view(null));
+  });
   const TaskKindSchema = z.enum(['execution', 'tracking']);
   const TaskIdList = z.array(z.string().min(1).max(80)).max(20);
   const sourceOf = (actor: Actor): 'ui' | 'mcp' => actor.kind === 'manager' ? 'ui' : 'mcp';
@@ -174,21 +205,51 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
     const input = z.object({ departmentId: z.string().max(64).optional(), title: z.string().max(200), body: z.string().max(8000).default(''), assigneeSeatId: z.string().min(1).max(64), requestedBy: z.string().min(1).max(64).optional(), parentId: z.string().min(1).max(80).optional(), parallel: z.boolean().optional(), kind: TaskKindSchema.optional(), passRequired: TaskIdList.optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
     return c.json(office.tasks.create(actor, input), 201);
   }));
-  app.get('/v1/tasks/:id', c => withActor(c, ({ actor }) => c.json({ ...office.tasks.read(actor, c.req.param('id')), readiness: office.dispatch.readiness(c.req.param('id')), blockers: office.blockers.list({ taskId: c.req.param('id') }) })));
+  const taskDetail = (actor: Actor, taskId: string, keep: (departmentId: string) => boolean): Record<string, unknown> => {
+    const read = office.tasks.read(actor, taskId);
+    const blockers = office.blockers.list({ taskId }).map(blocker => ({ ...blocker, taskIds: blocker.taskIds.filter(id => keep(office.tasks.get(id).departmentId)) }));
+    return { ...read, task: office.tasks.withActivity([read.task])[0], readiness: office.dispatch.readiness(taskId), blockers };
+  };
+  app.get('/v1/tasks/:id', c => asService(c, scope => {
+    const task = office.tasks.get(c.req.param('id'));
+    if (!inScope(scope, task.departmentId)) return json('task_not_found', 404);
+    return c.json(taskDetail({ kind: 'manager' }, task.id, departmentId => inScope(scope, departmentId)));
+  }) ?? withActor(c, ({ actor }) => c.json(taskDetail(actor, c.req.param('id'), () => true))));
   app.post('/v1/tasks/:id/start', c => withActor(c, async ({ actor }) => {
     const input = z.object({ generation: z.number().int().min(0).optional(), expectedRevision: z.number().int().min(0).optional() }).strict().parse(await c.req.json());
     return c.json(office.dispatch.start(actor, c.req.param('id'), input, sourceOf(actor)));
   }));
-  app.get('/v1/board', c => withActor(c, ({ actor }) => {
-    const board = office.dispatch.board(actor, z.object({ departmentId: z.string().max(64).optional(), assignee: z.string().max(64).optional(), resolver: z.string().max(65).optional() }).parse(c.req.query()));
-    return c.json({ ...board, alerts: board.dispatch === 'off' ? [] : office.alerts.current(Date.now(), board.scope.departmentId) });
+  const BoardQuery = z.object({ departmentId: z.string().max(64).optional(), assignee: z.string().max(64).optional(), resolver: z.string().max(65).optional() });
+  const boardFor = (actor: Actor, query: z.infer<typeof BoardQuery>): Record<string, unknown> => {
+    const board = office.dispatch.board(actor, query);
+    return { ...board, alerts: board.dispatch === 'off' ? [] : office.alerts.current(Date.now(), board.scope.departmentId) };
+  };
+  app.get('/v1/board', c => asService(c, scope => {
+    const query = BoardQuery.parse(c.req.query());
+    // A token scoped to departments reads one department's board at a time.
+    const departmentId = query.departmentId ?? (scope.departments?.length === 1 ? scope.departments[0] : undefined);
+    if (scope.departments && !departmentId) return json('department_required', 400);
+    return c.json(boardFor({ kind: 'manager' }, { ...query, departmentId }));
+  }) ?? withActor(c, ({ actor }) => c.json(boardFor(actor, BoardQuery.parse(c.req.query())))));
+  /** Read-only service tokens for server integrations: manager only; the token is returned once, never listed again. */
+  app.get('/v1/service-tokens', c => managerOnly(c, () => c.json({ serviceTokens: office.serviceTokens.list() })));
+  app.post('/v1/service-tokens', c => managerOnly(c, async () => {
+    const input = z.object({ label: z.string().min(1).max(80), departments: z.array(z.string().min(1).max(64)).max(50).nullable().optional(), expiresInDays: z.number().int().min(1).max(365).optional() }).strict().parse(await c.req.json());
+    const created = office.serviceTokens.create(input);
+    return new Response(JSON.stringify(created), { status: 201, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
   }));
+  app.post('/v1/service-tokens/:id/revoke', c => managerOnly(c, () => c.json(office.serviceTokens.revoke(c.req.param('id')))));
   app.get('/v1/settings/dispatch', c => managerOnly(c, () => c.json({ mode: office.dispatch.mode() })));
   app.put('/v1/settings/dispatch', c => managerOnly(c, async () => c.json({ mode: office.dispatch.setMode(z.object({ mode: z.enum(['off', 'suggest', 'on']) }).strict().parse(await c.req.json()).mode) })));
 
   const BlockerFields = { description: z.string().min(1).max(500), resolverSeatId: z.string().min(1).max(65).nullable().optional(), resolverRole: z.string().max(80).nullable().optional(), nextStep: z.string().max(1000).optional(), dueAt: z.number().int().positive().nullable().optional(), refs: z.array(z.string().min(1).max(300)).max(10).optional() };
   /** Seats see blockers on tasks they can see; coordinators and the manager see all. */
-  app.get('/v1/blockers', c => withActor(c, ({ actor }) => {
+  app.get('/v1/blockers', c => asService(c, scope => {
+    const filter = z.object({ status: z.enum(['open', 'resolved']).optional(), taskId: z.string().max(80).optional(), departmentId: z.string().max(64).optional() }).parse(c.req.query());
+    const keep = (taskId: string): boolean => inScope(scope, office.tasks.get(taskId).departmentId) && (!filter.departmentId || office.tasks.get(taskId).departmentId === filter.departmentId);
+    const blockers = office.blockers.list({ status: filter.status, taskId: filter.taskId }).map(blocker => ({ ...blocker, taskIds: blocker.taskIds.filter(keep) })).filter(blocker => blocker.taskIds.length > 0);
+    return c.json({ blockers });
+  }) ?? withActor(c, ({ actor }) => {
     const filter = z.object({ status: z.enum(['open', 'resolved']).optional(), taskId: z.string().max(80).optional() }).parse(c.req.query());
     const visible = office.blockers.list(filter).filter(blocker => blocker.taskIds.some(taskId => office.tasks.canRead(actor, office.tasks.get(taskId))));
     return c.json({ blockers: visible });

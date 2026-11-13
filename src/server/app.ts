@@ -16,6 +16,7 @@ import type { TelegramNotifier } from './notify/telegram-notifier.js';
 import { registerInstallRoutes } from './install-routes.js';
 import { registerMusicRoutes } from './music-routes.js';
 import { logger } from './logger.js';
+import { SERVICE_TOKEN_PREFIX } from './auth/service-token-service.js';
 import { allowedHostsAndOrigins, isHttpsPublic, securityHeaders } from './http-policy.js';
 
 export type AppContext = { config: AppConfig; db: Database; auth: AuthService; events: EventStore; office: Office; revokeSession?: (id: string) => void; notifier?: TelegramNotifier | null };
@@ -37,6 +38,17 @@ export const createApp = (context: AppContext): Hono => {
       if (!isBearer && !allowedOrigins.has(c.req.header('origin') ?? '')) return jsonError('invalid_origin', 403);
     }
     await next();
+  });
+  /** A service token reads tasks, task details, the board, blockers and the directory — nothing else, whatever the route. */
+  const SERVICE_READ_PATHS = [/^\/v1\/tasks$/, /^\/v1\/tasks\/[^/]+$/, /^\/v1\/board$/, /^\/v1\/blockers$/, /^\/v1\/directory$/];
+  app.use('*', async (c, next) => {
+    const authorization = c.req.header('authorization') ?? '';
+    if (!authorization.startsWith(`Bearer ${SERVICE_TOKEN_PREFIX}`)) return next();
+    const scope = context.office.serviceTokens.authenticate(authorization.slice('Bearer '.length));
+    if (!scope) return jsonError('invalid_service_token', 401);
+    if (c.req.method !== 'GET' || !SERVICE_READ_PATHS.some(pattern => pattern.test(c.req.path))) return jsonError('service_token_read_only', 403);
+    if (!context.office.serviceTokens.allow(scope.id)) return jsonError('rate_limited', 429);
+    return next();
   });
   app.use('*', cors({ origin: [...allowedOrigins], credentials: true }));
 

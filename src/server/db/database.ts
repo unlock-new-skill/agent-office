@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 23;
+export const SCHEMA_VERSION = 24;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -140,6 +140,11 @@ CREATE TABLE channel_visitors(
  */
 const V23_TABLES = `ALTER TABLE blockers ADD COLUMN valid_until INTEGER;
 CREATE TABLE alert_state(key TEXT PRIMARY KEY, first_seen INTEGER NOT NULL, notified_at INTEGER, active INTEGER NOT NULL) STRICT;`;
+/** v24: read-only service tokens for server integrations (hash only, optional department scope, expiry, revocation). */
+const V24_TABLES = `CREATE TABLE service_tokens(
+  id TEXT PRIMARY KEY, label TEXT NOT NULL CHECK(length(label) BETWEEN 1 AND 80), token_hash TEXT NOT NULL UNIQUE, departments TEXT,
+  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, revoked_at INTEGER, last_used_at INTEGER
+) STRICT;`;
 const V15_COLUMNS = "ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER; ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';";
 const THREAD_INDEX = 'CREATE INDEX messages_thread ON messages(channel_id, thread_seq);';
 
@@ -243,6 +248,7 @@ export class Database {
         if (from < 21) this.raw.exec(V21_TABLES);
         if (from < 22) this.raw.exec(V22_TABLES);
         if (from < 23) this.raw.exec(V23_TABLES);
+        if (from < 24) this.raw.exec(V24_TABLES);
         if ((this.raw.prepare('PRAGMA foreign_key_check').all() as unknown[]).length > 0) throw new Error('migration_foreign_key_violation');
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
@@ -346,6 +352,7 @@ export class Database {
       ${V21_TABLES}
       ${V22_TABLES}
       ${V23_TABLES}
+      ${V24_TABLES}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

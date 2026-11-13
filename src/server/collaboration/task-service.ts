@@ -19,6 +19,29 @@ const MAX_ESTIMATE = 7 * 24 * 60; const MAX_DEPENDENCIES = 20;
 const MIN_REQUIREMENT = 20;
 const MAX_NOTE = 2000;
 const stale = (task: Task): Error => conflict('stale_revision', { task });
+export type Activity = { activeMs: number; runs: number; runStart: number };
+/**
+ * Time each task spent in doing, from its status history: summed over every doing period (time blocked, todo or done
+ * never counts), the number of doing runs and the start of the current (or last) run.
+ */
+export const doingTime = (db: Database, taskIds: string[], now = Date.now()): Map<string, Activity> => {
+  const result = new Map<string, Activity>();
+  if (taskIds.length === 0) return result;
+  const events = db.raw.prepare(`SELECT task_id AS taskId,from_status AS fromStatus,to_status AS toStatus,created_at AS createdAt FROM task_events WHERE task_id IN (${taskIds.map(() => '?').join(',')}) ORDER BY id`).all(...taskIds) as Array<{ taskId: string; fromStatus: string | null; toStatus: string; createdAt: number }>;
+  const open = new Map<string, number>();
+  for (const event of events) {
+    const entry = result.get(event.taskId) ?? { activeMs: 0, runs: 0, runStart: 0 };
+    if (event.toStatus === 'doing' && event.fromStatus !== 'doing') { open.set(event.taskId, event.createdAt); entry.runs++; entry.runStart = event.createdAt; }
+    else if (event.fromStatus === 'doing' && event.toStatus !== 'doing') { entry.activeMs += event.createdAt - (open.get(event.taskId) ?? event.createdAt); open.delete(event.taskId); }
+    result.set(event.taskId, entry);
+  }
+  for (const [taskId, started] of open) result.get(taskId)!.activeMs += now - started;
+  return result;
+};
+export type TaskWithActivity = Task & { activeMs: number; runs: number };
+export type TaskPage = { tasks: TaskWithActivity[]; total: number; snapshotAt: number; nextCursor: string | null; changedSinceSnapshot: number };
+const MAX_PAGE = 200;
+
 /** Short human estimate for system lines: 45m, 2h, 1h 30m. */
 export const estimateLabel = (minutes: number): string => minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ''}`;
 const actorId = (actor: Actor): string => actor.kind === 'manager' ? 'manager' : actor.seatId;
@@ -60,6 +83,39 @@ export class TaskService {
     if (filter.status) { clauses.push('status=?'); params.push(filter.status); }
     if (assignee) { clauses.push('assignee_seat_id=?'); params.push(assignee); }
     return (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY status='done',updated_at DESC LIMIT 500`).all(...params) as TaskRow[]).map(toTask);
+  }
+
+  /** Tasks with their time in doing. */
+  withActivity(tasks: Task[], now = Date.now()): TaskWithActivity[] {
+    const activity = doingTime(this.db, tasks.map(task => task.id), now);
+    return tasks.map(task => ({ ...task, activeMs: activity.get(task.id)?.activeMs ?? 0, runs: activity.get(task.id)?.runs ?? 0 }));
+  }
+
+  /**
+   * One page of tasks in a stable order (createdAt, id) over a snapshot: the first page fixes snapshotAt; tasks created
+   * later are left out, so pages never shift and total stays the same. Tasks changed after snapshotAt still appear with
+   * their current values; changedSinceSnapshot counts them so a reader can fetch again if it needs one consistent view.
+   */
+  page(scope: { departments: string[] | null; departmentId?: string | undefined; status?: TaskStatus | undefined }, limit = 100, cursor?: string, now = Date.now()): TaskPage {
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE) throw invalid('invalid_limit');
+    let position: { s: number; c: number; i: string } | null = null;
+    if (cursor) {
+      try { position = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { s: number; c: number; i: string }; } catch { throw invalid('invalid_cursor'); }
+      if (!position || !Number.isInteger(position.s) || !Number.isInteger(position.c) || typeof position.i !== 'string') throw invalid('invalid_cursor');
+    }
+    const snapshotAt = position?.s ?? now;
+    const clauses = ['created_at<=?']; const params: Array<string | number> = [snapshotAt];
+    const departments = scope.departmentId ? [scope.departmentId] : scope.departments;
+    if (departments) { clauses.push(`department_id IN (${departments.map(() => '?').join(',')})`); params.push(...departments); }
+    if (scope.status) { clauses.push('status=?'); params.push(scope.status); }
+    const where = clauses.join(' AND ');
+    const total = (this.db.raw.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE ${where}`).get(...params) as { count: number }).count;
+    const changedSinceSnapshot = (this.db.raw.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE ${where} AND updated_at>?`).get(...params, snapshotAt) as { count: number }).count;
+    const after = position ? ' AND (created_at>? OR (created_at=? AND id>?))' : '';
+    const rows = (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE ${where}${after} ORDER BY created_at,id LIMIT ?`).all(...params, ...(position ? [position.c, position.c, position.i] : []), limit + 1) as TaskRow[]).map(toTask);
+    const pageTasks = rows.slice(0, limit); const last = pageTasks.at(-1);
+    const nextCursor = rows.length > limit && last ? Buffer.from(JSON.stringify({ s: snapshotAt, c: last.createdAt, i: last.id })).toString('base64url') : null;
+    return { tasks: this.withActivity(pageTasks, now), total, snapshotAt, nextCursor, changedSinceSnapshot };
   }
 
   get(taskId: string): Task {

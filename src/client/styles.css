@@ -485,3 +485,12 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .blocker-tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 12px; overflow-wrap: anywhere; }
 .blocker-tasks .pill { margin-left: 6px; }
 .pill.result-pass { color: var(--ok); } .pill.result-fail { color: var(--warn); } .pill.result-inconclusive { color: var(--warn); }
+
+/* Service tokens (Setup) */
+.token-scope { border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.token-scope .check { display: flex; align-items: center; gap: 6px; flex-direction: row; }
+.token-scope .check input { width: auto; }
+.token-created { border: 1px solid var(--warn); border-radius: var(--radius); padding: 8px 10px; margin: 8px 0; }
+.token-value { display: block; overflow-wrap: anywhere; user-select: all; padding: 6px; background: var(--panel-2); }
+.token-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; display: block; overflow-x: auto; }
+.token-table th, .token-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
