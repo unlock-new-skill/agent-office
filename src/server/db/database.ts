@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 25;
+export const SCHEMA_VERSION = 26;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -146,6 +146,31 @@ const V24_TABLES = `CREATE TABLE service_tokens(
   created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, revoked_at INTEGER, last_used_at INTEGER
 ) STRICT;`;
 /**
+ * Manager approval requests: a seat asks the manager for one specific decision tied to a task or a thread. The decision
+ * (status) and the Telegram delivery are kept apart; `nonce` is the opaque, per-revision token the Telegram buttons carry.
+ */
+const V26_TABLES = `CREATE TABLE approval_requests(
+  id TEXT PRIMARY KEY, requester_seat_id TEXT NOT NULL, task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  channel_id TEXT NOT NULL, thread_seq INTEGER, action TEXT NOT NULL CHECK(length(action) BETWEEN 1 AND 200),
+  scope TEXT NOT NULL CHECK(length(scope) BETWEEN 1 AND 500), reason TEXT NOT NULL CHECK(length(reason) BETWEEN 1 AND 1000),
+  consequences TEXT NOT NULL DEFAULT '' CHECK(length(consequences) <= 500), target TEXT NOT NULL DEFAULT '' CHECK(length(target) <= 200),
+  dedupe_key TEXT NOT NULL, expires_at INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired','cancelled')), revision INTEGER NOT NULL DEFAULT 1,
+  nonce TEXT NOT NULL UNIQUE, decided_by TEXT, decided_via TEXT, decided_at INTEGER, decision_note TEXT NOT NULL DEFAULT '',
+  delivery_status TEXT NOT NULL CHECK(delivery_status IN ('queued','sent','retry','uncertain','failed','disabled','not_paired')),
+  delivery_attempts INTEGER NOT NULL DEFAULT 0, delivery_error TEXT NOT NULL DEFAULT '', next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  message_id INTEGER, sent_at INTEGER, stale_message_id INTEGER, final_edited INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX approval_requests_status ON approval_requests(status, expires_at);
+CREATE INDEX approval_requests_dedupe ON approval_requests(requester_seat_id, dedupe_key, status);
+CREATE TABLE approval_events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, approval_id TEXT NOT NULL REFERENCES approval_requests(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, actor TEXT NOT NULL, via TEXT NOT NULL, revision INTEGER NOT NULL, detail TEXT NOT NULL DEFAULT '' CHECK(length(detail) <= 1000),
+  created_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX approval_events_approval ON approval_events(approval_id, id);`;
+/**
  * v25: who actually works on a task besides its owner (executor / reviewer / intake, with their phase and state) and
  * the partial outputs a task produced (received with evidence, accepted separately, remaining acceptance spelled out).
  */
@@ -270,6 +295,7 @@ export class Database {
         if (from < 23) this.raw.exec(V23_TABLES);
         if (from < 24) this.raw.exec(V24_TABLES);
         if (from < 25) this.raw.exec(V25_TABLES);
+        if (from < 26) this.raw.exec(V26_TABLES);
         if ((this.raw.prepare('PRAGMA foreign_key_check').all() as unknown[]).length > 0) throw new Error('migration_foreign_key_violation');
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
@@ -375,6 +401,7 @@ export class Database {
       ${V23_TABLES}
       ${V24_TABLES}
       ${V25_TABLES}
+      ${V26_TABLES}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

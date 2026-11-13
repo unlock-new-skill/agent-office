@@ -274,6 +274,31 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
     const input = z.object({ note: z.string().max(1000).optional(), missing: z.string().max(1000).optional(), accept: z.boolean().optional() }).strict().parse(await c.req.json());
     return c.json(office.progress.acceptOutput(actor, c.req.param('id'), c.req.param('outputId'), input, sourceOf(actor)));
   }));
+  // Manager approval requests: seats ask, only the manager decides (web here, or the paired private Telegram chat).
+  const ApprovalFields = { action: z.string().min(1).max(200), scope: z.string().min(1).max(500), reason: z.string().min(1).max(1000), consequences: z.string().max(500).optional(), target: z.string().max(200).optional(), expiresInMinutes: z.number().int().min(5).max(10_080).optional() };
+  app.get('/v1/approvals', c => withActor(c, ({ actor }) => {
+    const status = z.enum(['pending', 'approved', 'rejected', 'expired', 'cancelled']).optional().parse(c.req.query('status') || undefined);
+    return c.json({ approvals: office.approvals.list(actor, status) });
+  }));
+  app.post('/v1/approvals', c => withActor(c, async ({ actor }) => {
+    const input = z.object({ taskId: z.string().min(1).max(80).optional(), channelId: z.string().min(1).max(128).optional(), threadSeq: z.number().int().min(1).optional(), ...ApprovalFields }).strict().parse(await c.req.json());
+    const result = office.approvals.request(actor, input);
+    return c.json(result, result.duplicate ? 200 : 201);
+  }));
+  app.get('/v1/approvals/:id', c => withActor(c, ({ actor }) => c.json(office.approvals.get(actor, c.req.param('id')))));
+  app.patch('/v1/approvals/:id', c => withActor(c, async ({ actor }) => {
+    const input = z.object({ action: ApprovalFields.action.optional(), scope: ApprovalFields.scope.optional(), reason: ApprovalFields.reason.optional(), consequences: ApprovalFields.consequences, target: ApprovalFields.target, expiresInMinutes: ApprovalFields.expiresInMinutes }).strict().parse(await c.req.json());
+    return c.json(office.approvals.update(actor, c.req.param('id'), input));
+  }));
+  app.post('/v1/approvals/:id/cancel', c => withActor(c, async ({ actor }) => {
+    const input = z.object({ note: z.string().max(500).optional() }).strict().parse(await c.req.json().catch(() => ({})));
+    return c.json(office.approvals.cancel(actor, c.req.param('id'), input.note));
+  }));
+  app.post('/v1/approvals/:id/decision', c => managerOnly(c, async () => {
+    const input = z.object({ decision: z.enum(['approve', 'reject']), revision: z.number().int().min(1), note: z.string().max(500).optional() }).strict().parse(await c.req.json());
+    return c.json(office.approvals.decide({ kind: 'manager' }, c.req.param('id'), input.decision, input.revision, input.note));
+  }));
+  app.post('/v1/approvals/:id/resend', c => managerOnly(c, () => c.json(office.approvals.resend({ kind: 'manager' }, c.req.param('id')))));
   app.get('/v1/settings/dispatch', c => managerOnly(c, () => c.json({ mode: office.dispatch.mode() })));
   app.put('/v1/settings/dispatch', c => managerOnly(c, async () => c.json({ mode: office.dispatch.setMode(z.object({ mode: z.enum(['off', 'suggest', 'on']) }).strict().parse(await c.req.json()).mode) })));
 

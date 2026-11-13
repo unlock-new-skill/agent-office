@@ -168,6 +168,38 @@ paths:
     post:
       security: [{cookieAuth: []}]
       responses: {'200': {description: Sent}, '502': {description: not_paired | telegram_unreachable}}
+  /v1/approvals:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: 'Manager approval requests: the manager sees all, a seat its own and those on tasks it can read. Each {id, requesterSeatId, taskId, channelId, threadSeq, action, scope, reason, consequences, target, expiresAt, status: pending|approved|rejected|expired|cancelled, revision, decidedBy, decidedVia, decidedAt, decisionNote, delivery {status: queued|sent|retry|uncertain|failed|disabled|not_paired, attempts, error, sentAt}}. Delivered is not approved.'
+      parameters: [{in: query, name: status, schema: {enum: [pending, approved, rejected, expired, cancelled]}}]
+      responses: {'200': {description: '{approvals}'}}
+    post:
+      security: [{bearerAuth: []}]
+      description: 'A seat asks the manager for one decision tied to {taskId} (readable) or {channelId, threadSeq} (a thread it is in): action ≤200, scope ≤500, reason ≤1000, consequences? ≤500, target? ≤200, expiresInMinutes? 5–10080 (default 60). The same pending content again returns the existing request (200, duplicate true). Text that looks like a credential is refused. Sent to the paired private Telegram chat when configured.'
+      responses: {'201': {description: '{approval, duplicate: false}'}, '200': {description: '{approval, duplicate: true}'}, '400': {description: 'invalid_approval, invalid_approval_expiry, approval_needs_task_or_thread, approval_contains_secret'}, '403': {description: 'approval_requested_by_seats, forbidden_task_read, forbidden_channel'}, '409': {description: 'too_many_pending_approvals (10 per seat), approval_queue_full (100)'}}
+  /v1/approvals/{id}:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      responses: {'200': {description: '{approval, events[{kind, actor, via, revision, detail, createdAt}]} — the audit'}, '403': {description: forbidden_approval}}
+    patch:
+      security: [{bearerAuth: []}]
+      description: 'The requester edits a pending request: new revision and new Telegram buttons; earlier buttons and revisions no longer decide it.'
+      responses: {'200': {description: Updated}, '403': {description: approval_changed_by_requester}, '409': {description: 'approval_<status> when not pending'}}
+  /v1/approvals/{id}/cancel:
+    post:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      responses: {'200': {description: Cancelled (requester or manager)}, '409': {description: 'approval_<status>'}}
+  /v1/approvals/{id}/decision:
+    post:
+      security: [{cookieAuth: []}]
+      description: 'Manager only: {decision: approve|reject, revision (the one shown), note?}. The same decision again is a no-op. Posts the decision in the task/thread, waking the requester and its lead. Runs nothing; task status/result/dependencies unchanged.'
+      responses: {'200': {description: Decided}, '401': {description: unauthorized}, '409': {description: 'approval_superseded, approval_expired, approval_rejected, approval_approved, approval_cancelled'}}
+  /v1/approvals/{id}/resend:
+    post:
+      security: [{cookieAuth: []}]
+      description: 'Manager only: queue the Telegram message again after failed / uncertain delivery (the earlier message, if any, is marked replaced).'
+      responses: {'200': {description: Queued}, '409': {description: 'approval_delivery_in_progress, telegram_disabled'}}
   /v1/permissions:
     get:
       security: [{cookieAuth: []}]

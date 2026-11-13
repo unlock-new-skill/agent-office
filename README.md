@@ -290,7 +290,10 @@ node "$env:USERPROFILE\.agent-office\bin\agent-office.mjs" update      # Windows
   agent waits `AGENT_OFFICE_PERMISSION_WAIT_SECONDS` (default 120), then falls back to the terminal (runner seats:
   denied). Set it to `0` on machines with someone at the keyboard.
 - **Telegram:** set `AGENT_OFFICE_TELEGRAM_BOT_TOKEN` (and `AGENT_OFFICE_TELEGRAM_PROXY` if needed) on the server, then
-  **Setup → Telegram → Pair**. Paired chats get permission requests (✅ / ❌) and runner failures.
+  **Setup → Telegram → Pair**. Paired chats get permission requests (✅ / ❌) and runner failures. Agents can also
+  ask the manager for one specific decision with `agent_office_approval`. It shows in the web approvals bar and, in a
+  paired **private** chat, with ✅ Approve / ❌ Reject. The decision is posted back in the task or thread. If nobody
+  answers before the expiry, it is not approved. Approving records the decision only and runs nothing.
 
 ### Read-only access for other servers
 

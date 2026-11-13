@@ -1,5 +1,5 @@
 import { isLobbySession } from '../../shared/lobby.js';
-import type { AgentSnapshot, ChatMessage, CollabEvent, OrgView, PermissionRequest, RunnerCommand, RunnerLogEntry, RunnerSeat, RunnerView, Seat, Snapshot, Task } from '../../shared/contracts.js';
+import type { AgentSnapshot, ApprovalRequest, ChatMessage, CollabEvent, OrgView, PermissionRequest, RunnerCommand, RunnerLogEntry, RunnerSeat, RunnerView, Seat, Snapshot, Task } from '../../shared/contracts.js';
 
 export type OfficeState = {
   org: OrgView | null;
@@ -11,6 +11,8 @@ export type OfficeState = {
   connected: boolean;
   /** Permission prompts waiting for the manager (remote approval). */
   permissions: PermissionRequest[];
+  /** Manager approval requests from seats, still pending. */
+  approvals: ApprovalRequest[];
   /** Open threads by `${channelId}:${rootSeq}`; channel `messages` hold top-level messages only. */
   threads: Record<string, { root: ChatMessage; replies: ChatMessage[] }>;
   /** Machines running seats headless, their live log and the manager's commands, per seat. */
@@ -29,6 +31,7 @@ export type OfficeAction =
   | { type: 'history'; channelId: string; messages: ChatMessage[]; mode: 'replace' | 'prepend' }
   | { type: 'tasks'; tasks: Task[] }
   | { type: 'permissions'; pending: PermissionRequest[] }
+  | { type: 'approvals'; pending: ApprovalRequest[] }
   | { type: 'thread'; channelId: string; root: ChatMessage; replies: ChatMessage[] }
   | { type: 'read'; channelId: string; seq: number }
   | { type: 'connection'; connected: boolean }
@@ -37,7 +40,7 @@ export type OfficeAction =
   | { type: 'runner-commands'; seatId: string; commands: RunnerCommand[] }
   | { type: 'reset' };
 
-export const initialOfficeState: OfficeState = { progressVersion: 0, org: null, agents: [], messages: {}, tasks: {}, readSeq: {}, connected: false, permissions: [], threads: {}, runners: [], runnerLogs: {}, runnerCommands: {} };
+export const initialOfficeState: OfficeState = { progressVersion: 0, org: null, agents: [], messages: {}, tasks: {}, readSeq: {}, connected: false, permissions: [], approvals: [], threads: {}, runners: [], runnerLogs: {}, runnerCommands: {} };
 const LOG_RING = 300;
 
 /** The runner that offers a seat (online one first) and that runner's view of the seat. */
@@ -66,6 +69,7 @@ export const officeReducer = (state: OfficeState, action: OfficeAction): OfficeS
     case 'tasks': return { ...state, tasks: Object.fromEntries(action.tasks.map(task => [task.id, task])) };
     case 'read': return { ...state, readSeq: { ...state.readSeq, [action.channelId]: Math.max(state.readSeq[action.channelId] ?? 0, action.seq) } };
     case 'permissions': return { ...state, permissions: action.pending };
+    case 'approvals': return { ...state, approvals: action.pending };
     case 'thread': return { ...state, threads: { ...state.threads, [threadKey(action.channelId, action.root.seq)]: { root: action.root, replies: mergeMessages([], action.replies) } } };
     case 'connection': return { ...state, connected: action.connected };
     case 'runners': return { ...state, runners: action.runners };
@@ -81,6 +85,7 @@ export const officeReducer = (state: OfficeState, action: OfficeAction): OfficeS
       if (event.kind === 'org') return { ...state, org: event.org };
       if (event.kind === 'task') return { ...state, tasks: { ...state.tasks, [event.task.id]: event.task } };
       if (event.kind === 'permission') return { ...state, permissions: event.pending };
+      if (event.kind === 'approvals') return { ...state, approvals: event.pending };
       if (event.kind === 'runners') return { ...state, runners: event.runners };
       if (event.kind === 'runner-log') return { ...state, runnerLogs: { ...state.runnerLogs, [event.seatId]: [...state.runnerLogs[event.seatId] ?? [], ...event.entries].slice(-LOG_RING) } };
       if (event.kind === 'runner-command') return { ...state, runnerCommands: { ...state.runnerCommands, [event.command.seatId]: upsertCommand(state.runnerCommands[event.command.seatId] ?? [], event.command) } };

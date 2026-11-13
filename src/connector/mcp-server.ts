@@ -229,6 +229,22 @@ server.registerTool('agent_office_progress', {
   return text(await call(`${task}/outputs/${encodeURIComponent(outputId ?? '')}/accept`, { body: clean({ note, missing, accept: accept ?? true }) }));
 });
 
+server.registerTool('agent_office_approval', {
+  title: 'Ask the manager for a decision', description: 'Ask the manager (Telegram + Agent Office) to approve or reject ONE specific action that really needs manager authority — not routine ACKs or steps you are already allowed to do. action=request { taskId (a task you can read) | channelId+threadSeq (a thread you are in), action (what exactly, ≤200), scope (exact limits, ≤500), reason (≤1000), consequences? (cost/risk), target? (host/version/file), expiresInMinutes? (5–10080, default 60) } — asking again with the same content returns the same pending request (no duplicate). Never put tokens, passwords, cookies, env values, raw logs or private file contents in it (refused). action=update { approvalId, …fields } — a new revision; earlier approval buttons no longer apply. action=cancel { approvalId, note? }. action=status { approvalId } — status (pending | approved | rejected | expired | cancelled), delivery (queued | sent | retry | uncertain | failed | disabled | not_paired, kept apart: delivered is not approved) and audit. action=list — requests you can see. The decision is posted in the task/thread and wakes you and your lead. Approval runs nothing and changes no task status, result or dependency; act only within the approved scope before it expires, with your usual role checks. Silence, delivery or a read receipt is never approval.',
+  inputSchema: z.object({ action: z.enum(['request', 'update', 'cancel', 'status', 'list']), approvalId: z.string().min(1).max(40).optional(), taskId: z.string().min(1).max(80).optional(), channelId: z.string().min(1).max(128).optional(), threadSeq: z.number().int().min(1).optional(),
+    what: z.string().min(1).max(200).optional().describe('The action to approve (sent as `action`).'), scope: z.string().min(1).max(500).optional(), reason: z.string().min(1).max(1000).optional(), consequences: z.string().max(500).optional(), target: z.string().max(200).optional(),
+    expiresInMinutes: z.number().int().min(5).max(10_080).optional(), note: z.string().max(500).optional(), status: z.enum(['pending', 'approved', 'rejected', 'expired', 'cancelled']).optional() }).strict(), annotations: write,
+}, async ({ action, approvalId, taskId, channelId, threadSeq, what, scope, reason, consequences, target, expiresInMinutes, note, status }) => {
+  const clean = (value: Record<string, unknown>): Record<string, unknown> => Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+  if (action === 'list') return text(await call(`/v1/approvals${status ? `?status=${status}` : ''}`));
+  if (action === 'request') return text(await call('/v1/approvals', { body: clean({ taskId, channelId, threadSeq, action: what, scope, reason, consequences, target, expiresInMinutes }) }));
+  if (!approvalId) throw new Error('approvalId is required for this action');
+  const one = `/v1/approvals/${encodeURIComponent(approvalId)}`;
+  if (action === 'status') return text(await call(one));
+  if (action === 'cancel') return text(await call(`${one}/cancel`, { body: clean({ note }) }));
+  return text(await call(one, { method: 'PATCH', body: clean({ action: what, scope, reason, consequences, target, expiresInMinutes }) }));
+});
+
 server.registerTool('agent_office_get_task', {
   title: 'Get task', description: 'One task with its status history, field audit (who changed what, before/after, from UI or MCP), readiness (state + reasons + generation), blockers, participants and outputs. Use its revision as expectedRevision when you edit it.',
   inputSchema: z.object({ taskId: id }).strict(), annotations: readOnly,

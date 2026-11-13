@@ -157,6 +157,22 @@ export type RunnerCommand = { id: string; runnerId: string; seatId: string; kind
 export type RunnerLogKind = 'text' | 'tool' | 'result' | 'error' | 'state' | 'prompt';
 export type RunnerLogEntry = { seatId: string; ts: number; kind: RunnerLogKind; summary: string };
 
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'cancelled';
+/** queued/retry: will be sent; sent: Telegram accepted it; uncertain: timed out, maybe sent, never resent by itself; failed/disabled/not_paired: not delivered. */
+export type ApprovalDelivery = 'queued' | 'sent' | 'retry' | 'uncertain' | 'failed' | 'disabled' | 'not_paired';
+/**
+ * One manager decision a seat asked for, tied to a task or a thread. Approving records the decision only: it runs
+ * nothing, changes no task status/result/dependency and grants nothing beyond `scope` until `expiresAt`.
+ */
+export type ApprovalRequest = {
+  id: string; requesterSeatId: string; taskId: string | null; channelId: string; threadSeq: number | null;
+  action: string; scope: string; reason: string; consequences: string; target: string; expiresAt: number;
+  status: ApprovalStatus; revision: number; decidedBy: string | null; decidedVia: 'web' | 'telegram' | null; decidedAt: number | null; decisionNote: string;
+  delivery: { status: ApprovalDelivery; attempts: number; error: string; sentAt: number | null };
+  createdAt: number; updatedAt: number;
+};
+export type ApprovalEvent = { kind: string; actor: string; via: string; revision: number; detail: string; createdAt: number };
+
 export type CollabEvent =
   | { type: 'collab'; kind: 'message'; message: ChatMessage }
   | { type: 'collab'; kind: 'org'; org: OrgView }
@@ -164,6 +180,7 @@ export type CollabEvent =
   | { type: 'collab'; kind: 'blocker'; blocker: Blocker }
   | { type: 'collab'; kind: 'progress'; taskId: string }
   | { type: 'collab'; kind: 'permission'; pending: PermissionRequest[] }
+  | { type: 'collab'; kind: 'approvals'; pending: ApprovalRequest[]; changedId: string }
   | { type: 'collab'; kind: 'runners'; runners: RunnerView[] }
   | { type: 'collab'; kind: 'runner-command'; command: RunnerCommand }
   | { type: 'collab'; kind: 'runner-log'; seatId: string; entries: RunnerLogEntry[] };

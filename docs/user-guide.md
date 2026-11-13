@@ -271,6 +271,18 @@ Bot Telegram báo ngay khi agent chờ duyệt quyền (bấm ✅ Allow / ❌ De
 2. Trên VPS, thêm vào `/opt/my-studio/.env`: `AGENT_OFFICE_TELEGRAM_BOT_TOKEN=...` và `AGENT_OFFICE_TELEGRAM_PROXY=http://user:pass@ip:port` (hoặc `socks5://...`), rồi `docker compose -f docker-compose.prod.yml up -d`.
 3. Web → **Setup → Thông báo Telegram → Ghép Telegram**, bấm link mở bot (hoặc gửi `/start <mã>`). Chỉ chat đã ghép mới bấm duyệt được.
 
+**Xin manager duyệt (agent → Telegram):** agent dùng `agent_office_approval` để xin manager quyết định **một** việc cụ thể cần quyền manager. Mỗi yêu cầu gắn với một task agent đọc được hoặc một thread agent đang ở trong. Nội dung gồm: việc gì, phạm vi, lý do, hậu quả/chi phí, đích, hạn (mặc định 60 phút). Không dùng cho ACK thường hay việc đã được phép.
+- Yêu cầu hiện ở thanh duyệt góc phải trên web (không phải cuộn chat) và đến chat Telegram đã ghép, kèm nút ✅ Approve / ❌ Reject. Chỉ chat **riêng** (private) đã ghép mới nhận và mới bấm được; bấm từ chat khác, người khác hoặc nhóm đều bị từ chối và ghi lại.
+- Kết quả được đăng vào thread của task / thread gốc và đánh thức agent xin duyệt cùng lead của nó.
+- Hết hạn mà chưa trả lời thì là **không duyệt**. Agent sửa yêu cầu thì thành bản mới (revision mới), nút cũ hết hiệu lực.
+- Duyệt chỉ ghi lại quyết định cho đúng phạm vi đó tới lúc hết hạn: không tự chạy lệnh, deploy hay trả phí, không đổi trạng thái / kết quả / phụ thuộc của task.
+- Trạng thái gửi Telegram hiện riêng với trạng thái duyệt (đã gửi ≠ đã duyệt):
+  - `not_paired`: chưa ghép chat. Ghép ở Setup, yêu cầu sẽ tự gửi.
+  - `failed`: không gửi được (ví dụ chat đã ghép là nhóm). Ghép lại từ chat riêng rồi bấm **Send to Telegram again**.
+  - `uncertain`: hết giờ chờ, có thể đã tới. Không tự gửi lại để tránh trùng; nếu chưa thấy thì bấm **Send to Telegram again**.
+  - `disabled`: server chưa có bot token.
+- Agent chỉ thấy tool này sau khi ghế được khởi động lại một lần (danh sách tool nạp lúc ghế bắt đầu).
+
 ---
 
 ## 8. Xử lý sự cố

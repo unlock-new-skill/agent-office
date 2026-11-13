@@ -98,6 +98,21 @@ Schema v10. `POST /v1/machines` creates a runner row (`m-…`) before anything i
 
 `TelegramNotifier` (enabled by `AGENT_OFFICE_TELEGRAM_BOT_TOKEN`) receives collab events: new permission prompts become messages with Allow/Deny inline buttons (`p:a|d:<id>` callback data), resolved prompts edit the message with the outcome; runner seats that turn `failed` are reported. Updates come from long-polling `getUpdates`; all Bot API traffic goes through `AGENT_OFFICE_TELEGRAM_PROXY` (undici `ProxyAgent` for http(s), `fetch-socks` for socks5). One chat is served, paired with a 10-minute code from the web UI (`app_settings`); callbacks from other chats are refused; decisions record `decided_by='telegram'`. Errors mask the token; logs mask proxy credentials. Max 20 messages/min.
 
+**Manager approval requests** (schema v26 `approval_requests`, `approval_events`; `ApprovalService`, MCP `agent_office_approval`, `/v1/approvals*`):
+- **Asking:** a seat asks for one decision tied to a task it can read or a thread it is in. Fields: action, scope, reason, consequences, target, expiry (default 60 min, 5 min–7 days). Text that looks like a credential is refused. The same pending content asked again returns the same request. Limits: 10 pending per seat, 100 in total.
+- **Decision and delivery are separate:** `status` (pending / approved / rejected / expired / cancelled) is the decision; `delivery_status` (queued / sent / retry / uncertain / failed / disabled / not_paired) is only the Telegram delivery.
+- **Telegram delivery** (`TelegramNotifier.pumpApprovals`, on change and every 5 s):
+  - Messages go only to the paired chat, and only if it is private (positive chat id).
+  - It shares the 20 messages/min budget with the other notifications.
+  - A 429 waits for `retry_after`. Network errors before sending retry with backoff (10 s → 15 min, up to 5 attempts, then `failed`). A timeout or broken connection is `uncertain` and is never resent by itself; the manager resends.
+- **Buttons:** each revision has an opaque 24-hex nonce (`ap:a|r:<nonce>`) that never leaves the server. A press counts only if:
+  - it comes from the paired chat, the sender is that user, the chat type is private, and the press is on the message sent for that revision;
+  - the request is still pending, not expired, and the nonce is the current one.
+- **Refused presses** are recorded as `callback_refused`. Repeated presses only return the outcome. An edit by the requester creates a new revision (new nonce; the old message is marked replaced). The web decision must send the revision the manager saw.
+- **Expiry:** the expiry sweep runs every 60 s and lazily on reads. An expired request is not approved.
+- **After a decision:** a line in the task thread (or the original thread) mentions the requester and its department lead, which wakes them. The Telegram message is edited with the outcome.
+- **Approval only records the decision:** it runs nothing and changes no task status, result or dependency.
+
 ## Public map and lobby
 
 `GET /v1/public/map` (no auth, cached 2 s) returns the org and live agents through `publicMap`: seat descriptions, channels, session ids and project paths are removed and agent ids are replaced by per-response aliases; the client renders it read-only at `/map` for anonymous visitors. The lobby shows unseated sessions that have not exited, were not dismissed (`agents.dismissed_at`, schema v11, cleared on the next registration) and reached the daemon within 5 minutes (`isLobbySession`). Machine seats may set `model`, passed to `claude --model`.
