@@ -1,7 +1,7 @@
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 import { agentGuide } from '../shared/agent-guide.js';
-import { BLOCKER_KINDS, DepartmentInputSchema, SeatInputSchema, TASK_RESULTS } from '../shared/contracts.js';
+import { BLOCKER_KINDS, DepartmentInputSchema, SeatInputSchema, TASK_RESULTS, type SeatActivity } from '../shared/contracts.js';
 import type { AuthService, Credential } from './auth/auth-service.js';
 import type { ServiceScope } from './auth/service-token-service.js';
 import type { Actor } from './collaboration/message-service.js';
@@ -205,15 +205,17 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
     const input = z.object({ departmentId: z.string().max(64).optional(), title: z.string().max(200), body: z.string().max(8000).default(''), assigneeSeatId: z.string().min(1).max(64), requestedBy: z.string().min(1).max(64).optional(), parentId: z.string().min(1).max(80).optional(), parallel: z.boolean().optional(), kind: TaskKindSchema.optional(), passRequired: TaskIdList.optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
     return c.json(office.tasks.create(actor, input), 201);
   }));
-  const taskDetail = (actor: Actor, taskId: string, keep: (departmentId: string) => boolean): Record<string, unknown> => {
+  const taskDetail = (actor: Actor, taskId: string, keep: (departmentId: string) => boolean, withProgress = true): Record<string, unknown> => {
     const read = office.tasks.read(actor, taskId);
     const blockers = office.blockers.list({ taskId }).map(blocker => ({ ...blocker, taskIds: blocker.taskIds.filter(id => keep(office.tasks.get(id).departmentId)) }));
-    return { ...read, task: office.tasks.withActivity([read.task])[0], readiness: office.dispatch.readiness(taskId), blockers };
+    const detail = { ...read, task: office.tasks.withActivity([read.task])[0], readiness: office.dispatch.readiness(taskId), blockers };
+    // Participant notes and output evidence stay inside the Office: read-only service tokens do not get them.
+    return !withProgress ? detail : { ...detail, participants: office.progress.participants(taskId), outputs: office.progress.outputs(taskId) };
   };
   app.get('/v1/tasks/:id', c => asService(c, scope => {
     const task = office.tasks.get(c.req.param('id'));
     if (!inScope(scope, task.departmentId)) return json('task_not_found', 404);
-    return c.json(taskDetail({ kind: 'manager' }, task.id, departmentId => inScope(scope, departmentId)));
+    return c.json(taskDetail({ kind: 'manager' }, task.id, departmentId => inScope(scope, departmentId), false));
   }) ?? withActor(c, ({ actor }) => c.json(taskDetail(actor, c.req.param('id'), () => true))));
   app.post('/v1/tasks/:id/start', c => withActor(c, async ({ actor }) => {
     const input = z.object({ generation: z.number().int().min(0).optional(), expectedRevision: z.number().int().min(0).optional() }).strict().parse(await c.req.json());
@@ -239,6 +241,39 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
     return new Response(JSON.stringify(created), { status: 201, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
   }));
   app.post('/v1/service-tokens/:id/revoke', c => managerOnly(c, () => c.json(office.serviceTokens.revoke(c.req.param('id')))));
+  /**
+   * Who works on what: participants and partial outputs of the tasks the caller sees, and every seat's activity derived
+   * from them. A seat sees the activity of its own department's seats and of seats working on tasks it can read; titles
+   * of tasks it cannot read are hidden.
+   */
+  app.get('/v1/progress', c => withActor(c, ({ actor }) => {
+    const cache = new Map<string, boolean>();
+    const readable = (taskId: string): boolean => {
+      if (!cache.has(taskId)) { let ok = false; try { ok = office.tasks.canRead(actor, office.tasks.get(taskId)); } catch { ok = false; } cache.set(taskId, ok); }
+      return cache.get(taskId)!;
+    };
+    const seesAll = actor.kind === 'manager' || office.org.seat(actor.seatId).coordinator;
+    const home = actor.kind === 'seat' ? office.org.seat(actor.seatId).departmentId : null;
+    const departmentOf = new Map(office.org.view().seats.map(seat => [seat.id, seat.departmentId]));
+    const activity = office.progress.activity()
+      .filter(entry => seesAll || departmentOf.get(entry.seatId) === home || (entry.taskId !== null && readable(entry.taskId)))
+      .map((entry): SeatActivity => entry.taskId && !readable(entry.taskId) ? { ...entry, taskId: null, taskTitle: null, phase: '', reasons: [], also: entry.also.filter(item => readable(item.taskId)) } : { ...entry, also: entry.also.filter(item => readable(item.taskId)) });
+    return c.json({ participants: office.progress.participants().filter(row => readable(row.taskId)), outputs: office.progress.outputs().filter(row => readable(row.taskId)), activity });
+  }));
+  const RoleSchema = z.enum(['executor', 'reviewer', 'intake']);
+  app.put('/v1/tasks/:id/participants', c => withActor(c, async ({ actor }) => {
+    const input = z.object({ seatId: z.string().min(1).max(65), role: RoleSchema, state: z.enum(['active', 'waiting', 'done', 'stopped']), phase: z.string().max(200).optional(), note: z.string().max(500).optional() }).strict().parse(await c.req.json());
+    return c.json(office.progress.setParticipant(actor, c.req.param('id'), input, sourceOf(actor)));
+  }));
+  app.delete('/v1/tasks/:id/participants/:seatId/:role', c => withActor(c, ({ actor }) => { office.progress.removeParticipant(actor, c.req.param('id'), c.req.param('seatId'), RoleSchema.parse(c.req.param('role')), sourceOf(actor)); return c.json({ ok: true }); }));
+  app.post('/v1/tasks/:id/outputs', c => withActor(c, async ({ actor }) => {
+    const input = z.object({ name: z.string().min(1).max(200), scope: z.string().max(80).optional(), evidence: z.string().max(1000).optional(), result: z.enum(TASK_RESULTS).optional(), missing: z.string().max(1000).optional() }).strict().parse(await c.req.json());
+    return c.json(office.progress.recordOutput(actor, c.req.param('id'), input, sourceOf(actor)), 201);
+  }));
+  app.post('/v1/tasks/:id/outputs/:outputId/accept', c => withActor(c, async ({ actor }) => {
+    const input = z.object({ note: z.string().max(1000).optional(), missing: z.string().max(1000).optional(), accept: z.boolean().optional() }).strict().parse(await c.req.json());
+    return c.json(office.progress.acceptOutput(actor, c.req.param('id'), c.req.param('outputId'), input, sourceOf(actor)));
+  }));
   app.get('/v1/settings/dispatch', c => managerOnly(c, () => c.json({ mode: office.dispatch.mode() })));
   app.put('/v1/settings/dispatch', c => managerOnly(c, async () => c.json({ mode: office.dispatch.setMode(z.object({ mode: z.enum(['off', 'suggest', 'on']) }).strict().parse(await c.req.json()).mode) })));
 

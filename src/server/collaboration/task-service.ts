@@ -431,10 +431,11 @@ export class TaskService {
   /** All tasks (any department), for readiness. */
   all(): Task[] { return (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks`).all() as TaskRow[]).map(toTask); }
 
-  /** The manager, coordinators, the task's department, its assignee, the lead of its parent and the assignees of its steps see a task. */
+  /** The manager, coordinators, the task's department, its assignee and participants, the lead of its parent and the assignees of its steps see a task. */
   canRead(actor: Actor, task: Task): boolean {
     if (actor.kind === 'manager' || this.isCoordinator(actor)) return true;
     if (this.org.seat(actor.seatId).departmentId === task.departmentId || task.assigneeSeatId === actor.seatId) return true;
+    if (this.db.raw.prepare('SELECT 1 FROM task_participants WHERE task_id=? AND seat_id=?').get(task.id, actor.seatId)) return true;
     if (task.parentId !== null && this.get(task.parentId).assigneeSeatId === actor.seatId) return true;
     return this.steps(task.id).some(step => step.assigneeSeatId === actor.seatId);
   }

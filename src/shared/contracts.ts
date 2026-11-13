@@ -98,6 +98,15 @@ export type Board = { snapshotAt: number; scope: { departmentId: string | null; 
   needsAction: BoardGroup[]; waiting: BoardGroup[]; ready: string[]; doing: string[]; done: string[]; tracking: string[];
   tasks: Record<string, Task>; readiness: Record<string, Readiness>; alerts: OfficeAlert[];
   totals: { tasks: number; needsActionTasks: number; waitingTasks: number; readyTasks: number; blockers: number; groups: number } };
+export type ParticipantRole = 'executor' | 'reviewer' | 'intake';
+export type ParticipantState = 'active' | 'waiting' | 'done' | 'stopped';
+/** A seat working on a task in a role, besides (or as) its owner; never reassigns the task. */
+export type TaskParticipant = { taskId: string; seatId: string; role: ParticipantRole; state: ParticipantState; phase: string; note: string; updatedAt: number; updatedBy: string; source: ChangeSource };
+/** A partial output of a task: received (with evidence) is not accepted; `missing` names the acceptance still open. */
+export type TaskOutput = { id: string; taskId: string; name: string; scope: string; evidence: string; result: TaskResult; missing: string; recordedBy: string; recordedAt: number; source: ChangeSource; acceptedBy: string | null; acceptedAt: number | null; acceptanceNote: string };
+/** What a seat is doing, derived from data only: online is not working, no data is unknown. */
+export type SeatActivityState = 'executing' | 'reviewing' | 'waiting' | 'available' | 'unknown';
+export type SeatActivity = { seatId: string; state: SeatActivityState; taskId: string | null; taskTitle: string | null; role: ParticipantRole | 'owner' | null; phase: string; since: number | null; source: string; stale: boolean; reasons: string[]; also: Array<{ taskId: string; role: ParticipantRole | 'owner'; state: string }> };
 export type TaskChange = { taskId: string; revision: number; actorKind: string; actorId: string; source: ChangeSource; field: string; before: unknown; after: unknown; reason: string; createdAt: number };
 export type SeatHandoff = { seatId: string; body: string; updatedAt: number; updatedBy: string };
 /** requesterSeatId: leader of another department this task was requested by; told when it is blocked or done. */
@@ -153,6 +162,7 @@ export type CollabEvent =
   | { type: 'collab'; kind: 'org'; org: OrgView }
   | { type: 'collab'; kind: 'task'; task: Task }
   | { type: 'collab'; kind: 'blocker'; blocker: Blocker }
+  | { type: 'collab'; kind: 'progress'; taskId: string }
   | { type: 'collab'; kind: 'permission'; pending: PermissionRequest[] }
   | { type: 'collab'; kind: 'runners'; runners: RunnerView[] }
   | { type: 'collab'; kind: 'runner-command'; command: RunnerCommand }

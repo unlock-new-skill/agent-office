@@ -194,6 +194,28 @@ paths:
       description: 'Service tokens (and the manager with limit/cursor) get a page over a stable snapshot ordered by createdAt, id: tasks created after snapshotAt are left out, total is fixed, changedSinceSnapshot counts tasks updated after it (fetch again for one consistent view). Each task carries activeMs (time in doing summed over runs) and runs. Seats without limit get {tasks} (max 500, their visibility).'
       parameters: [{in: query, name: departmentId, schema: {type: string}}, {in: query, name: status, schema: {enum: [todo, doing, blocked, done]}}, {in: query, name: assignee, schema: {type: string}}, {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 200, default: 100}}, {in: query, name: cursor, schema: {type: string}}]
       responses: {'200': {description: '{tasks, total, snapshotAt, nextCursor, changedSinceSnapshot} (paged) or {tasks}'}, '400': {description: 'invalid_cursor, invalid_limit'}, '403': {description: 'forbidden_task_read, outside_token_scope'}}
+  /v1/progress:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: 'Participants and outputs of tasks the caller can read, plus every seat activity {seatId, state: executing|reviewing|waiting|available|unknown, taskId, taskTitle, role, phase, since, source, stale, reasons, also[]} derived from task records only (stale after 60 min).'
+      responses: {'200': {description: '{participants, outputs, activity}'}}
+  /v1/tasks/{id}/participants:
+    put:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: Add or update a seat role on a task. Assignee and task leaders set executors/intakes, only leaders set reviewers; a seat updates its own existing role. Audited; never changes the owner.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [seatId, role, state], additionalProperties: false, properties: {seatId: {type: string}, role: {enum: [executor, reviewer, intake]}, state: {enum: [active, waiting, done, stopped]}, phase: {type: string, maxLength: 200}, note: {type: string, maxLength: 500}}}}}}
+      responses: {'200': {description: TaskParticipant}, '403': {description: forbidden_progress}}
+  /v1/tasks/{id}/outputs:
+    post:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: Record a partial output (received, not accepted). Assignee, task leaders and participants.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [name], additionalProperties: false, properties: {name: {type: string, maxLength: 200}, scope: {type: string, maxLength: 80}, evidence: {type: string, maxLength: 1000}, result: {enum: [not-applicable, pass, fail, inconclusive, unknown]}, missing: {type: string, maxLength: 1000}}}}}}
+      responses: {'201': {description: TaskOutput}, '403': {description: forbidden_progress}}
+  /v1/tasks/{id}/outputs/{outputId}/accept:
+    post:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: Update what acceptance is still missing; accept=true accepts, accept=false revokes (leaders only), omitted leaves acceptance as is. Task leaders/PM/manager, or a reviewer participant for an output it did not record of a task it does not own. Never changes the task.
+      responses: {'200': {description: TaskOutput}, '403': {description: acceptance_by_lead_pm_or_reviewer}}
   /v1/directory:
     get:
       security: [{cookieAuth: []}, {bearerAuth: []}, {serviceToken: []}]

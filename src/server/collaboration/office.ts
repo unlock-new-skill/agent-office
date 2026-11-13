@@ -3,6 +3,7 @@ import type { AfterTask, CollabEvent, Department, Seat, SeatHandoff, Task } from
 import { logger } from '../logger.js';
 import { ServiceTokenService } from '../auth/service-token-service.js';
 import { AlertService } from './alert-service.js';
+import { ProgressService } from './progress-service.js';
 import { BlockerService } from './blocker-service.js';
 import { DispatchService } from './dispatch-service.js';
 import { HandoffService } from './handoff-service.js';
@@ -21,7 +22,7 @@ export type { AfterTask };
 const AFTER_TASK_KEY = 'after_task.default';
 /** handoff = the seat's raw note; handoffBrief = note + open tasks + unread, ready to inject into a session's context. */
 export type WhoAmI = { agentId: string; seat: Seat | null; department: Department | null; channels: ChannelSummary[]; handoff: SeatHandoff | null; handoffBrief: string | null };
-export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; blockers: BlockerService; dispatch: DispatchService; alerts: AlertService; serviceTokens: ServiceTokenService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; trackWork: (agentId: string, kind: string, ts: string) => void; onTurnStop: (agentId: string) => void;
+export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; blockers: BlockerService; dispatch: DispatchService; alerts: AlertService; serviceTokens: ServiceTokenService; progress: ProgressService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; trackWork: (agentId: string, kind: string, ts: string) => void; onTurnStop: (agentId: string) => void;
   /** Office-wide default for what members do after a task (manager setting, else the env default). */
   afterTaskDefault: () => AfterTask; setAfterTaskDefault: (mode: AfterTask | null) => AfterTask; close: () => void };
 
@@ -64,6 +65,7 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
   dispatch.refresh();
   const alerts = new AlertService(db, org, messages, blockers, dispatch);
   const serviceTokens = new ServiceTokenService(db, org);
+  const progress = new ProgressService(db, org, tasks, dispatch, options.emit);
   // Every 5 minutes: grants and windows that ended reopen their blocker, then new exceptions go out in one digest.
   const exceptions = (): void => {
     try { blockers.expireDue(); } catch (error) { logger.error(error); }
@@ -111,5 +113,5 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
     try { runners.enqueue(seat.id, mode === 'clear' ? 'fresh' : 'prompt', mode === 'clear' ? null : focus, `auto: ${done} done`); } catch { /* not run by an online runner: keep the session */ }
   };
   const touchAgent = (agentId: string): void => { db.raw.prepare('UPDATE agents SET last_contact_at=? WHERE id=?').run(Date.now(), agentId); };
-  return { org, messages, wake: wakeService, tasks, blockers, dispatch, alerts, serviceTokens, handoffs, permissions, runners, whoami, touchAgent, trackWork, onTurnStop, afterTaskDefault, setAfterTaskDefault, close: () => { clearInterval(sweep); clearInterval(alertTimer); if (statusTimer) clearInterval(statusTimer); wakeService.close(); permissions.close(); runners.close(); } };
+  return { org, messages, wake: wakeService, tasks, blockers, dispatch, alerts, serviceTokens, progress, handoffs, permissions, runners, whoami, touchAgent, trackWork, onTurnStop, afterTaskDefault, setAfterTaskDefault, close: () => { clearInterval(sweep); clearInterval(alertTimer); if (statusTimer) clearInterval(statusTimer); wakeService.close(); permissions.close(); runners.close(); } };
 };

@@ -187,6 +187,12 @@ Open **Tasks** at the top of a channel, or the **Tasks** tab for the whole offic
   (deputy, parent lead) or the PM after review; the assignee records pass alone only when no lead or PM oversees the
   task. Fail and inconclusive are always open to the assignee. A dependency listed in *needs PASS from* is met only by
   done + pass. Reopening a done task resets its result to unknown.
+- **Who works and what came out:** **+ Who works** on a task card records a participant — executor, reviewer or
+  intake — with its state and the concrete phase (the owner does not change); **+ Output** records a partial result
+  (scope such as local or real-env, evidence, result, what acceptance is still missing). Received is not accepted: the
+  lead, the PM or a reviewer clicks **Accept**. Seat cards on Org, Tasks and Map show what each seat is really doing —
+  executing, reviewing, waiting, available or unknown, with task, phase, time and source — from these records only,
+  never from being online; nothing for 60 minutes shows as unknown (stale).
 - **Blockers:** when something stops work, open one blocker for the root cause — kind (dependency, missing-input,
   permission, environment, defect, owner-missing, decision), one sentence on what is missing, the resolver, the next
   step and the evidence needed to close it, a due date only if someone committed to one — and link every task it stops.

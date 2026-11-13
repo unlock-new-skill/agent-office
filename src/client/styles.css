@@ -494,3 +494,15 @@ label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
 .token-value { display: block; overflow-wrap: anywhere; user-select: all; padding: 6px; background: var(--panel-2); }
 .token-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; display: block; overflow-x: auto; }
 .token-table th, .token-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+
+/* Seat activity and task progress */
+.seat-activity { display: block; font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
+.seat-activity b { color: var(--text); font-weight: 600; }
+.activity-executing b { color: var(--busy); } .activity-reviewing b { color: var(--ok); } .activity-waiting b { color: var(--warn); }
+.activity-stale b, .activity-unknown b { color: var(--text-mute); }
+.task-progress { display: grid; gap: 4px; margin-top: 4px; }
+.task-participants, .task-outputs { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 12px; overflow-wrap: anywhere; }
+.task-outputs li { border-left: 2px solid var(--line); padding-left: 6px; }
+.task-outputs .pill { margin-right: 4px; }
+.participant-active b { color: var(--busy); } .participant-waiting b { color: var(--warn); }
+.task-progress-actions { margin-top: 2px; }

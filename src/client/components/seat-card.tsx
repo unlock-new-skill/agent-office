@@ -10,6 +10,8 @@ type Props = {
   seat: Seat; status: SeatStatus; agent: AgentSnapshot | undefined; unassigned: AgentSnapshot[];
   onAssign: (agentId: string | null) => void; onSave: (patch: { title: string; description: string; role: SeatRole; coordinator: boolean }) => void; onDelete: () => void;
   loadHandoff: () => Promise<SeatHandoff | null>; saveHandoff: (body: string) => Promise<void>;
+  /** What the seat is really doing (from task roles, not from being online). */
+  activity?: ReactNode;
   /** Remote controls when a machine's runner runs this seat headless. */
   runner?: ReactNode;
   /** Clears the auto-wake limit so the seat reacts to mentions again. */
@@ -17,7 +19,7 @@ type Props = {
 };
 export const sessionLabel = (agent: AgentSnapshot): string => `${agent.project.split(/[\\/]/).filter(Boolean).at(-1) ?? agent.project} · ${agent.sessionId.slice(0, 8)}`;
 
-export function SeatCard({ seat, status, agent, unassigned, onAssign, onSave, onDelete, loadHandoff, saveHandoff, runner, onResetWakes }: Props): ReactNode {
+export function SeatCard({ seat, status, agent, unassigned, onAssign, onSave, onDelete, loadHandoff, saveHandoff, runner, onResetWakes, activity }: Props): ReactNode {
   const [editing, setEditing] = useState(false); const [handoffOpen, setHandoffOpen] = useState(false);
   const closeHandoff = useCallback(() => setHandoffOpen(false), []); const [over, setOver] = useState(false); const [copied, setCopied] = useState(false);
   const copyJoin = (): void => {
@@ -51,6 +53,7 @@ export function SeatCard({ seat, status, agent, unassigned, onAssign, onSave, on
               <button type="button" className="icon-btn" aria-label={`Delete ${seat.title}`} onClick={onDelete}>🗑</button>
               </span>
             </header>
+            {activity}
             <div className="seat-handle">@{seat.id} · {SEAT_STATUS_LABEL[status]}{status === 'wake_limited' && onResetWakes && <> <button type="button" className="btn btn-small btn-warn" title="The seat woke itself too many times in a row; reset to let mentions wake it again" onClick={onResetWakes}>Reset</button></>}</div>
             {seat.description && <p className="seat-desc">{seat.description}</p>}
             {seat.agentId

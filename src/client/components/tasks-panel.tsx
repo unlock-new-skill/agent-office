@@ -1,6 +1,8 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { MAX_EXECUTION_MINUTES, TASK_RESULTS, type Channel, type Seat, type Task, type TaskKind, type TaskResult, type TaskStatus } from '../../shared/contracts.js';
 import { errorText, type Api } from '../api/http.js';
+import { TaskProgress } from './progress-parts.js';
+import { useProgress } from '../state/use-progress.js';
 import type { OfficeState } from '../state/office-store.js';
 import { workLabel } from '../state/office-store.js';
 
@@ -88,6 +90,7 @@ function EditForm({ task: live, seats, api, notify, onDone }: { task: Task; seat
 }
 
 export function TasksPanel({ state, channel, api, notify, onOpenThread }: Props): ReactNode {
+  const progress = useProgress(api, state);
   const allSeats = state.org?.seats ?? [];
   const seats = allSeats.filter(seat => channel.departmentId === null || seat.departmentId === channel.departmentId);
   const inChannel = (task: Task): boolean => channel.departmentId === null || task.departmentId === channel.departmentId;
@@ -154,6 +157,7 @@ export function TasksPanel({ state, channel, api, notify, onOpenThread }: Props)
                         {task.dependsOn.some(isOpen) && task.status !== 'done' ? 'waits for' : 'after'} {task.dependsOn.join(', ')}</span>}
                     </span>
                     {task.body && <p className="task-body">{task.body}</p>}
+                    <TaskProgress task={task} seats={allSeats} participants={progress.participants.filter(row => row.taskId === task.id)} outputs={progress.outputs.filter(row => row.taskId === task.id)} api={api} notify={notify} />
                     {steps.length > 0 && <ol className="task-steps" aria-label={`Steps of ${task.id}`}>
                       {steps.map(step => (
                         <li key={step.id} className={`task-step status-${step.status}`}>

@@ -134,6 +134,16 @@ it comes back (e.g. a grant revoked). A grant or window that ends at a known tim
 opens again by itself then. No secrets, tokens or raw logs in a blocker. Never close real work to make the
 board look better.
 
+**Say what you are really doing (participants and outputs).** A task's status is not a person's state. When you work
+on a task — as its executor, its reviewer or the seat taking its output — keep your role current with
+\`agent_office_progress { action: "participant", taskId, seatId: <you>, role, state, phase }\`: \`active\` with the concrete
+step when you start, \`waiting\` (with a note saying for what) when you wait, \`done\` or \`stopped\` when you finish or stop.
+The task's assignee and leaders add participants. Record each partial result with
+\`{ action: "output", name, scope: local|real-env|…, evidence, result, missing }\`: received is not accepted — the task's
+lead, the PM or a reviewer accepts it (\`action: "accept"\`). None of this changes the task's status, result, owner or
+dependencies. Seat activity (\`action: "activity"\`) is derived from these records only: being online is not working,
+and a role with no update for 60 minutes shows as unknown.
+
 **Exceptions digest (leaders and the PM).** Every few minutes Agent Office posts in \`#leaders\` only the exceptions
 that are new: tasks without an assignee, tasks whose time in doing (summed over runs, not wall-clock) passed their estimate, running tasks whose conditions broke,
 blockers past their due date, without a resolver or unchanged for 24h. Each line names who acts and the next step;

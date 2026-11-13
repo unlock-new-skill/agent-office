@@ -80,7 +80,7 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
       <ApprovalsBar pending={office.state.permissions} api={api} notify={notify} />
       <Suspense fallback={<div className="loading">Loading…</div>}>
         {route.view === 'chat' && <ChatView office={office} channelId={channelId} onSelectChannel={id => navigate({ view: 'chat', channelId: id })} notify={notify} />}
-        {route.view === 'map' && <MapView state={office.state} notify={notify} onDismiss={office.dismissAgent} onResetWakes={seatId => api.send('POST', `/v1/seats/${seatId}/reset-wakes`).then(() => undefined)} music={music} />}
+        {route.view === 'map' && <MapView state={office.state} api={api} notify={notify} onDismiss={office.dismissAgent} onResetWakes={seatId => api.send('POST', `/v1/seats/${seatId}/reset-wakes`).then(() => undefined)} music={music} />}
         {route.view === 'org' && <OrgView state={office.state} api={api} notify={notify} onDismiss={office.dismissAgent} />}
         {route.view === 'machines' && <MachinesView state={office.state} api={api} notify={notify} />}
         {route.view === 'requests' && <RequestsView state={office.state} api={api} notify={notify} />}

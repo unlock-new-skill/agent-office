@@ -17,6 +17,8 @@ export type OfficeState = {
   runners: RunnerView[];
   runnerLogs: Record<string, RunnerLogEntry[]>;
   runnerCommands: Record<string, RunnerCommand[]>;
+  /** Bumped when task participants or outputs change, so views reload seat activity. */
+  progressVersion: number;
 };
 
 export type OfficeAction =
@@ -35,7 +37,7 @@ export type OfficeAction =
   | { type: 'runner-commands'; seatId: string; commands: RunnerCommand[] }
   | { type: 'reset' };
 
-export const initialOfficeState: OfficeState = { org: null, agents: [], messages: {}, tasks: {}, readSeq: {}, connected: false, permissions: [], threads: {}, runners: [], runnerLogs: {}, runnerCommands: {} };
+export const initialOfficeState: OfficeState = { progressVersion: 0, org: null, agents: [], messages: {}, tasks: {}, readSeq: {}, connected: false, permissions: [], threads: {}, runners: [], runnerLogs: {}, runnerCommands: {} };
 const LOG_RING = 300;
 
 /** The runner that offers a seat (online one first) and that runner's view of the seat. */
@@ -84,6 +86,7 @@ export const officeReducer = (state: OfficeState, action: OfficeAction): OfficeS
       if (event.kind === 'runner-command') return { ...state, runnerCommands: { ...state.runnerCommands, [event.command.seatId]: upsertCommand(state.runnerCommands[event.command.seatId] ?? [], event.command) } };
       // Blocker changes also re-send the affected tasks; the board refetches on those.
       if (event.kind === 'blocker') return state;
+      if (event.kind === 'progress') return { ...state, progressVersion: state.progressVersion + 1 };
       const { message } = event;
       const org = state.org && { ...state.org, channels: state.org.channels.map(channel => channel.id === message.channelId ? { ...channel, lastSeq: Math.max(channel.lastSeq, message.seq) } : channel) };
       if (message.threadSeq) {

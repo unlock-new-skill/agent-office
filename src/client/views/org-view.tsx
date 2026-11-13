@@ -2,11 +2,13 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import { errorText, type Api } from '../api/http.js';
 import { AGENT_DRAG_TYPE, sessionLabel } from '../components/seat-card.js';
 import { DepartmentColumn } from '../components/department-column.js';
+import { useProgress } from '../state/use-progress.js';
 import { unassignedAgents, type OfficeState } from '../state/office-store.js';
 
 type Props = { state: OfficeState; api: Api; notify: (text: string) => void; onDismiss: (agentId: string) => Promise<void> };
 
 export function OrgView({ state, api, notify, onDismiss }: Props): ReactNode {
+  const progress = useProgress(api, state);
   const unassigned = unassignedAgents(state);
   const [adding, setAdding] = useState(false); const [draft, setDraft] = useState({ name: '', color: '#64748b' });
   const addDepartment = (event: FormEvent): void => {
@@ -30,7 +32,7 @@ export function OrgView({ state, api, notify, onDismiss }: Props): ReactNode {
             </ul>}
       </section>
       <div className="dept-grid">
-        {(state.org?.departments ?? []).map(department => <DepartmentColumn key={department.id} department={department} state={state} api={api} notify={notify} />)}
+        {(state.org?.departments ?? []).map(department => <DepartmentColumn key={department.id} department={department} state={state} api={api} notify={notify} activity={progress.activity} />)}
         <section className="dept-column add-dept">
           {adding
             ? <form className="seat-form" onSubmit={addDepartment}>

@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 24;
+export const SCHEMA_VERSION = 25;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -145,6 +145,26 @@ const V24_TABLES = `CREATE TABLE service_tokens(
   id TEXT PRIMARY KEY, label TEXT NOT NULL CHECK(length(label) BETWEEN 1 AND 80), token_hash TEXT NOT NULL UNIQUE, departments TEXT,
   created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, revoked_at INTEGER, last_used_at INTEGER
 ) STRICT;`;
+/**
+ * v25: who actually works on a task besides its owner (executor / reviewer / intake, with their phase and state) and
+ * the partial outputs a task produced (received with evidence, accepted separately, remaining acceptance spelled out).
+ */
+const V25_TABLES = `CREATE TABLE task_participants(
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, seat_id TEXT NOT NULL REFERENCES seats(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK(role IN ('executor','reviewer','intake')), state TEXT NOT NULL CHECK(state IN ('active','waiting','done','stopped')),
+  phase TEXT NOT NULL DEFAULT '' CHECK(length(phase) <= 200), note TEXT NOT NULL DEFAULT '' CHECK(length(note) <= 500),
+  updated_at INTEGER NOT NULL, updated_by TEXT NOT NULL, source TEXT NOT NULL CHECK(source IN ('ui','mcp','api')),
+  PRIMARY KEY(task_id, seat_id, role)
+) STRICT;
+CREATE INDEX task_participants_seat ON task_participants(seat_id);
+CREATE TABLE task_outputs(
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 200),
+  scope TEXT NOT NULL DEFAULT '' CHECK(length(scope) <= 80), evidence TEXT NOT NULL DEFAULT '' CHECK(length(evidence) <= 1000),
+  result TEXT NOT NULL DEFAULT 'unknown' CHECK(result IN ('not-applicable','pass','fail','inconclusive','unknown')),
+  missing TEXT NOT NULL DEFAULT '' CHECK(length(missing) <= 1000), recorded_by TEXT NOT NULL, recorded_at INTEGER NOT NULL,
+  source TEXT NOT NULL CHECK(source IN ('ui','mcp','api')), accepted_by TEXT, accepted_at INTEGER, acceptance_note TEXT NOT NULL DEFAULT ''
+) STRICT;
+CREATE INDEX task_outputs_task ON task_outputs(task_id);`;
 const V15_COLUMNS = "ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER; ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';";
 const THREAD_INDEX = 'CREATE INDEX messages_thread ON messages(channel_id, thread_seq);';
 
@@ -249,6 +269,7 @@ export class Database {
         if (from < 22) this.raw.exec(V22_TABLES);
         if (from < 23) this.raw.exec(V23_TABLES);
         if (from < 24) this.raw.exec(V24_TABLES);
+        if (from < 25) this.raw.exec(V25_TABLES);
         if ((this.raw.prepare('PRAGMA foreign_key_check').all() as unknown[]).length > 0) throw new Error('migration_foreign_key_violation');
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
@@ -353,6 +374,7 @@ export class Database {
       ${V22_TABLES}
       ${V23_TABLES}
       ${V24_TABLES}
+      ${V25_TABLES}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

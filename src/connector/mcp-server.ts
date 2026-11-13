@@ -17,6 +17,8 @@ const HINTS: Record<string, string> = {
   forbidden_task_change: 'Only the assignee, the department leader (or deputy), the lead of the parent task or a coordinator can change this task.',
   stale_revision: 'Someone changed this task after you read it. The current task is in the error: re-read it, then retry with its revision as expectedRevision.',
   reassign_doing_requires_handoff: 'The task is in progress. Pass handoffNote (what is done, what is left, where the work is) to hand it over; it goes back to todo for the new assignee.',
+  forbidden_progress: 'Only the task\'s assignee, its leaders/PM, or (for its own role) the participant itself can change this. Ask the task owner or your leader.',
+  acceptance_by_lead_pm_or_reviewer: 'An output is accepted by the task\'s lead, the PM, the manager or a reviewer participant of the task. Record the evidence and ask them.',
   readiness_changed: 'The task is no longer ready under that offer (a dependency, result or blocker changed). Read it with agent_office_get_task: readiness lists what is missing.',
   already_started: 'Someone already started this task.',
   pass_needs_review: 'A PASS is recorded by your lead or the PM (it opens the steps that need it). Record fail / inconclusive yourself, or put the evidence in the note and ask your lead to record pass.',
@@ -210,8 +212,25 @@ server.registerTool('agent_office_blocker', {
   return text(await call(path(action === 'resolve' ? '/resolve' : '/reopen'), { body: action === 'resolve' ? { resolution: reason ?? '', ...(validUntil ? { validUntil } : {}) } : { reason: reason ?? '' } }));
 });
 
+server.registerTool('agent_office_progress', {
+  title: 'Task progress and seat activity', description: 'Report who really works on a task and what it already produced, apart from its status/blockers. action=participant { taskId, seatId, role: executor|reviewer|intake, state: active|waiting|done|stopped, phase (concrete step now, e.g. "export FBX v02"), note? } — the assignee and the task\'s leaders/PM set anyone; you update your own role (keep your phase current when you start, wait, finish or stop). action=remove_participant { taskId, seatId, role }. action=output { taskId, name, scope (e.g. local | real-env), evidence (paths/receipts), result, missing (acceptance still open) } — received is not accepted. action=accept { taskId, outputId, note?, missing?, accept? (default true; false revokes, leaders only) } — the task\'s lead/PM/manager, or a reviewer participant for an output it did not record of a task it does not own. Only leaders name reviewers. action=activity — every seat: executing | reviewing | waiting | available | unknown with task, role, phase, time and source (derived from these records only; online is not working; stale after 60 min). None of this changes the task\'s status, result, owner or dependencies.',
+  inputSchema: z.object({ action: z.enum(['participant', 'remove_participant', 'output', 'accept', 'activity']), taskId: z.string().min(1).max(80).optional(), seatId: id.optional(),
+    role: z.enum(['executor', 'reviewer', 'intake']).optional(), state: z.enum(['active', 'waiting', 'done', 'stopped']).optional(), phase: z.string().max(200).optional(), note: z.string().max(1000).optional(),
+    outputId: z.string().max(40).optional(), name: z.string().max(200).optional(), scope: z.string().max(80).optional(), evidence: z.string().max(1000).optional(),
+    result: z.enum(['not-applicable', 'pass', 'fail', 'inconclusive', 'unknown']).optional(), missing: z.string().max(1000).optional(), accept: z.boolean().optional() }).strict(), annotations: write,
+}, async ({ action, taskId, seatId, role, state, phase, note, outputId, name, scope, evidence, result, missing, accept }) => {
+  if (action === 'activity') { const progress = await call('/v1/progress') as { activity: unknown }; return text(progress.activity); }
+  if (!taskId) throw new Error('taskId is required for this action');
+  const task = `/v1/tasks/${encodeURIComponent(taskId)}`;
+  const clean = (value: Record<string, unknown>): Record<string, unknown> => Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+  if (action === 'participant') return text(await call(`${task}/participants`, { method: 'PUT', body: clean({ seatId, role, state, phase, note }) }));
+  if (action === 'remove_participant') return text(await call(`${task}/participants/${encodeURIComponent(seatId ?? '')}/${encodeURIComponent(role ?? '')}`, { method: 'DELETE' }));
+  if (action === 'output') return text(await call(`${task}/outputs`, { body: clean({ name, scope, evidence, result, missing }) }));
+  return text(await call(`${task}/outputs/${encodeURIComponent(outputId ?? '')}/accept`, { body: clean({ note, missing, accept: accept ?? true }) }));
+});
+
 server.registerTool('agent_office_get_task', {
-  title: 'Get task', description: 'One task with its status history, field audit (who changed what, before/after, from UI or MCP), readiness (state + reasons + generation) and blockers. Use its revision as expectedRevision when you edit it.',
+  title: 'Get task', description: 'One task with its status history, field audit (who changed what, before/after, from UI or MCP), readiness (state + reasons + generation), blockers, participants and outputs. Use its revision as expectedRevision when you edit it.',
   inputSchema: z.object({ taskId: id }).strict(), annotations: readOnly,
 }, async ({ taskId }) => text(await call(`/v1/tasks/${encodeURIComponent(taskId)}`)));
 

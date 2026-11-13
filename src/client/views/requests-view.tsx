@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import type { Seat, Task, TaskStatus } from '../../shared/contracts.js';
 import { BlockerBoard } from '../components/blocker-board.js';
+import { SeatActivityLine } from '../components/progress-parts.js';
+import { useProgress } from '../state/use-progress.js';
 import { StatusDot } from '../components/status-dot.js';
 import type { Api } from '../api/http.js';
 import { seatStatus, workLabel, type OfficeState } from '../state/office-store.js';
@@ -22,6 +24,7 @@ const age = (ms: number): string => {
  */
 export function RequestsView({ state, api, notify }: Props): ReactNode {
   const [layout, setLayout] = useState<'person' | 'blocker'>('person');
+  const progress = useProgress(api, state);
   const [department, setDepartment] = useState<string>('all');
   const [query, setQuery] = useState('');
   const [showDone, setShowDone] = useState(false);
@@ -92,6 +95,7 @@ export function RequestsView({ state, api, notify }: Props): ReactNode {
             {left > 0 && <span className="muted">⏱ {workLabel(left * 60_000)} left</span>}
           </span>
         </header>
+        <SeatActivityLine activity={progress.activity.find(entry => entry.seatId === seat.id)} />
         {tasks.length ? <ul>{tasks.map(taskRow)}</ul> : <p className="muted board-empty">No open tasks.</p>}
       </section>
     );

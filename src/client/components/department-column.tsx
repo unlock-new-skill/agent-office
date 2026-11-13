@@ -1,13 +1,15 @@
 import { useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import type { SeatActivity } from '../../shared/contracts.js';
+import { SeatActivityLine } from './progress-parts.js';
 import type { Department, SeatHandoff, SeatRole } from '../../shared/contracts.js';
 import { errorText, type Api } from '../api/http.js';
 import { seatStatus, unassignedAgents, type OfficeState } from '../state/office-store.js';
 import { SeatRunnerPanel } from './runner-controls.js';
 import { SeatCard } from './seat-card.js';
 
-type Props = { department: Department; state: OfficeState; api: Api; notify: (text: string) => void };
+type Props = { department: Department; state: OfficeState; api: Api; notify: (text: string) => void; activity?: SeatActivity[] };
 
-export function DepartmentColumn({ department, state, api, notify }: Props): ReactNode {
+export function DepartmentColumn({ department, state, api, notify, activity = [] }: Props): ReactNode {
   const seats = (state.org?.seats ?? []).filter(seat => seat.departmentId === department.id);
   const unassigned = unassignedAgents(state);
   const [editing, setEditing] = useState(false); const [draft, setDraft] = useState({ name: department.name, color: department.color, deputySeatId: department.deputySeatId });
@@ -53,6 +55,7 @@ export function DepartmentColumn({ department, state, api, notify }: Props): Rea
             saveHandoff={body => api.send('PUT', `/v1/seats/${seat.id}/handoff`, { body }).then(() => notify(`Handoff note for @${seat.id} saved.`)).catch(error => { notify(errorText(error)); throw error; })}
             onDelete={() => { if (window.confirm(`Delete seat ${seat.title}? Its tasks become unassigned.`)) run(api.send('DELETE', `/v1/seats/${seat.id}`)); }}
             onResetWakes={() => run(api.send('POST', `/v1/seats/${seat.id}/reset-wakes`).then(() => notify(`@${seat.id} can be woken again.`)))}
+            activity={<SeatActivityLine activity={activity.find(entry => entry.seatId === seat.id)} />}
             runner={<SeatRunnerPanel seatId={seat.id} title={seat.title} state={state} api={api} notify={notify} />} />
         ))}
       </div>

@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import type { Api } from '../api/http.js';
+import { SeatActivityLine } from '../components/progress-parts.js';
+import { useProgress } from '../state/use-progress.js';
 import { joinPrompt } from '../../shared/join.js';
 import { errorText } from '../api/http.js';
 import { sessionLabel } from '../components/seat-card.js';
@@ -12,7 +15,7 @@ import { Map3DStage } from './map-3d-stage.js';
 import { MusicMenu, type Music } from '../components/music-dock.js';
 
 /** publicView: the anonymous /map (no session names, no actions). onDismiss hides a lobby session. */
-type Props = { state: OfficeState; notify: (text: string) => void; publicView?: boolean; onDismiss?: (agentId: string) => Promise<void>; onResetWakes?: (seatId: string) => Promise<void>; music?: Music };
+type Props = { state: OfficeState; notify: (text: string) => void; api?: Api; publicView?: boolean; onDismiss?: (agentId: string) => Promise<void>; onResetWakes?: (seatId: string) => Promise<void>; music?: Music };
 type Target = { seatId: string } | { agentId: string } | { object: 'speaker' };
 const LEGEND: SeatStatus[] = ['working', 'listening', 'blocked', 'idle', 'wake_limited', 'offline', 'vacant'];
 const STATUS_ORDER: Record<Task['status'], number> = { doing: 0, blocked: 1, todo: 2, done: 3 };
@@ -41,7 +44,13 @@ const TIMES: Array<{ value: TimeOfDay; label: string; title: string }> = [
 const savedTime = (): TimeOfDay => { try { const value = localStorage.getItem(TIME_KEY); return value === 'day' || value === 'night' ? value : 'auto'; } catch { return 'auto'; } };
 
 /** Office map, 3D (Three.js, default) or 2D pixel canvas: one room per department, a desk per seat, agents with live status. */
-export function MapView({ state, notify, publicView = false, onDismiss, onResetWakes, music }: Props): ReactNode {
+/** The selected seat's real activity (task roles, not online state); mounted only while a seat is selected. */
+function MapSeatActivity({ api, state, seatId }: { api: Api; state: OfficeState; seatId: string }): ReactNode {
+  const progress = useProgress(api, state);
+  return <p><SeatActivityLine activity={progress.activity.find(entry => entry.seatId === seatId)} /></p>;
+}
+
+export function MapView({ state, notify, api, publicView = false, onDismiss, onResetWakes, music }: Props): ReactNode {
   const host = useRef<HTMLDivElement>(null); const canvas = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0); const [hover, setHover] = useState<{ target: Target; x: number; y: number } | null>(null); const [selected, setSelected] = useState<Target | null>(null);
   const scale = width >= 1200 ? 3 : 2;
@@ -161,6 +170,7 @@ export function MapView({ state, notify, publicView = false, onDismiss, onResetW
         <aside className="map-detail" aria-label="Selected seat">
           <header>{detail.status && <StatusDot status={detail.status} />}<strong>{detail.title}</strong><span className="spacer" /><button type="button" className="icon-btn" aria-label="Close" onClick={() => setSelected(null)}>✕</button></header>
           {detail.lines.map(line => <p key={line}>{line}</p>)}
+          {detail.seat && api && !publicView && <MapSeatActivity api={api} state={state} seatId={detail.seat.id} />}
           {detail.tasks && detail.tasks.length > 0 && <section className="map-tasks" aria-label="Open tasks">
             <h3>Tasks <span className="muted">{detail.tasks.length} open</span></h3>
             <ul>{detail.tasks.map(task => (
