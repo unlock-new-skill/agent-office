@@ -37,9 +37,9 @@ test('a member\'s question is bound to its task: its technical lead and the PM m
   assert.deepEqual(prompt.resolvers, [{ seatId: 'dev-lead', role: 'technical' }, { seatId: 'ops-lead', role: 'business' }]);
   assert.equal(prompt.state, 'waiting for an answer');
   const notice = lastLine();
-  assert.match(notice.body, new RegExp(`\\[prompt ${prompt.id}\\] @dev-be is waiting on a question \\(Color\\) \\(task ${tasks['dev-be']!}\\)\\. technical: @dev-lead; business/priority: @ops-lead`));
+  assert.match(notice.body, new RegExp(`\\[prompt ${prompt.id}\\] @dev-be is waiting on a question \\(task ${tasks['dev-be']!}\\)\\. technical: @dev-lead; business/priority: @ops-lead`));
   assert.deepEqual(JSON.parse(notice.mentions), ['dev-lead', 'ops-lead']); assert.ok(notice.threadSeq, 'posted in the task thread');
-  assert.doesNotMatch(notice.body, /Which color\?/, 'the notice carries ids and headers, not the question text');
+  assert.doesNotMatch(notice.body, /Which color\?|Color|Red|Blue/, 'the notice carries the id, kind and task: nothing the agent wrote');
   assert.equal(file('dev-be', 'req-1').id, prompt.id, 'the same request filed again is the same prompt');
 
   const waiting = prompts.wait('runner-1', prompt.id, 5000);
@@ -73,6 +73,14 @@ test('a leader is answered by the PM and its parent task\'s lead, never by itsel
   const parent = fixture.office.tasks.create(manager, { title: 'Parent', body: 'Goal, inputs, expected output and acceptance criteria.', assigneeSeatId: 'ba-lead', estimateMinutes: 30 });
   fixture.db.raw.prepare('UPDATE tasks SET parent_id=? WHERE id=?').run(parent.id, tasks['dev-lead']!);
   assert.deepEqual(file('dev-lead', 'req-1b').resolvers, [{ seatId: 'ba-lead', role: 'technical' }, { seatId: 'ops-lead', role: 'business' }]);
+  fixture.db.raw.prepare('UPDATE tasks SET assignee_seat_id=? WHERE id=?').run('ba-docs', parent.id);
+  assert.deepEqual(file('dev-lead', 'req-1c').resolvers, [{ seatId: 'ops-lead', role: 'business' }], 'an ordinary member named on the parent task is no resolver');
+  fixture.db.raw.prepare("UPDATE departments SET deputy_seat_id='ba-docs' WHERE id='ba'").run();
+  assert.deepEqual(file('dev-lead', 'req-1d').resolvers, [{ seatId: 'ba-docs', role: 'technical' }, { seatId: 'ops-lead', role: 'business' }], 'the deputy of the parent task\'s department leads it');
+  prompts.cancel('runner-1', { ids: [file('dev-lead', 'req-1d').id] }, 'the session stopped or restarted');
+  fixture.db.raw.prepare("UPDATE departments SET deputy_seat_id=NULL WHERE id='ba'").run();
+  fixture.db.raw.prepare('UPDATE tasks SET assignee_seat_id=? WHERE id=?').run('design-lead', parent.id);
+  assert.deepEqual(file('dev-lead', 'req-1e').resolvers, [{ seatId: 'ops-lead', role: 'business' }], 'a leader of another department named on the parent task is no resolver');
   const coordinator = file('ops-lead', 'req-2');
   assert.equal(coordinator.managerOnly, true); assert.match(coordinator.managerReason, /no resolver other than @ops-lead/, 'a PM request is not routed back to itself');
   fixture.db.raw.prepare("UPDATE tasks SET status='todo' WHERE id=?").run(tasks['dev-fe']!);
@@ -209,5 +217,42 @@ test('prompts of a runner that went offline are cancelled by the sweep; online r
   prompts.answer(manager, decided.id, { binding: decided.binding, behavior: 'deny' });
   prompts.cancelOffline(() => false);
   assert.equal(prompts.get(decided.id).status, 'denied', 'a sweep does not relabel a decision that may have reached the session');
+  fixture.close();
+});
+
+test('a resolver who lost the scope can no longer read or list the prompt; the asker and the manager still can', () => {
+  const { fixture, prompts, file, tasks } = setup();
+  const prompt = file('dev-be', 'req-1');
+  assert.equal(prompts.read(seat('dev-lead'), prompt.id).id, prompt.id); assert.equal(prompts.list(seat('dev-lead')).length, 1);
+  // The lead stops being a leader: reading goes with the role, not with the resolver list stored at filing time.
+  fixture.db.raw.prepare("UPDATE seats SET role='member' WHERE id='dev-lead'").run();
+  assert.throws(() => prompts.read(seat('dev-lead'), prompt.id), /forbidden_prompt/);
+  assert.equal(prompts.list(seat('dev-lead')).length, 0);
+  assert.equal(prompts.read(seat('ops-lead'), prompt.id).id, prompt.id, 'the PM is still in scope');
+  // The task ends: no delegate reads it any more, even a decided one.
+  assert.equal(prompts.answer(seat('ops-lead'), prompt.id, { binding: prompt.binding, behavior: 'allow', answers: { 'Which color?': 'Red' } }).status, 'answered');
+  fixture.db.raw.prepare("UPDATE tasks SET status='done' WHERE id=?").run(tasks['dev-be']!);
+  assert.throws(() => prompts.read(seat('ops-lead'), prompt.id), /forbidden_prompt/);
+  assert.equal(prompts.list(seat('ops-lead')).length, 0);
+  assert.equal(prompts.read(seat('dev-be'), prompt.id).id, prompt.id, 'the asker reads its own prompt');
+  assert.equal(prompts.read(manager, prompt.id).id, prompt.id); assert.equal(prompts.list(manager).length, 1);
+  fixture.close();
+});
+
+test('the notice of a prompt kept for the manager carries no header, question or matched word (synthetic strings)', () => {
+  const { fixture, prompts, file, lastLine } = setup();
+  const input = { questions: [{ question: 'Use the synthetic-secret-value-42 for the store?', header: 'token zz-header-9', multiSelect: false, options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }] }] };
+  const prompt = file('dev-be', 'req-1', 'AskUserQuestion', input);
+  assert.equal(prompt.managerOnly, true);
+  const notice = lastLine();
+  assert.match(notice.body, new RegExp(`\\[prompt ${prompt.id}\\] @dev-be is waiting on a question .*Only the manager can answer \\(the reason is in the prompt\\)`));
+  assert.doesNotMatch(notice.body, /zz-header-9|token|synthetic-secret|store|Yes|sensitive/);
+  assert.deepEqual(JSON.parse(notice.mentions), [], 'nobody but the manager is woken');
+  const permission = file('dev-be', 'req-2', 'Bash', { command: 'cat zz-path-7/notes.txt' });
+  assert.doesNotMatch(lastLine().body, /zz-path-7|Bash|cat/, 'tool name and input stay out of the channel');
+  assert.match(lastLine().body, new RegExp(`\\[prompt ${permission.id}\\] @dev-be is waiting on a tool permission`));
+  // Who can see the prompt itself: the manager and the asker, not the lead (manager-only), not the channel.
+  assert.throws(() => prompts.read(seat('dev-lead'), prompt.id), /forbidden_prompt/);
+  assert.equal(prompts.list(seat('dev-lead')).some(item => item.id === prompt.id), false);
   fixture.close();
 });

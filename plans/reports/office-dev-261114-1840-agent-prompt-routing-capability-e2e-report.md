@@ -67,7 +67,7 @@ Observed: the seat detail on the server view showed `working` when sampled right
 - Prompt-routing data stays on the server (no new external service). Telegram notification for manager-only prompts was not added (pm2 flow kept separate).
 
 ## 6. Activation proposal (for a separate operations decision; not done)
-1. Deploy the server with v31 (additive table; 9410fb9/6b9f8fb cannot open v31, so a rollback is `DROP TABLE agent_prompts; PRAGMA user_version=30` with the container stopped and a backup taken, same pattern as the tested v30 → v29).
+1. Deploy the server with v31 (additive table; 9410fb9/6b9f8fb cannot open v31, rollback: see section 9.3. Dropping the table is not accepted by PM: it would lose prompt history).
 2. Update the Windows connector (the same pinned install-self path as t-pm-6), then restart the runner. Each seat restarts with `--permission-prompt-tool stdio`; sessions resume.
 3. Effect on sessions:
    - bypass seats gain AskUserQuestion, routed to their lead; nothing else changes;
@@ -141,3 +141,50 @@ Review: `plans/reports/code-reviewer-261114-1830-agent-prompt-routing-review-rep
 - **M6:** tests added.
 - **Checks:** typecheck, 310/310 tests, lint and build all clean.
 - **Real E2E rerun:** passed. Logs: `/tmp/ao-pr/e2e-run3.log`, `/tmp/ao-pr/e2e-perm3.log`.
+
+## 9. Third revision after PM #483 (R2 accepted, R3/R4/notice fixed, rollback path)
+Base 9db8de3 (kept as historical evidence: 310 tests, review rounds 1–3). Re-pinned at the commit on top of it.
+
+### 9.1 Changes
+- **R2 (accepted as is):** PM coordinators and technical leads both answer questions; tool permissions stay with technical resolvers only. Docs say PM decides business/priority, the technical lead technical choices.
+- **R3:** the assignee of the parent task is a resolver only when that seat is the leader or deputy of the parent task's department. An ordinary member named on a parent task gets nothing. `prompt-service.ts` `resolversFor`.
+- **R4:** reading and listing recheck the scope like answering does (`stillInScope`): a resolver who lost the role, or whose task ended or changed, no longer reads or lists the prompt. The manager and the asking seat still read it. `canRead`, `list`.
+- **R5:** kept 403.
+- **Notice (PM finding):** the channel/thread notice carries only the prompt id, its kind (question / tool permission) and the task. No header, question, tool name/input or the matched sensitive word, also for manager-only prompts. The decision line in the thread names only who decided.
+- Viewer filtering on the other paths: the `prompts` WebSocket event goes only to `/v1/stream`, which accepts only manager cookie sessions (`src/server/index.ts` upgrade → `auth.authenticateRequest`). Seats see prompts only through `GET /v1/prompts[/:id]` / MCP `agent_office_prompts`, which use `canRead`. Telegram ignores `prompts` events.
+- Docs: `docs/operations.md`, MCP tool description.
+
+### 9.2 Gates and E2E (re-run on the final tree)
+- typecheck, 312/312 tests, lint, build: clean.
+- New unit tests (synthetic strings only): member on parent task is no resolver; lost role / ended task → read and list refused, asker and manager still read; manager-only notice has no header, question, matched word or tool input, and wakes nobody.
+- Real E2E again (Claude Code 2.1.323 + real Runner, synthetic in-memory office): questions single/multi/free answered by the lead, session continued; peer 403; replay 409; "Deploy" question manager-only, denied, agent continued; stopped seat → cancelled, late answer 409; Bash allowed → ran, denied → not run. Live notice text: `[prompt pr-…] @dev-be is waiting on a question (task t-dev-1). technical: @dev-lead — answer only within t-dev-1: …`.
+
+### 9.3 Rollback v31 → v30 that keeps the history (proposal only; no prod SQL run)
+Container stopped, backup first, separate prod SQL permission. Run as one transaction; any error leaves nothing committed:
+```
+BEGIN IMMEDIATE;
+UPDATE agent_prompts SET status='cancelled', cancel_reason='server rolled back to v30', decided_at=COALESCE(decided_at, <now ms>) WHERE status='pending';
+UPDATE agent_prompts SET cancel_reason='server rolled back to v30: delivery not confirmed, can no longer be delivered' WHERE status IN ('answered','denied');
+DROP INDEX agent_prompts_status; DROP INDEX agent_prompts_seat;
+ALTER TABLE agent_prompts RENAME TO agent_prompts_archive_v31_<yyyymmddhhmm>;
+PRAGMA user_version=30;
+COMMIT;
+```
+Verified LOCAL with the real v31 schema (branch `Database`) and the real v30 code (`6b9f8fb` `Database` from a temporary worktree) on a synthetic temp DB:
+- rows kept in the archive with their state: pending → cancelled (reason); answered/denied keep their decision (status, behavior, decided_by) with `cancel_reason` "delivery not confirmed, can no longer be delivered": a runner may have handed it over just before the rollback without reporting, so it is recorded as unknown, never as delivered, ran or not run; delivered and expired unchanged;
+- v30 code opens the rolled-back DB (version 30);
+- deploying v31 again creates a fresh empty table next to the archive (live 0, archived 4): no old decision comes back;
+- a second rollback reusing an existing archive name fails (`there is already another table or index with this name`) after the two UPDATEs had already run, and the abort leaves everything as it was (still v31, table, indexes, the pending row still pending); with a new name it goes through and both archives stay. Hence the timestamped name.
+- Indexes must be dropped: renaming with them kept makes the next v31 upgrade fail (`index agent_prompts_status already exists`) and the server would not start.
+
+New connector against a server without prompt routes (fake fetch, fake clock; branch Runner):
+- filing on a v30 server: 404 → deny at once, one call, no retry;
+- prompt filed, then the server rolled back (or redeployed with an empty table): polls get 404 and are retried until the prompt's expiry + 60 s (about 22 min), then deny. Never allow, no replay, not endless. The seat waits that long. Possible follow-up (not done, PM decides): treat a 404 on the poll as final and deny at once.
+- Order: roll back the connector first (old connector: no AskUserQuestion, no prompt routes), then the server. If the server goes first, sessions waiting on a prompt are denied as above.
+- NOTRUN: on Windows; on a real copy of the production DB (backup not downloaded, by rule).
+
+### 9.4 Delta review and follow-ups
+- Independent delta review (same reviewer report, section "Final delta (post-PM decision)"): APPROVE WITH NOTES. R1 confirmed fixed (in 9db8de3: a sweeping cancel only takes pending prompts); R3, R4, notice fixed; R2/R5 as decided.
+- Its low notes fixed before commit: N1 doc comment on `resolversFor`; N2 the ended-task read test now uses an answered prompt; N3 tests for a parent-department deputy (accepted) and a leader of another department named on the parent task (refused).
+- Behaviour to know: a lead no longer sees a seat's past prompts once that seat's task changes (R4 as decided); the manager keeps the full history.
+- The LOCAL rollback and connector checks ran from temporary scripts outside the repo (they import the 6b9f8fb code from a temporary worktree); results are reproduced above.

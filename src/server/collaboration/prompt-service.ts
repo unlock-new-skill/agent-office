@@ -148,7 +148,8 @@ export class PromptService {
   list(actor: Actor): AgentPrompt[] {
     this.expireDue();
     const rows = this.db.raw.prepare(`SELECT ${COLUMNS} FROM agent_prompts WHERE status='pending' OR created_at>? ORDER BY status='pending' DESC, created_at DESC LIMIT 100`).all(this.now() - 24 * 3_600_000) as Row[];
-    return rows.filter(row => this.canRead(actor, row)).slice(0, 40).map(row => this.view(row));
+    const scopes = new Map<string, ReturnType<PromptService['resolversFor']>>();
+    return rows.filter(row => this.canRead(actor, row, scopes)).slice(0, 40).map(row => this.view(row));
   }
 
   read(actor: Actor, id: string): AgentPrompt {
@@ -166,8 +167,7 @@ export class PromptService {
       if (row.managerOnly === 1) throw forbidden('prompt_manager_only');
       if (!this.resolverIds(row).includes(actor.seatId)) throw forbidden('not_prompt_resolver');
       // The scope is checked again now: a task finished or reassigned, or a lead who lost the role, cannot answer.
-      const now = this.resolversFor(this.org.seat(row.seatId), row.kind, false);
-      if (now.taskId !== row.taskId || !now.resolvers.some(item => item.seatId === actor.seatId)) throw forbidden('prompt_scope_changed');
+      if (!this.stillInScope(row, actor.seatId)) throw forbidden('prompt_scope_changed');
     }
     if (row.status !== 'pending') throw conflict(row.status === 'expired' ? 'prompt_expired' : 'prompt_already_resolved');
     if (answer.binding !== row.binding) throw conflict('prompt_binding_mismatch');
@@ -265,24 +265,29 @@ export class PromptService {
 
   /**
    * Who may answer for a seat, bound to the task it has in progress (an execution task first): technical = leaders and
-   * deputy of the task's department (for members) and the lead of the parent task; business = the coordinators (PM).
+   * deputy of the task's department (for members) and the parent task's assignee when it is the leader or deputy of the
+   * parent task's department; business = the coordinators (PM).
    * Never the seat itself. No task in progress or nobody left means the manager, with the reason shown.
    */
   private resolversFor(seat: Seat, kind: AgentPrompt['kind'], skipWaiting = true): { taskId: string | null; resolvers: Resolver[]; steering: boolean; reason: string; thread: NoticeThread | null } {
     const view = this.org.view();
     const home = view.departments.find(item => item.id === seat.departmentId);
     const steering = seat.role === 'leader' || seat.coordinator || home?.deputySeatId === seat.id;
-    const doing = this.db.raw.prepare(`SELECT t.id,t.kind,t.department_id AS departmentId,t.thread_seq AS threadSeq,p.assignee_seat_id AS parentLead FROM tasks t LEFT JOIN tasks p ON p.id=t.parent_id
-      WHERE t.assignee_seat_id=? AND t.status='doing' AND t.archived_at IS NULL ORDER BY t.id`).all(seat.id) as Array<{ id: string; kind: string | null; departmentId: string; threadSeq: number | null; parentLead: string | null }>;
+    const doing = this.db.raw.prepare(`SELECT t.id,t.kind,t.department_id AS departmentId,t.thread_seq AS threadSeq,p.assignee_seat_id AS parentLead,p.department_id AS parentDepartmentId FROM tasks t LEFT JOIN tasks p ON p.id=t.parent_id
+      WHERE t.assignee_seat_id=? AND t.status='doing' AND t.archived_at IS NULL ORDER BY t.id`).all(seat.id) as Array<{ id: string; kind: string | null; departmentId: string; threadSeq: number | null; parentLead: string | null; parentDepartmentId: string | null }>;
     // The scope must be unambiguous: the one execution task in progress, else the only task in progress.
     const executions = doing.filter(item => item.kind === 'execution');
     const task = executions.length === 1 ? executions[0] : doing.length === 1 ? doing[0] : undefined;
     if (!task) return { taskId: null, resolvers: [], steering, reason: doing.length === 0 ? 'no task in progress for this seat: nobody can answer within an assigned scope' : `several tasks in progress (${doing.map(item => item.id).join(', ')}): the scope is ambiguous`, thread: null };
     const department = view.departments.find(item => item.id === task.departmentId);
+    // The parent task's assignee counts only as a lead of that department (its leader or deputy): being named on the
+    // parent task gives an ordinary member no say.
+    const parentDepartment = view.departments.find(item => item.id === task.parentDepartmentId);
+    const parentLead = task.parentLead && (view.seats.some(item => item.id === task.parentLead && item.departmentId === task.parentDepartmentId && item.role === 'leader') || parentDepartment?.deputySeatId === task.parentLead) ? task.parentLead : null;
     const technical = [
       ...(steering ? [] : view.seats.filter(item => item.departmentId === task.departmentId && item.role === 'leader').map(item => item.id)),
       ...(!steering && department?.deputySeatId ? [department.deputySeatId] : []),
-      ...(task.parentLead ? [task.parentLead] : []),
+      ...(parentLead ? [parentLead] : []),
     ];
     const resolvers: Resolver[] = [];
     for (const seatId of technical) if (seatId !== seat.id && !resolvers.some(item => item.seatId === seatId)) resolvers.push({ seatId, role: 'technical' });
@@ -309,19 +314,21 @@ export class PromptService {
     return result;
   }
 
-  /** One short line where the resolvers are woken: ids and headers only, the details are read with the prompt tool. */
-  /** Posted in the task's thread (mentioned resolvers outside the channel become thread guests), else in the seat's channel. */
+  /**
+   * One neutral line where the resolvers are woken: prompt id, kind and task only. Nothing the agent wrote (headers,
+   * questions, tool input, the sensitive word that kept it with the manager) goes into the channel; the details are read
+   * with the prompt tool, which checks who is asking. Posted in the task's thread (mentioned resolvers outside the
+   * channel become thread guests), else in the seat's channel.
+   */
   private notice(prompt: Row, seat: Seat, thread: NoticeThread): void {
     const resolvers = JSON.parse(prompt.resolversJson) as Resolver[];
     const channel = thread.channelId;
-    const what = prompt.kind === 'question'
-      ? `a question (${(JSON.parse(prompt.questionsJson) as PromptQuestion[]).map(item => item.header || 'question').join(', ').slice(0, 120)})`
-      : `permission for ${prompt.tool}`;
+    const what = prompt.kind === 'question' ? 'a question' : 'a tool permission';
     const technical = resolvers.filter(item => item.role === 'technical').map(item => `@${item.seatId}`);
     const business = resolvers.filter(item => item.role === 'business').map(item => `@${item.seatId}`);
     const who = resolvers.length > 0
       ? `${[technical.length ? `technical: ${technical.join(' ')}` : '', business.length ? `business/priority: ${business.join(' ')}` : ''].filter(Boolean).join('; ')} — answer only within ${prompt.taskId}`
-      : `Only the manager can answer (${prompt.managerReason})`;
+      : 'Only the manager can answer (the reason is in the prompt)';
     const body = `[prompt ${prompt.id}] @${seat.id} is waiting on ${what}${prompt.taskId ? ` (task ${prompt.taskId})` : ''}. ${who}: agent_office_prompts { action: "get", promptId: "${prompt.id}" }, then action "answer". Unanswered by ${new Date(prompt.expiresAt).toISOString().slice(11, 16)} UTC it is denied.`;
     try {
       const posted = this.messages.postSystem(channel, body, resolvers.map(item => item.seatId), thread.seq ?? undefined);
@@ -330,9 +337,27 @@ export class PromptService {
     } catch { /* no such channel: the prompt still shows in the web UI */ }
   }
 
-  private canRead(actor: Actor, row: Row): boolean {
+  /**
+   * The manager reads every prompt and the asker its own. A resolver reads a prompt only while still in its scope: listed
+   * when it was filed and still a resolver of the same task now. Losing the role or the task ending revokes reading too.
+   */
+  private canRead(actor: Actor, row: Row, scopes?: Map<string, ReturnType<PromptService['resolversFor']>>): boolean {
     if (actor.kind === 'manager') return true;
-    return actor.seatId === row.seatId || (row.managerOnly === 0 && this.resolverIds(row).includes(actor.seatId));
+    if (actor.seatId === row.seatId) return true;
+    return row.managerOnly === 0 && this.resolverIds(row).includes(actor.seatId) && this.stillInScope(row, actor.seatId, scopes);
+  }
+
+  /** Whether the seat is, right now, a resolver of the same task the prompt was filed under. */
+  private stillInScope(row: Row, seatId: string, scopes?: Map<string, ReturnType<PromptService['resolversFor']>>): boolean {
+    const key = `${row.seatId}:${row.kind}`;
+    let now = scopes?.get(key);
+    if (!now) {
+      const asker = this.org.view().seats.find(item => item.id === row.seatId);
+      if (!asker) return false;
+      now = this.resolversFor(asker, row.kind, false);
+      scopes?.set(key, now);
+    }
+    return now.taskId === row.taskId && now.resolvers.some(item => item.seatId === seatId);
   }
 
   private row(id: string): Row {

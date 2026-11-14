@@ -120,10 +120,12 @@ A runner starts each seat's `claude -p` with `--permission-prompt-tool stdio`, s
 
 The runner files the prompt with Agent Office, bound to the task the seat has **in progress**. The seat shows `waiting for an answer … since …`. A short notice in that task's thread wakes the resolvers of that task:
 
-- **technical**: the leader and deputy of the task's department (for members), and the lead of its parent task. Only they answer tool permissions;
-- **business / priority**: the PM coordinators, for questions.
+- **technical**: the leader and deputy of the task's department (for members), and the assignee of its parent task only when that assignee is the leader or deputy of the parent task's department (an ordinary member named on a parent task gets no say). Only they answer tool permissions;
+- **business / priority**: the PM coordinators, for questions. PM and technical leads may both answer a question; between them the PM decides business and priority, the technical lead technical choices.
 
-The scope must be clear: the seat's one execution task in progress, otherwise its only task in progress. It is checked again when someone answers, so a finished or reassigned task, or a lead who lost the role, can no longer answer.
+The notice carries only the prompt id, its kind (question or tool permission) and the task: nothing the agent wrote. The details are read with the prompt tool or in the web bar.
+
+The scope must be clear: the seat's one execution task in progress, otherwise its only task in progress. It is checked again when someone answers or reads, so a finished or reassigned task, or a lead who lost the role, can no longer answer or see the prompt (the manager and the asking seat still can).
 
 Never the asking seat itself, and not a resolver who is itself blocked on a prompt.
 

@@ -6,7 +6,11 @@
 - Gates (run 17:18-17:20): `npm test` 302/302 pass. `npm run lint` clean. `npx tsc --noEmit` **FAILS** on the current tree (see M4).
 - **Warning: the tree changed while I was reviewing it.** `src/shared/contracts.ts` (17:19:55), `src/server/collaboration/prompt-service.ts` (17:20:35) and the v31 DDL in `database.ts` were rewritten during the review. The rewrite adds task-bound resolvers and new fields (`taskId`, `resolvers`, `outcome`, `outcome_at`). Line numbers below refer to the prompt-service.ts I read at the start (the 17:06 version, 249 lines). Findings about `resolversFor`/notice may already be partly stale. All other findings still apply to the current files.
 
-## Verdict: REQUEST CHANGES
+## Current verdict: APPROVE WITH NOTES (see "Final delta (post-PM decision)" at the end)
+
+R1, R3, R4 and the notice leak are fixed; R2 and R5 are kept by PM decision. Remaining: low notes only (N1–N3 at the end). The verdicts below are history.
+
+## Round-1 verdict: REQUEST CHANGES
 
 Requirements check:
 - Self-answer refused: OK.
@@ -330,13 +334,43 @@ Gates I ran myself:
 | No valid resolver → shown as manager-only with a reason | OK. Reasons: no task, several tasks, no technical lead, everyone waiting, sensitive, too long. |
 | Deny, expired and cancelled distinct in audit and UI | OK. The cancel reason and the earlier decider are kept. |
 | A decision applies only to the request still waiting; no revival | OK. `alive()` checks generation, process and request; cancelled, expired and delivered resolve to deny; a late answer → 409/403. |
-| "Approved" ≠ "executed" | OK. `outcome` is recorded even when the result arrives before the delivery notice. Edge case R1 remains. |
+| "Approved" ≠ "executed" | OK. `outcome` is recorded even when the result arrives before the delivery notice. Edge case R1: fixed in 9db8de3 (see final delta). |
 
 ### Final verdict: APPROVE WITH NOTES
 
 - All blocking and medium findings from rounds 1 and 2 are fixed and covered by tests.
-- R1 is a real but narrow audit-accuracy gap (a lost `/delivered` followed by a bulk cancel). It never causes anything to execute. Fix it soon, preferably before relying on the audit for compliance.
+- R1 was a narrow audit-accuracy gap (a lost `/delivered` followed by a bulk cancel). Correction: it is fixed in commit 9db8de3 (sweeping cancel touches only `pending`); this round-2 note was written against the earlier tree.
 - R2 and R3 are policy points for the PM to confirm.
 
 Status: DONE
-Summary: APPROVE WITH NOTES. D1–D6, M4 and M6 are verified fixed and the gates are green; one medium audit edge remains (a bulk cancel can mark a delivered decision "not run"), plus two policy points for the PM.
+Summary: APPROVE WITH NOTES. D1–D6, M4 and M6 are verified fixed and the gates are green; (superseded: R1 was already fixed, see below) plus two policy points for the PM.
+
+## Final delta (post-PM decision)
+
+Reviewed: working tree vs HEAD 9db8de3 (`prompt-service.ts`, `mcp-server.ts`, `agent-prompts.test.ts`, `docs/operations.md`). Line refs are to the current working tree.
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| R1 (bulk cancel relabels a delivered decision) | **Fixed** (in 9db8de3, not in this delta) | `prompt-service.ts:238-242`: `statuses = scope.ids ? "('pending','answered','denied')" : "('pending')"`, used in both SELECT and UPDATE. `cancelOffline` (:249-251) and the runner restart cancel (`runner.ts:303`, no ids) now touch only pending rows; id-scoped cancels come only from the session withdrawing a request it still waited on (`seat-worker.ts` prompt-cancel, `runner.ts:266`). Covered by the sweep test ("a sweep does not relabel a decision that may have reached the session"). My earlier "R1 remains" was wrong for this tree. |
+| R2 | Kept (PM) | Questions: PM + technical leads; permissions: technical only. |
+| R3 (parent assignee must lead the parent's department) | **Fixed** | `:275-276` joins `p.department_id`; `:285-286` keeps the parent assignee only if it is a `leader` seated in the parent task's department or that department's deputy. Self excluded (`:292`). Test: `agent-prompts.test.ts:76-78` (member `ba-docs` on parent → only the PM). |
+| R4 (read/list recheck scope) | **Fixed** | `canRead` (:343-348) = manager, or asker, or (not manager-only ∧ in stored list ∧ `stillInScope`). `stillInScope` (:350-360) recomputes `resolversFor(asker, kind, false)` and requires same `taskId` and current membership; `answer()` reuses it (:170). `list()` caches per asker+kind (:151). Test `:217-233` covers lost role, ended task, asker and manager. |
+| R5 | Kept (PM) | 403 before 409 unchanged. |
+| Notice leak (header / matched word in channel) | **Fixed** | `notice()` (:322-336): `what` is only "a question" / "a tool permission"; manager-only text is the fixed "the reason is in the prompt". No header, question, tool name/input, or `managerReason`. Tests `:40-42` and `:235-251` use synthetic strings (`zz-header-9`, `synthetic-secret-value-42`, `zz-path-7`, `Bash`) and assert none appear; mentions empty for manager-only. |
+
+Other exposure paths checked:
+- Decision line in the notice thread (:183-185): prompt id, asker, answered/denied, who. Neutral.
+- `/v1/stream` (`index.ts:92-95`): requires `auth.authenticateRequest` cookie; `auth_sessions` rows are created only by the manager password login (`auth-service.ts:60-77`). `publish()` full views go only to the manager. OK.
+- Runner log (`seat-worker.ts` `prompt … filed: ${what}`) is served only by `GET /v1/seats/:id/runner-log` under `asManager` (`runner-routes.ts:122`). OK.
+- MCP `agent_office_prompts` goes through `/v1/prompts` → `list`/`read` with the seat actor, so it inherits R4. Description updated.
+- `managerReason` (may hold the matched word) is returned only to the manager and the asker (resolvers cannot read manager-only rows). OK.
+
+New findings (all low, none blocking):
+- **N1. Low, stale comment.** `prompt-service.ts:265-268` JSDoc of `resolversFor` still says "and the lead of the parent task"; should state the leader/deputy-of-parent-department condition.
+- **N2. Low, test comment overstates.** `agent-prompts.test.ts:226` says "even a decided one" but the prompt in that test is still pending; the decided-prompt read path is not exercised. Add an answer before marking the task done, or drop the phrase.
+- **N3. Low, R3 coverage.** No test for the positive deputy case or for a parent assignee who leads a different department than the parent task's (possible when `tasks.create` takes the creator's department, `task-service.ts:154-158`). Logic reads correctly; tests would lock it.
+- Informational: after R4, a resolver loses read access to history once the asker moves to another task (the scope is the asker's current task). This matches the PM decision; the manager keeps the full history.
+
+Gates (`/tmp/ao-check.sh`): typecheck OK, tests 312/312 pass, lint clean, build OK (only the existing >500 kB chunk warning).
+
+Verdict: **APPROVE WITH NOTES**. N1–N3 are optional cleanups.
