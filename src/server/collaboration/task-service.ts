@@ -7,7 +7,8 @@ import { LEADERS_CHANNEL_ID, OUTPUTS_CHANNEL_ID, type OrgService } from './org-s
 export type TaskEvent = { taskId: string; actorKind: string; actorId: string; fromStatus: TaskStatus | null; toStatus: TaskStatus; note: string; createdAt: number };
 type TaskFilter = { departmentId?: string | undefined; status?: TaskStatus | undefined; assignee?: string | undefined; includeArchived?: boolean | undefined };
 /** Bulk archive / restore input: exact ids; without confirm it is a dry run, with confirm every eligible id needs its revision. */
-export type ArchiveInput = { taskIds: string[]; confirm?: boolean | undefined; expectedRevisions?: Record<string, number> | undefined; reason?: string | undefined };
+/** `revisions` is the dry run's eligible list as-is ([{id, revision}]), for clients that cannot send a map; taskIds then defaults to its ids. */
+export type ArchiveInput = { taskIds?: string[] | undefined; confirm?: boolean | undefined; expectedRevisions?: Record<string, number> | undefined; revisions?: Array<{ id: string; revision: number }> | undefined; reason?: string | undefined };
 export const MAX_ARCHIVE_BATCH = 1000;
 type TaskPlan = { estimateMinutes?: number | null | undefined; dependsOn?: string[] | undefined };
 /** A field left out keeps its value; assigneeSeatId null unassigns; dependsOn [] clears (leaders only). */
@@ -452,8 +453,14 @@ export class TaskService {
    * Rights: the manager and coordinators anywhere; a department's leader or deputy inside that department only.
    */
   archive(actor: Actor, action: 'archive' | 'restore', input: ArchiveInput, source: ChangeSource = 'api'): TaskArchivePlan {
-    const unique = [...new Set(input.taskIds)];
-    if (unique.length === 0 || unique.length > MAX_ARCHIVE_BATCH || unique.length !== input.taskIds.length) throw invalid('invalid_task_ids: 1 to 1000 distinct task ids');
+    const expected: Record<string, number> = { ...input.expectedRevisions };
+    for (const entry of input.revisions ?? []) {
+      if (expected[entry.id] !== undefined && expected[entry.id] !== entry.revision) throw invalid(`invalid_revisions: two different revisions given for ${entry.id}`);
+      expected[entry.id] = entry.revision;
+    }
+    const taskIds = input.taskIds ?? input.revisions?.map(entry => entry.id) ?? [];
+    const unique = [...new Set(taskIds)];
+    if (unique.length === 0 || unique.length > MAX_ARCHIVE_BATCH || unique.length !== taskIds.length) throw invalid('invalid_task_ids: 1 to 1000 distinct task ids');
     const reason = (input.reason ?? '').trim();
     if (reason.length > MAX_NOTE) throw invalid('invalid_reason');
     if (actor.kind === 'seat' && !this.isCoordinator(actor)) {
@@ -463,7 +470,6 @@ export class TaskService {
     const plan = (): TaskArchivePlan => this.archivePlan(actor, action, unique);
     if (!input.confirm) return plan();
     if (reason.length === 0) throw invalid('reason_required: say why these tasks are archived or restored');
-    const expected = input.expectedRevisions ?? {};
     const timestamp = Date.now(); const by = actorId(actor);
     const applied = this.db.transaction(() => {
       const checked = plan();

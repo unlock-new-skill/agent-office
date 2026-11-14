@@ -213,7 +213,7 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
    * confirm: a dry run listing eligible ids with their revision and refused ids with the reason. With confirm: applied
    * only if nothing is refused and every eligible id comes with its previewed revision (409 otherwise, nothing written).
    */
-  const ArchiveBody = z.object({ taskIds: z.array(z.string().min(1).max(80)).min(1).max(MAX_ARCHIVE_BATCH), confirm: z.boolean().optional(), expectedRevisions: z.record(z.string().max(80), z.number().int().min(0)).optional(), reason: z.string().max(2000).optional() }).strict();
+  const ArchiveBody = z.object({ taskIds: z.array(z.string().min(1).max(80)).min(1).max(MAX_ARCHIVE_BATCH).optional(), confirm: z.boolean().optional(), expectedRevisions: z.record(z.string().max(80), z.number().int().min(0)).optional(), revisions: z.array(z.object({ id: z.string().min(1).max(80), revision: z.number().int().min(0), status: z.string().max(20).optional() })).max(MAX_ARCHIVE_BATCH).optional(), reason: z.string().max(2000).optional() }).strict();
   app.post('/v1/tasks/archive', c => withActor(c, async ({ actor }) => c.json(office.tasks.archive(actor, 'archive', ArchiveBody.parse(await c.req.json()), sourceOf(actor)))));
   app.post('/v1/tasks/restore', c => withActor(c, async ({ actor }) => c.json(office.tasks.archive(actor, 'restore', ArchiveBody.parse(await c.req.json()), sourceOf(actor)))));
   const taskDetail = (actor: Actor, taskId: string, keep: (departmentId: string) => boolean, withProgress = true): Record<string, unknown> => {

@@ -158,6 +158,28 @@ test('HTTP: archive and restore endpoints, includeArchived on the list, old clie
   fixture.close();
 });
 
+test('HTTP: confirm takes the eligible list of the dry run as-is, for clients that cannot send a map', async () => {
+  const fixture = createAppFixture();
+  const ids: string[] = [];
+  for (const title of ['Old A', 'Old B']) ids.push((await (await fixture.manager('/v1/tasks', { body: { title, body: REQ, assigneeSeatId: 'dev-be' } })).json() as { id: string }).id);
+  const preview = await (await fixture.manager('/v1/tasks/archive', { body: { taskIds: ids } })).json() as TaskArchivePlan;
+  assert.equal(preview.eligible.length, 2);
+  const stale = preview.eligible.map((entry, index) => index === 0 ? { ...entry, revision: entry.revision + 1 } : entry);
+  const refused = await fixture.manager('/v1/tasks/archive', { body: { confirm: true, revisions: stale, reason: 'reset' } });
+  assert.equal(refused.status, 409); assert.equal((await refused.json() as { error: string }).error, 'archive_stale');
+  const partial = await fixture.manager('/v1/tasks/archive', { body: { taskIds: ids, confirm: true, revisions: preview.eligible.slice(1), reason: 'reset' } });
+  assert.equal(partial.status, 409, 'every eligible id still needs its revision');
+  const clash = await fixture.manager('/v1/tasks/archive', { body: { confirm: true, revisions: preview.eligible, expectedRevisions: { [ids[0]!]: preview.eligible[0]!.revision + 1 }, reason: 'reset' } });
+  assert.equal(clash.status, 400);
+  const applied = await fixture.manager('/v1/tasks/archive', { body: { confirm: true, revisions: preview.eligible, reason: 'reset' } });
+  assert.equal(applied.status, 200); assert.equal((await applied.json() as TaskArchivePlan).applied, true);
+  const back = await (await fixture.manager('/v1/tasks/restore', { body: { taskIds: ids } })).json() as TaskArchivePlan;
+  assert.equal((await fixture.manager('/v1/tasks/restore', { body: { confirm: true, revisions: back.eligible, reason: 'undo' } })).status, 200);
+  const list = await (await fixture.manager('/v1/tasks')).json() as { tasks: Array<{ id: string }> };
+  assert.deepEqual(ids.filter(id => list.tasks.some(task => task.id === id)), ids);
+  fixture.close();
+});
+
 test('a refused id never shields another: the preview is exactly what the confirm accepts', () => {
   const fixture = setup(); const { tasks } = fixture.office;
   const input = exec(fixture, 'Open input', 'dev-fe'); const running = exec(fixture, 'Running consumer', 'dev-unity', { dependsOn: [input.id] });
