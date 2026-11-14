@@ -10,7 +10,7 @@ import { evaluate, groupReasons, type Evaluation } from './readiness.js';
 const MODE_KEY = 'dispatch.mode';
 const MODES: DispatchMode[] = ['off', 'suggest', 'on'];
 const DONE_ON_BOARD = 50;
-type ReadinessRow = { taskId: string; ready: number; generation: number; gateOk: number; readySince: number | null };
+type ReadinessRow = { taskId: string; ready: number; generation: number; gateOk: number; readySince: number | null; reasons: string };
 type Snapshot = { tasks: Task[]; byId: Map<string, Task>; open: Map<string, Blocker[]>; blockers: Map<string, Blocker>; evals: Map<string, Evaluation> };
 
 /**
@@ -46,7 +46,7 @@ export class DispatchService {
     try {
       this.db.transaction(() => {
         const snapshot = this.snapshot(); const now = Date.now();
-        const rows = new Map((this.db.raw.prepare('SELECT task_id AS taskId,ready,generation,gate_ok AS gateOk,ready_since AS readySince FROM task_readiness').all() as ReadinessRow[]).map(row => [row.taskId, row]));
+        const rows = new Map((this.db.raw.prepare('SELECT task_id AS taskId,ready,generation,gate_ok AS gateOk,ready_since AS readySince,reasons FROM task_readiness').all() as ReadinessRow[]).map(row => [row.taskId, row]));
         const upsert = this.db.raw.prepare('INSERT INTO task_readiness(task_id,ready,generation,gate_ok,ready_since,reasons,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET ready=excluded.ready,generation=excluded.generation,gate_ok=excluded.gate_ok,ready_since=excluded.ready_since,reasons=excluded.reasons,updated_at=excluded.updated_at');
         for (const task of snapshot.tasks) {
           const evaluation = snapshot.evals.get(task.id)!; const previous = rows.get(task.id);
@@ -54,9 +54,13 @@ export class DispatchService {
           const becameReady = ready && previous?.ready !== 1;
           const generation = (previous?.generation ?? 0) + (becameReady ? 1 : 0);
           const readySince = ready ? (becameReady ? now : previous?.readySince ?? now) : null;
-          if (task.status === 'doing' && previous?.gateOk === 1 && !gateOk && this.mode() !== 'off') this.warn(task, evaluation);
-          const unchanged = previous && previous.ready === Number(ready) && previous.gateOk === Number(gateOk) && previous.generation === generation;
-          if (!unchanged) upsert.run(task.id, ready ? 1 : 0, generation, gateOk ? 1 : 0, readySince, JSON.stringify(evaluation.reasons), now);
+          // Running work is warned when its conditions break, and again only when a new cause appears (never repeated).
+          const before = new Set(previous ? (JSON.parse(previous.reasons) as Array<{ group: string }>).map(reason => reason.group) : []);
+          const newCause = evaluation.gate.some(reason => !before.has(reason.group));
+          if (task.status === 'doing' && !gateOk && (previous?.gateOk === 1 || newCause) && this.mode() !== 'off') this.warn(task, evaluation);
+          const reasons = JSON.stringify(evaluation.reasons);
+          const unchanged = previous && previous.ready === Number(ready) && previous.gateOk === Number(gateOk) && previous.generation === generation && previous.reasons === reasons;
+          if (!unchanged) upsert.run(task.id, ready ? 1 : 0, generation, gateOk ? 1 : 0, readySince, reasons, now);
         }
         if (this.mode() === 'on') this.offerPending(snapshot);
       });
@@ -84,7 +88,7 @@ export class DispatchService {
    * START: the owner claims a ready execution task. With `generation`, an offer that is no longer current (readiness
    * lost, or lost and regained) is refused. Two competing STARTs: the first wins, the other gets already_started.
    */
-  start(actor: Actor, taskId: string, options: { generation?: number | undefined; expectedRevision?: number | undefined }, source: ChangeSource): Task {
+  start(actor: Actor, taskId: string, options: { generation?: number | undefined; expectedRevision?: number | undefined; estimateMinutes?: number | undefined }, source: ChangeSource): Task {
     const task = this.tasks.get(taskId);
     if (task.kind !== 'execution') throw invalid('start_needs_execution_task: classify the task as execution first');
     if (actor.kind === 'seat' && actor.seatId !== task.assigneeSeatId) throw forbidden('start_by_assignee_only');
@@ -92,9 +96,12 @@ export class DispatchService {
     if (task.status === 'done') throw invalid('task_done');
     this.refresh();
     const row = this.db.raw.prepare('SELECT ready,generation FROM task_readiness WHERE task_id=?').get(taskId) as { ready: number; generation: number } | undefined;
-    if (options.generation !== undefined && (row?.ready !== 1 || row.generation !== options.generation)) throw conflict('readiness_changed', { readiness: this.readiness(taskId) });
-    this.gate(task);
-    return this.tasks.update(actor, taskId, { status: 'doing', note: 'START', ...(options.expectedRevision !== undefined ? { expectedRevision: options.expectedRevision } : {}) }, source);
+    // Taking a task and estimating it is one call: with estimateMinutes the stored readiness (no estimate yet) is not the offer being answered.
+    const estimating = options.estimateMinutes !== undefined && task.estimateMinutes === null;
+    if (options.generation !== undefined && !estimating && (row?.ready !== 1 || row.generation !== options.generation)) throw conflict('readiness_changed', { readiness: this.readiness(taskId) });
+    const estimate = options.estimateMinutes;
+    this.gate(estimate !== undefined ? { ...task, estimateMinutes: estimate } : task);
+    return this.tasks.update(actor, taskId, { status: 'doing', note: 'START', ...(estimate !== undefined ? { estimateMinutes: estimate } : {}), ...(options.expectedRevision !== undefined ? { expectedRevision: options.expectedRevision } : {}) }, source);
   }
 
   /**

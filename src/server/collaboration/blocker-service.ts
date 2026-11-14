@@ -1,5 +1,5 @@
 import type { Database } from '../db/database.js';
-import type { Blocker, BlockerKind, CollabEvent } from '../../shared/contracts.js';
+import type { Blocker, BlockerKind, BlockerScope, CollabEvent } from '../../shared/contracts.js';
 import type { Actor } from './message-service.js';
 import { logger } from '../logger.js';
 import { forbidden, invalid, notFound } from './office-error.js';
@@ -7,11 +7,11 @@ import type { OrgService } from './org-service.js';
 import type { TaskService } from './task-service.js';
 
 type BlockerRow = Omit<Blocker, 'refs' | 'taskIds'> & { refs: string };
-const COLUMNS = 'id,kind,description,resolver_seat_id AS resolverSeatId,resolver_role AS resolverRole,next_step AS nextStep,due_at AS dueAt,origin_task_id AS originTaskId,refs,status,opened_by AS openedBy,opened_at AS openedAt,updated_at AS updatedAt,resolved_by AS resolvedBy,resolved_at AS resolvedAt,resolution,valid_until AS validUntil';
+const COLUMNS = 'id,kind,description,resolver_seat_id AS resolverSeatId,resolver_role AS resolverRole,next_step AS nextStep,due_at AS dueAt,origin_task_id AS originTaskId,refs,status,opened_by AS openedBy,opened_at AS openedAt,updated_at AS updatedAt,resolved_by AS resolvedBy,resolved_at AS resolvedAt,resolution,valid_until AS validUntil,scope';
 const MAX_TASKS = 50; const MAX_REFS = 10;
 const actorId = (actor: Actor): string => actor.kind === 'manager' ? 'manager' : actor.seatId;
 const actorLabel = (actor: Actor): string => actor.kind === 'manager' ? 'manager' : `@${actor.seatId}`;
-export type BlockerInput = { kind: BlockerKind; description: string; taskIds: string[]; resolverSeatId?: string | null | undefined; resolverRole?: string | null | undefined; nextStep?: string | undefined; dueAt?: number | null | undefined; originTaskId?: string | null | undefined; refs?: string[] | undefined };
+export type BlockerInput = { kind: BlockerKind; description: string; taskIds: string[]; resolverSeatId?: string | null | undefined; resolverRole?: string | null | undefined; nextStep?: string | undefined; dueAt?: number | null | undefined; originTaskId?: string | null | undefined; refs?: string[] | undefined; scope?: BlockerScope | undefined };
 export type BlockerPatch = { [K in keyof Omit<BlockerInput, 'kind' | 'taskIds' | 'originTaskId'>]?: BlockerInput[K] | undefined };
 
 /**
@@ -49,8 +49,8 @@ export class BlockerService {
     const now = Date.now();
     const blocker = this.db.transaction(() => {
       const number = (this.db.raw.prepare('SELECT COALESCE(MAX(number),0)+1 AS next FROM blockers').get() as { next: number }).next; const id = `b-${number}`;
-      this.db.raw.prepare('INSERT INTO blockers(id,number,kind,description,resolver_seat_id,resolver_role,next_step,due_at,origin_task_id,refs,status,opened_by,opened_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-        .run(id, number, input.kind, fields.description, fields.resolverSeatId, fields.resolverRole, fields.nextStep, fields.dueAt, input.originTaskId ?? null, JSON.stringify(fields.refs), 'open', actorId(actor), now, now);
+      this.db.raw.prepare('INSERT INTO blockers(id,number,kind,description,resolver_seat_id,resolver_role,next_step,due_at,origin_task_id,refs,status,opened_by,opened_at,updated_at,scope) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(id, number, input.kind, fields.description, fields.resolverSeatId, fields.resolverRole, fields.nextStep, fields.dueAt, input.originTaskId ?? null, JSON.stringify(fields.refs), 'open', actorId(actor), now, now, input.scope ?? 'task');
       const link = this.db.raw.prepare('INSERT OR IGNORE INTO task_blockers(task_id,blocker_id) VALUES (?,?)');
       for (const taskId of taskIds) link.run(taskId, id);
       const created = this.get(id);
@@ -64,9 +64,9 @@ export class BlockerService {
     const current = this.get(id); this.assertManages(actor, current);
     const fields = this.validate({ description: patch.description ?? current.description, resolverSeatId: patch.resolverSeatId === undefined ? current.resolverSeatId : patch.resolverSeatId, resolverRole: patch.resolverRole === undefined ? current.resolverRole : patch.resolverRole, nextStep: patch.nextStep ?? current.nextStep, dueAt: patch.dueAt === undefined ? current.dueAt : patch.dueAt, refs: patch.refs ?? current.refs });
     const blocker = this.db.transaction(() => {
-      this.db.raw.prepare('UPDATE blockers SET description=?,resolver_seat_id=?,resolver_role=?,next_step=?,due_at=?,refs=?,updated_at=? WHERE id=?').run(fields.description, fields.resolverSeatId, fields.resolverRole, fields.nextStep, fields.dueAt, JSON.stringify(fields.refs), Date.now(), id);
+      this.db.raw.prepare('UPDATE blockers SET description=?,resolver_seat_id=?,resolver_role=?,next_step=?,due_at=?,refs=?,scope=?,updated_at=? WHERE id=?').run(fields.description, fields.resolverSeatId, fields.resolverRole, fields.nextStep, fields.dueAt, JSON.stringify(fields.refs), patch.scope ?? current.scope, Date.now(), id);
       const updated = this.get(id);
-      if (updated.resolverSeatId !== current.resolverSeatId || updated.nextStep !== current.nextStep || updated.dueAt !== current.dueAt) this.tell(updated, actor, `updated by ${actorLabel(actor)}`, updated.taskIds);
+      if (updated.resolverSeatId !== current.resolverSeatId || updated.nextStep !== current.nextStep || updated.dueAt !== current.dueAt || updated.scope !== current.scope) this.tell(updated, actor, `updated by ${actorLabel(actor)}`, updated.taskIds);
       return updated;
     });
     return this.changed(blocker);
@@ -184,7 +184,8 @@ export class BlockerService {
       const task = this.tasks.get(taskId); const leader = this.org.view().seats.find(seat => seat.departmentId === task.departmentId && seat.role === 'leader');
       const mentions = new Set([...(blocker.resolverSeatId ? [blocker.resolverSeatId] : []), ...(leader ? [leader.id] : [])]);
       if (actor?.kind === 'seat') mentions.delete(actor.seatId);
-      const open = blocker.status === 'open' ? ` Resolver: ${who}. Next step: ${blocker.nextStep || '(not set)'}.${blocker.dueAt ? ` Due: ${new Date(blocker.dueAt).toISOString()}.` : ''}` : '';
+      const scope = blocker.status === 'open' && blocker.scope === 'step' ? ' Blocks one step only: the rest of the task goes on.' : '';
+      const open = blocker.status === 'open' ? `${scope} Resolver: ${who}. Next step: ${blocker.nextStep || '(not set)'}.${blocker.dueAt ? ` Due: ${new Date(blocker.dueAt).toISOString()}.` : ''}` : '';
       this.tasks.postLine(task, `Blocker ${blocker.id} (${blocker.kind}) on ${task.id} ${what}. ${blocker.description}.${open}`, [...mentions]);
     }
   }

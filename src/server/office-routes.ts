@@ -229,7 +229,7 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
     return c.json(taskDetail({ kind: 'manager' }, task.id, departmentId => inScope(scope, departmentId), false));
   }) ?? withActor(c, ({ actor }) => c.json(taskDetail(actor, c.req.param('id'), () => true))));
   app.post('/v1/tasks/:id/start', c => withActor(c, async ({ actor }) => {
-    const input = z.object({ generation: z.number().int().min(0).optional(), expectedRevision: z.number().int().min(0).optional() }).strict().parse(await c.req.json());
+    const input = z.object({ generation: z.number().int().min(0).optional(), expectedRevision: z.number().int().min(0).optional(), estimateMinutes: z.number().int().min(1).max(10_080).optional() }).strict().parse(await c.req.json());
     return c.json(office.dispatch.start(actor, c.req.param('id'), input, sourceOf(actor)));
   }));
   const BoardQuery = z.object({ departmentId: z.string().max(64).optional(), assignee: z.string().max(64).optional(), resolver: z.string().max(65).optional() });
@@ -313,7 +313,7 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
   app.get('/v1/settings/dispatch', c => managerOnly(c, () => c.json({ mode: office.dispatch.mode() })));
   app.put('/v1/settings/dispatch', c => managerOnly(c, async () => c.json({ mode: office.dispatch.setMode(z.object({ mode: z.enum(['off', 'suggest', 'on']) }).strict().parse(await c.req.json()).mode) })));
 
-  const BlockerFields = { description: z.string().min(1).max(500), resolverSeatId: z.string().min(1).max(65).nullable().optional(), resolverRole: z.string().max(80).nullable().optional(), nextStep: z.string().max(1000).optional(), dueAt: z.number().int().positive().nullable().optional(), refs: z.array(z.string().min(1).max(300)).max(10).optional() };
+  const BlockerFields = { description: z.string().min(1).max(500), resolverSeatId: z.string().min(1).max(65).nullable().optional(), resolverRole: z.string().max(80).nullable().optional(), nextStep: z.string().max(1000).optional(), dueAt: z.number().int().positive().nullable().optional(), refs: z.array(z.string().min(1).max(300)).max(10).optional(), scope: z.enum(['task', 'step']).optional() };
   /** Seats see blockers on tasks they can see; coordinators and the manager see all. */
   app.get('/v1/blockers', c => asService(c, scope => {
     const filter = z.object({ status: z.enum(['open', 'resolved']).optional(), taskId: z.string().max(80).optional(), departmentId: z.string().max(64).optional() }).parse(c.req.query());

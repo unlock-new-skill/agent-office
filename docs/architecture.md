@@ -122,6 +122,12 @@ Schema v10. `POST /v1/machines` creates a runner row (`m-…`) before anything i
 - **Never strands or readies work:** refused are doing tasks, open tasks a live task waits for, open steps of a live parent, and tasks with live steps (archive them together instead). Dispatch evaluates live tasks against every task by id, so an archived open dependency keeps its dependents waiting.
 - **Where archived tasks are hidden:** default `/v1/tasks` list and pages (`includeArchived=true` shows them), board, readiness offers, alerts, status check, handoff brief, seat activity. `GET /v1/tasks/:id` still returns them. They are read-only (`task_archived` on update, START, participants, outputs, new steps) until restored.
 
+## Simpler task flow (schema v28)
+
+- **Take and start in one call:** `POST /v1/tasks/:id/start` (MCP `agent_office_start_task`) accepts `estimateMinutes`; the generation from a ready notice is optional. No acknowledgement or PM step.
+- **Step blockers:** `blockers.scope` = `task` (default, gates START and running work) or `step` (one step stuck: excluded from readiness, START and the in-progress gate, still listed with its resolver and still alerted when overdue, stale or without resolver). `dependsOn` always holds.
+- **Notifications:** an overdue task is told once to its owner in the task thread; gate-broken stays the dispatcher's thread warning; the `#leaders` digest wakes the PM only for a missing owner or resolver; the quiet-department status check posts without waking anyone.
+
 ## Public map and lobby
 
 `GET /v1/public/map` (no auth, cached 2 s) returns the org and live agents through `publicMap`: seat descriptions, channels, session ids and project paths are removed and agent ids are replaced by per-response aliases; the client renders it read-only at `/map` for anonymous visitors. The lobby shows unseated sessions that have not exited, were not dismissed (`agents.dismissed_at`, schema v11, cleared on the next registration) and reached the daemon within 5 minutes (`isLobbySession`). Machine seats may set `model`, passed to `claude --model`.

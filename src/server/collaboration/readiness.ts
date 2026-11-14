@@ -25,7 +25,8 @@ const gateReasons = (task: Task, lookup: Lookup): ReadinessReason[] => {
     if (dependency.result === 'unknown') reasons.push(need('result_unconfirmed', `confirm:${id}`, `${id} is done but its result is not recorded; this task needs pass`));
     else reasons.push(wait('result_not_pass', `result:${id}`, `${id} is done with result ${dependency.result}; this task needs pass`));
   }
-  for (const blocker of lookup.openBlockers(task.id)) {
+  // A step blocker stops one step only: the owner starts and continues the independent work, so it never gates the task.
+  for (const blocker of lookup.openBlockers(task.id).filter(candidate => candidate.scope !== 'step')) {
     const text = `${blocker.id} ${blocker.kind}: ${blocker.description}`;
     reasons.push(blocker.kind === 'dependency' ? wait('blocker_open', blocker.id, text) : need('blocker_open', blocker.id, text));
   }
@@ -44,14 +45,16 @@ export const evaluate = (task: Task, lookup: Lookup): Evaluation => {
   else if (task.kind === 'execution' && task.estimateMinutes > MAX_EXECUTION_MINUTES) reasons.push(need('estimate_too_big', 'estimate', `estimate ${task.estimateMinutes}m is over ${MAX_EXECUTION_MINUTES}m: split it`));
   reasons.push(...gate);
   // A status "blocked" with no blocker record says nothing about who unblocks it: shown as unresolved, never auto-run.
-  if (task.status === 'blocked' && !gate.some(reason => reason.code === 'blocker_open')) reasons.push(need('blocked_without_record', 'blocked-without-record', 'status blocked without a blocker record'));
+  // Declared blocked while only step blockers are open: the owner said it cannot move, so it is not offered; the owner decides.
+  if (task.status === 'blocked' && gate.length === 0 && lookup.openBlockers(task.id).length > 0) reasons.push(need('blocked_step_only', 'blocked-step-only', 'status blocked but only step blockers are open: move it to doing to continue the independent work'));
+  if (task.status === 'blocked' && lookup.openBlockers(task.id).length === 0) reasons.push(need('blocked_without_record', 'blocked-without-record', 'status blocked without a blocker record'));
   const state: ReadinessState = reasons.some(reason => reason.action === 'needs-action') ? 'needs-action' : reasons.length > 0 ? 'waiting' : 'ready';
   return { state, reasons, gate };
 };
 
 const GROUP_TITLES: Record<string, string> = {
   unclassified: 'Not classified (execution or tracking)', 'owner-missing': 'No assignee', estimate: 'Estimate missing or over 4h',
-  'blocked-without-record': 'Blocked without a blocker record (legacy)',
+  'blocked-without-record': 'Blocked without a blocker record (legacy)', 'blocked-step-only': 'Blocked, but only a step is stuck (owner can continue)',
 };
 
 /**
@@ -72,7 +75,7 @@ export const groupReasons = (entries: Array<{ task: Task; reasons: ReadinessReas
           : reason.group.startsWith('result:') ? { id: reason.group, title: `${ref?.id} done with result ${ref?.result}; pass needed`, kind: 'dependency', resolver: ref?.assigneeSeatId ? `@${ref.assigneeSeatId}` : null, nextStep: `fix and re-verify ${ref?.id}, record result pass`, dueAt: null, blockerId: null, taskIds: [] }
           : reason.group.startsWith('confirm:') ? { id: reason.group, title: `Confirm the result of ${ref?.id} "${ref?.title ?? ''}"`, kind: 'decision', resolver: ref?.assigneeSeatId ? `@${ref.assigneeSeatId}` : null, nextStep: `record the result of ${ref?.id} (pass / fail / inconclusive)`, dueAt: null, blockerId: null, taskIds: [] }
           : reason.group.startsWith('missing:') ? { id: reason.group, title: `Dependency ${reason.group.slice(8)} does not exist`, kind: 'defect', resolver: null, nextStep: 'fix dependsOn', dueAt: null, blockerId: null, taskIds: [] }
-          : { id: reason.group, title: GROUP_TITLES[reason.group] ?? reason.text, kind: reason.group === 'blocked-without-record' ? 'legacy' : 'metadata', resolver: reason.group === 'estimate' ? 'assignee' : 'leader', nextStep: reason.group === 'estimate' ? 'assignee sets estimateMinutes (split work over 4h)' : reason.group === 'owner-missing' ? 'leader or PM sets assigneeSeatId' : reason.group === 'unclassified' ? 'leader sets kind' : 'open a blocker record or move the task to todo', dueAt: null, blockerId: null, taskIds: [] };
+          : { id: reason.group, title: GROUP_TITLES[reason.group] ?? reason.text, kind: reason.group === 'blocked-without-record' ? 'legacy' : 'metadata', resolver: reason.group === 'estimate' || reason.group === 'blocked-step-only' ? 'assignee' : 'leader', nextStep: reason.group === 'estimate' ? 'assignee sets estimateMinutes (split work over 4h)' : reason.group === 'blocked-step-only' ? 'owner moves it to doing for the independent work' : reason.group === 'owner-missing' ? 'leader or PM sets assigneeSeatId' : reason.group === 'unclassified' ? 'leader sets kind' : 'open a blocker record or move the task to todo', dueAt: null, blockerId: null, taskIds: [] };
         groups.set(reason.group, group);
       }
       if (!group.taskIds.includes(entry.task.id)) group.taskIds.push(entry.task.id);

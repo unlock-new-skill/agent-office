@@ -80,7 +80,10 @@ export type Blocker = { id: string; kind: BlockerKind; description: string; reso
   originTaskId: string | null; refs: string[]; status: 'open' | 'resolved'; openedBy: string; openedAt: number; updatedAt: number;
   resolvedBy: string | null; resolvedAt: number | null; resolution: string; taskIds: string[];
   /** For a resolved grant or window: when it ends (the blocker opens again by itself). */
-  validUntil: number | null };
+  validUntil: number | null;
+  /** task = the whole task waits (default); step = only one step is stuck, the independent work goes on (START and the in-progress gate ignore it). */
+  scope: BlockerScope };
+export type BlockerScope = 'task' | 'step';
 /**
  * Computed, never stored as a status: ready = an execution task that may START now; waiting = only dependencies are
  * missing; needs-action = someone must act (owner, estimate, blocker, a result to confirm, classification).

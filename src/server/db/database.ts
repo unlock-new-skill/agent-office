@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 27;
+export const SCHEMA_VERSION = 28;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -156,6 +156,8 @@ const V24_TABLES = `CREATE TABLE service_tokens(
 const V27_COLUMNS = `ALTER TABLE tasks ADD COLUMN archived_at INTEGER;
 ALTER TABLE tasks ADD COLUMN archived_by TEXT;
 CREATE INDEX tasks_archived ON tasks(archived_at);`;
+/** v28: a blocker scoped to one step of its tasks leaves the rest of the work free to start and continue. */
+const V28_COLUMNS = `ALTER TABLE blockers ADD COLUMN scope TEXT NOT NULL DEFAULT 'task' CHECK(scope IN ('task','step'));`;
 const V26_TABLES = `CREATE TABLE approval_requests(
   id TEXT PRIMARY KEY, requester_seat_id TEXT NOT NULL, task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   channel_id TEXT NOT NULL, thread_seq INTEGER, action TEXT NOT NULL CHECK(length(action) BETWEEN 1 AND 200),
@@ -304,6 +306,7 @@ export class Database {
         if (from < 25) this.raw.exec(V25_TABLES);
         if (from < 26) this.raw.exec(V26_TABLES);
         if (from < 27) this.raw.exec(V27_COLUMNS);
+        if (from < 28) this.raw.exec(V28_COLUMNS);
         if ((this.raw.prepare('PRAGMA foreign_key_check').all() as unknown[]).length > 0) throw new Error('migration_foreign_key_violation');
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
@@ -411,6 +414,7 @@ export class Database {
       ${V25_TABLES}
       ${V26_TABLES}
       ${V27_COLUMNS}
+      ${V28_COLUMNS}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

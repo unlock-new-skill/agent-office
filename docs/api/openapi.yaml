@@ -294,7 +294,7 @@ paths:
       security: [{cookieAuth: []}, {bearerAuth: []}]
       description: Assignee claims a ready execution task; re-checks readiness and that the owner has no other execution task in progress.
       parameters: [{in: path, name: id, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, properties: {generation: {type: integer, minimum: 0}, expectedRevision: {type: integer, minimum: 0}}}}}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, properties: {generation: {type: integer, minimum: 0}, expectedRevision: {type: integer, minimum: 0}, estimateMinutes: {type: integer, minimum: 1, description: 'Take, estimate and start in one call'}}}}}}
       responses: {'200': {description: Task in doing}, '400': {description: 'not_ready, start_needs_execution_task'}, '403': {description: start_by_assignee_only}, '409': {description: 'already_started, readiness_changed (+ readiness), owner_busy'}}
   /v1/board:
     get:
@@ -315,7 +315,7 @@ paths:
     patch:
       security: [{cookieAuth: []}, {bearerAuth: []}]
       parameters: [{in: path, name: id, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, description: 'description, resolverSeatId, resolverRole, nextStep, dueAt, refs'}}}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, description: 'description, resolverSeatId, resolverRole, nextStep, dueAt, refs, scope'}}}}
       responses: {'200': {description: Blocker}, '403': {description: forbidden_blocker}}
   /v1/blockers/{id}/{action}:
     post:
@@ -371,7 +371,7 @@ components:
       type: object
       required: [kind, description, taskIds]
       additionalProperties: false
-      properties: {kind: {enum: [dependency, missing-input, permission, environment, defect, owner-missing, decision]}, description: {type: string, minLength: 1, maxLength: 500}, taskIds: {type: array, minItems: 1, maxItems: 50, items: {type: string}}, resolverSeatId: {type: [string, 'null']}, resolverRole: {type: [string, 'null'], maxLength: 80}, nextStep: {type: string, maxLength: 1000}, dueAt: {type: [integer, 'null']}, originTaskId: {type: [string, 'null']}, refs: {type: array, maxItems: 10, items: {type: string, maxLength: 300}}}
+      properties: {kind: {enum: [dependency, missing-input, permission, environment, defect, owner-missing, decision]}, description: {type: string, minLength: 1, maxLength: 500}, taskIds: {type: array, minItems: 1, maxItems: 50, items: {type: string}}, resolverSeatId: {type: [string, 'null']}, resolverRole: {type: [string, 'null'], maxLength: 80}, nextStep: {type: string, maxLength: 1000}, dueAt: {type: [integer, 'null']}, originTaskId: {type: [string, 'null']}, refs: {type: array, maxItems: 10, items: {type: string, maxLength: 300}}, scope: {enum: [task, step], default: task, description: 'step = only one step is stuck: START and the in-progress gate ignore it'}}
     LoginRequest: {type: object, required: [password], additionalProperties: false, properties: {password: {type: string, minLength: 1, maxLength: 256, description: 'Login accepts any non-empty attempt; first-run setup/reset enforces 12+ characters.'}}}
     EnrollmentRequest:
       type: object

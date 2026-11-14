@@ -64,7 +64,7 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
   org.onMutated = () => { wakeService.notify(); refresh(); };
   // Reconcile at start: readiness and offers missed while the server was down are computed again (idempotent).
   dispatch.refresh();
-  const alerts = new AlertService(db, org, messages, blockers, dispatch);
+  const alerts = new AlertService(db, org, messages, blockers, dispatch, tasks);
   const serviceTokens = new ServiceTokenService(db, org);
   const progress = new ProgressService(db, org, tasks, dispatch, options.emit);
   const approvals = new ApprovalService(db, org, tasks, messages, options.emit, () => options.telegram ?? false);

@@ -2,7 +2,7 @@ import type { Database } from '../db/database.js';
 import type { Blocker, OfficeAlert, Task } from '../../shared/contracts.js';
 import type { BlockerService } from './blocker-service.js';
 import type { DispatchService } from './dispatch-service.js';
-import { doingTime } from './task-service.js';
+import { doingTime, type TaskService } from './task-service.js';
 import type { MessageService } from './message-service.js';
 import { LEADERS_CHANNEL_ID, type OrgService } from './org-service.js';
 
@@ -23,7 +23,7 @@ const MAX_LINES = 30;
  * Nothing is posted while nothing changed. Off when dispatch is off. Alerts never change tasks.
  */
 export class AlertService {
-  constructor(private readonly db: Database, private readonly org: OrgService, private readonly messages: MessageService, private readonly blockers: BlockerService, private readonly dispatch: DispatchService) {}
+  constructor(private readonly db: Database, private readonly org: OrgService, private readonly messages: MessageService, private readonly blockers: BlockerService, private readonly dispatch: DispatchService, private readonly tasks: TaskService) {}
 
   /** Current alerts, optionally limited to departments. */
   current(now = Date.now(), departmentId: string | null = null): OfficeAlert[] {
@@ -40,7 +40,7 @@ export class AlertService {
       if (task.status === 'doing' && spent && task.estimateMinutes !== null && spent.activeMs > task.estimateMinutes * 60_000 * OVERDUE_MARGIN) {
         const minutes = (ms: number): number => Math.round(ms / 60_000);
         const runs = spent.runs > 1 ? ` over ${spent.runs} runs; this run ${minutes(now - spent.runStart)}m since ${new Date(spent.runStart).toISOString()}` : '';
-        alerts.push({ key: `overdue:${task.id}:${spent.runStart}:${task.estimateMinutes}`, kind: 'overdue', departmentId: task.departmentId, owner: task.assigneeSeatId ? `@${task.assigneeSeatId}` : leader(task.departmentId), taskIds: [task.id], text: `${task.id} "${task.title}" has ${minutes(spent.activeMs)}m in doing${runs} (time blocked/todo/done not counted) on an estimate of ${task.estimateMinutes}m`, next: 'post progress, re-estimate or split into steps; move it out of doing while it only waits; the lead decides' });
+        alerts.push({ key: `overdue:${task.id}:${spent.runStart}:${task.estimateMinutes}`, kind: 'overdue', departmentId: task.departmentId, owner: task.assigneeSeatId ? `@${task.assigneeSeatId}` : leader(task.departmentId), taskIds: [task.id], text: `${task.id} "${task.title}" has ${minutes(spent.activeMs)}m in doing${runs} (time blocked/todo/done not counted) on an estimate of ${task.estimateMinutes}m`, next: 'owner: post progress, re-estimate or split into steps; move it out of doing while it only waits' });
       }
       if (task.status === 'doing' && evaluation.gate.length > 0) alerts.push({ key: `gate:${task.id}:${evaluation.gate.map(reason => reason.group).sort().join(',')}`, kind: 'gate-broken', departmentId: task.departmentId, owner: task.assigneeSeatId ? `@${task.assigneeSeatId}` : leader(task.departmentId), taskIds: [task.id], text: `${task.id} "${task.title}" is in progress but ${evaluation.gate.map(reason => reason.text).join('; ')}`, next: `owner and ${leader(task.departmentId)} decide to continue or pause` });
     }
@@ -68,7 +68,14 @@ export class AlertService {
     const shown = fresh.slice(0, MAX_LINES);
     if (shown.length === 0) return [];
     // Post first, then remember: a crash in between repeats a line at worst; it never loses one.
-    this.digest(shown, fresh.length - shown.length);
+    // Work-in-progress alerts go to the owner in the task thread, not to the PM: an overdue task is the owner's call
+    // (re-estimate, split, post progress), and a broken gate was already raised there by the dispatcher.
+    for (const alert of shown.filter(candidate => candidate.kind === 'overdue')) {
+      const owner = /^@([a-z0-9-]+)$/.exec(alert.owner)?.[1];
+      this.tasks.postLine(this.tasks.get(alert.taskIds[0]!), `${owner ? `@${owner} ` : ''}${alert.text}. Next: ${alert.next}. Reported once.`, owner ? [owner] : []);
+    }
+    const digest = shown.filter(candidate => candidate.kind !== 'overdue' && candidate.kind !== 'gate-broken');
+    if (digest.length > 0) this.digest(digest, fresh.length - shown.length);
     const remember = this.db.raw.prepare('INSERT OR REPLACE INTO alert_state(key,first_seen,notified_at,active) VALUES (?,?,?,1)');
     this.db.transaction(() => { for (const alert of shown) remember.run(alert.key, now, now); });
     return shown;
@@ -78,7 +85,9 @@ export class AlertService {
     const lines = alerts.map(alert => `- [${alert.kind}] ${alert.text} — owner ${alert.owner} — next: ${alert.next}`);
     const more = waiting > 0 ? `\n…${waiting} more come in the next digests (all of them are on Tasks → By blocker).` : '';
     const inLeaders = (id: string): boolean => this.org.isMember(LEADERS_CHANNEL_ID, id);
-    const coordinators = this.org.view().seats.filter(seat => seat.coordinator).map(seat => seat.id).filter(inLeaders);
+    // The PM is woken only when nobody else can act: a task without owner or a blocker without resolver.
+    const needsCoordinator = alerts.some(alert => alert.kind === 'owner-missing' || alert.kind === 'resolver-missing');
+    const coordinators = needsCoordinator ? this.org.view().seats.filter(seat => seat.coordinator).map(seat => seat.id).filter(inLeaders) : [];
     const owners = alerts.flatMap(alert => /^@([a-z0-9-]+)$/.exec(alert.owner)?.[1] ?? []).filter(inLeaders);
     const mentions = [...new Set([...coordinators, ...owners])];
     this.messages.postSystem(LEADERS_CHANNEL_ID, `${mentions.map(id => `@${id}`).join(' ')} Exceptions — ${alerts.length} new:\n${lines.join('\n')}${more}\nEach line names who acts; reply in the task threads. Reported once until it changes.`.slice(0, 16_000), mentions);

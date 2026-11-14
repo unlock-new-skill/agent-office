@@ -35,7 +35,8 @@ export class StatusCheck {
       lines.push(`- ${department.name}${lead ? ` (lead ${lead.id})` : ''}: quiet ${Math.round(quietFor / 60_000)} min, ${open.length} in progress (${tasks})`);
     }
     if (lines.length === 0) return;
-    this.messages.postSystem(LEADERS_CHANNEL_ID, `@${coordinator.id} Status check — no report for a while:\n${lines.join('\n')}\nAsk these leads for a short report (done / doing / blocked, next step) and help unblock them.`, [coordinator.id]);
+    // Information only: owners report on their tasks themselves, so nobody is woken to chase a status report.
+    this.messages.postSystem(LEADERS_CHANNEL_ID, `Status check — no task update or message for a while:\n${lines.join('\n')}\nNo action needed unless one of these is stuck; owners update their own tasks.`, []);
   }
 
   /** The seat to ping: the configured seat, else a coordinator flagged by the manager; occupied and in #leaders, otherwise quiet. */

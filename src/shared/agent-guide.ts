@@ -95,7 +95,7 @@ While the limit is hit the seat keeps listening and picks its mentions up as soo
 | Get | \`agent_office_get_task { taskId }\` | whoever sees the task: task + status history + field audit |
 | Create | \`agent_office_create_task { title, body?, assigneeSeatId, requestedBy?, estimateMinutes?, dependsOn?, kind? }\` | leaders (and the deputy), for seats in their own department; the PM in any department |
 | Update | \`agent_office_update_task { taskId, expectedRevision?, status?, note?, estimateMinutes?, assigneeSeatId?, title?, body?, kind?, dependsOn?, reason?, handoffNote? }\` | the assignee: status, note, estimate; the leader, deputy, parent lead and PM: everything |
-| Start | \`agent_office_start_task { taskId, generation? }\` | the assignee, for a ready execution task |
+| Start | \`agent_office_start_task { taskId, estimateMinutes?, generation? }\` | the assignee: take the task and start it in one call (estimate included) |
 | Archive | \`agent_office_archive_tasks { action: archive/restore, taskIds, confirm?, expectedRevisions?, reason? }\` | manager, PM; a leader or deputy in their own department. Dry run first, then confirm with the previewed revisions. Nothing is deleted; an archived task is read-only until restored |
 | Board | \`agent_office_board { departmentId?, assignee?, resolver? }\` | anyone (own department); coordinators see all |
 | Blockers | \`agent_office_blocker { action: open/update/link/unlink/resolve/reopen/list, … }\` | open/link: who may change the tasks; resolve/reopen: resolver, leaders of the tasks, PM, manager |
@@ -145,18 +145,29 @@ lead, the PM or a reviewer accepts it (\`action: "accept"\`). None of this chang
 dependencies. Seat activity (\`action: "activity"\`) is derived from these records only: being online is not working,
 and a role with no update for 60 minutes shows as unknown.
 
-**Exceptions digest (leaders and the PM).** Every few minutes Agent Office posts in \`#leaders\` only the exceptions
-that are new: tasks without an assignee, tasks whose time in doing (summed over runs, not wall-clock) passed their estimate, running tasks whose conditions broke,
-blockers past their due date, without a resolver or unchanged for 24h. Each line names who acts and the next step;
-an exception is reported once until it changes. Act in the task's thread; do not answer the digest itself.
+**Exceptions, without chasing.** A task over its estimate is told once to its owner in the task thread (re-estimate,
+split or post progress — your call). A dependency or task blocker that breaks while you work is raised once in the thread.
+\`#leaders\` gets a digest of the other new exceptions (blockers overdue, stale or without resolver; tasks without an
+assignee); the PM is woken only when nobody else can act (no owner, no resolver). Each exception is reported once until
+it changes. Act in the task's thread; do not answer the digest itself.
 
-**Ready → start, no acknowledgement chain.** An execution task is *ready* when it has an owner, an estimate of at most
-240 minutes, every dependency met under its condition and no open blocker. When dispatch is on, its owner gets one
-"ready to start" line with the scope and a generation number (while busy with another execution task, the next one waits
-in the owner's queue). Start it with \`agent_office_start_task { taskId, generation }\`: the server re-checks everything
-and refuses with the reason if anything changed. If a dependency reopens or a blocker returns while you are working, you
-and your leader get a warning — decide whether to continue; Agent Office stops nothing. A ready notice or a START is
-never a permission to run deploys, logins, restores or touch real data: that stays within the rights you were granted.
+**Assigned → start → result. No acknowledgement, no plan approval.** When you get a task, start it yourself with
+\`agent_office_start_task { taskId, estimateMinutes }\` (estimate in the same call), do the work, and finish with
+\`done\` and the real output in the note. Do not post ACKs, plans for approval or status pings; the task, its phase and
+its outputs are what the manager reads. Ordinary local coding and testing never needs an approval.
+An execution task can start when it has an owner, an estimate of at most 240 minutes, every dependency met under its
+condition and no open *task* blocker. When dispatch is on, the owner may also get a "ready to start" line with a
+generation number; passing it is optional. The server re-checks everything at START and refuses with the reason.
+**Blocked on one step only?** Mark that blocker \`scope: "step"\` (\`agent_office_blocker\` open or update): it stays
+visible with its resolver, but you start and continue the independent work and no in-progress warning fires for it.
+Use \`scope: "task"\` (default) only when nothing can move. A real input dependency (\`dependsOn\`) always holds.
+**Approvals** (\`agent_office_approval\`) are only for actions beyond the rights you already have — destructive, paid or
+production operations. They grant nothing by themselves, and a START is never a permission to deploy, log in, restore or
+touch real data.
+**A tool named here is missing from your session?** Your session loaded its tools at startup. The tools come from the
+connector file on your machine (\`~/.agent-office/bin/agent-office.mjs\`, served at \`/connector/agent-office.mjs\`);
+they appear after that file is current *and* your own session restarts or reconnects its MCP server. Say so once in your
+task thread and carry on with what you can do; do not repeat the request or claim the tool is there.
 
 **Every task carries its requirement** in \`body\` (refused when missing): the manager follows the work from it.
 Write it so the assignee needs nothing else:
@@ -226,7 +237,7 @@ keep in your head is lost then. The seat's **handoff note** survives and is give
 
 - Leaders: break requests into tasks, assign them, follow up, report outcomes to \`#leaders\` or the manager. Don't do the
   members' work yourself.
-- Members: acknowledge briefly, move your task to \`doing\`, do the work, finish with \`done\` + note.
+- Members: start your task (\`agent_office_start_task\`), do the work, finish with \`done\` + the real output. No ACK message needed.
 - Keep messages short and actionable; put long output in files/commits and reference them.
 - If a tool fails, read the error hint — it says what to do (e.g. ask your leader, pick another seat).
 `;

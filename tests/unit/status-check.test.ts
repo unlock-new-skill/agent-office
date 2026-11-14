@@ -24,7 +24,7 @@ test('status check pings the coordinator about departments quiet with work in pr
   assert.equal(leadersLast(), '', 'recent activity is not silence');
   check.run(Date.now() + 2 * HOUR);
   const ping = messages.list(manager, 'leaders').at(-1)!;
-  assert.deepEqual(ping.mentions, ['ops-lead']);
+  assert.deepEqual(ping.mentions, [], 'information only: nobody is woken to chase a report');
   assert.match(ping.body, /Dev \(lead dev-lead\): quiet \d+ min, 1 in progress \(t-dev-1\)/);
   assert.doesNotMatch(ping.body, /BA/);
 

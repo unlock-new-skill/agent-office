@@ -76,7 +76,7 @@ test('estimates and dependencies: no start before dependencies are done, then th
   assert.match(last('design').body, /Estimate: 1h 30m\./);
   const api = tasks.create(seat('ops-lead'), { title: 'Use icons', body: REQ, assigneeSeatId: 'dev-be', dependsOn: [art.id] });
   assert.equal(api.departmentId, 'dev', 'the coordinator creates tasks in other departments');
-  assert.match(last('dev').body, /No estimate yet: @dev-be set estimateMinutes.*Waits for: t-design-1 \(open: t-design-1\)/);
+  assert.match(last('dev').body, /No estimate yet: @dev-be give it when you start.*Waits for: t-design-1 \(open: t-design-1\)/);
   assert.throws(() => tasks.update(seat('dev-be'), api.id, { status: 'doing' }), /waiting_for_dependencies: t-design-1/);
   assert.throws(() => tasks.update(seat('dev-be'), api.id, { dependsOn: [] }), /leader_only/, 'assignees do not reorder');
   assert.equal(tasks.update(seat('dev-be'), api.id, { estimateMinutes: 45 }).estimateMinutes, 45);

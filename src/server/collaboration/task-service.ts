@@ -400,7 +400,7 @@ export class TaskService {
   }
 
   private planLine(task: Task): string {
-    const estimate = task.estimateMinutes !== null ? ` Estimate: ${estimateLabel(task.estimateMinutes)}.` : task.assigneeSeatId ? ` No estimate yet: @${task.assigneeSeatId} set estimateMinutes with agent_office_update_task.` : '';
+    const estimate = task.estimateMinutes !== null ? ` Estimate: ${estimateLabel(task.estimateMinutes)}.` : task.assigneeSeatId ? ` No estimate yet: @${task.assigneeSeatId} give it when you start (agent_office_start_task { estimateMinutes }).` : '';
     const open = this.openDependencies(task.dependsOn);
     return `${estimate}${task.dependsOn.length ? ` Waits for: ${task.dependsOn.join(', ')}${open.length ? ` (open: ${open.join(', ')})` : ' (all done)'}.` : ''}`;
   }
