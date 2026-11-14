@@ -160,9 +160,11 @@ To install one exact connector build on a machine (for example under a one-time 
    running runners, and restarts the runner service. The restarted runner ends the old one with all its seats'
    processes, background jobs included, and possibly the process running install-self: run it only when the seats are idle.
    On Windows it then waits up to 90 s for the old runner (pid + creation time) to be gone and a new one to run (step
-   `taken-over`). Otherwise it ends any new runner first (so it cannot take over late), puts the previous connector
-   and settings back, and starts the previous version once if no runner is left (step `rolled-back`). If the runners
-   cannot be listed it installs nothing. Failures stop at once; nothing is retried.
+   `taken-over`). Otherwise it ends the new runners it can list, puts the previous connector and settings back, ends
+   any new runner that appeared meanwhile, and starts the previous version once only if it can see that no runner is
+   left (step `rolled-back`; the detail names the runners ended and any it could not list or end). A new runner that
+   starts after that last look is not ended, so read the checkpoint and `/v1/runners` afterwards. If the runners cannot
+   be listed before the install, it installs nothing. Failures stop at once; nothing is retried.
 3. Check from the server: each runner reports the SHA-256 of the connector it runs (`connectorSha256` in `/v1/runners`;
    null for a build that does not report it).
 4. Rollback: end the new runner (match PID and start time), copy the backup over `agent-office.mjs`, optionally copy
@@ -170,7 +172,8 @@ To install one exact connector build on a machine (for example under a one-time 
 
 On Windows a starting runner, once its config is loaded and its seats are set up (before it registers with the
 server), ends every `agent-office.mjs runner` process started before it, with its seats (the scheduled task cannot
-stop the one it started), and refuses to start if it cannot list or end one.
+stop the one it started; same millisecond: the lower pid counts as older), and refuses to start if it cannot list or
+end one, or cannot read the creation time of itself or of another runner.
 Not covered: a new runner that takes over and then dies leaves the machine without seats until the runner is started
 again (the scheduled task runs at logon); there is no remote recovery. `update --sha256 <hex>` refuses a
 download that does not match.

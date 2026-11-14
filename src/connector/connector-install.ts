@@ -81,25 +81,44 @@ export const installConnector = async (deps: InstallDeps): Promise<InstallCheckp
     if (!deps.runners) return record;
     const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
     const known = new Set(older.values());
-    const look = (): { oldAlive: boolean; fresh: number[] } => {
-      const now = deps.runners!();
-      return { oldAlive: [...now.values()].some(id => known.has(id)), fresh: [...now].filter(([, id]) => !known.has(id)).map(([pid]) => pid) };
+    // A listing that fails while waiting or rolling back is noted, never a reason to leave the new connector half in place.
+    const notes: string[] = [];
+    const look = (): { oldAlive: boolean; fresh: number[] } | null => {
+      try {
+        const now = deps.runners!();
+        return { oldAlive: [...now.values()].some(id => known.has(id)), fresh: [...now].filter(([, id]) => !known.has(id)).map(([pid]) => pid) };
+      } catch (error) { notes.push(`could not list the runners (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`); return null; }
     };
+    const tookOver = (seen: ReturnType<typeof look>): boolean => seen !== null && !seen.oldAlive && seen.fresh.length > 0;
     const deadline = deps.now().getTime() + (deps.takeoverWaitMs ?? 90_000);
     let seen = look();
     while (deps.now().getTime() < deadline) {
-      if (!seen.oldAlive && seen.fresh.length > 0) { save('taken-over', `new runner pid ${seen.fresh.join(',')}`); return record; }
+      if (tookOver(seen)) { save('taken-over', `new runner pid ${seen!.fresh.join(',')}`); return record; }
       await sleep(2000); seen = look();
     }
-    if (!seen.oldAlive && seen.fresh.length > 0) { save('taken-over', `new runner pid ${seen.fresh.join(',')}`); return record; }
-    // No clean takeover in time: end any new runner first so it cannot take over late, then put everything back.
-    for (const pid of seen.fresh) deps.endRunner?.(pid);
+    if (tookOver(seen)) { save('taken-over', `new runner pid ${seen!.fresh.join(',')}`); return record; }
+    // No clean takeover in time: end every new runner (listed right before it is ended, so a reused pid is not hit),
+    // put the previous files back, then end any new runner that appeared meanwhile, so none can take over late.
+    const ended: number[] = [];
+    const endNewRunners = (): void => {
+      let now: RunnerSnapshot;
+      try { now = deps.runners!(); } catch (error) { notes.push(`could not list the runners to end new ones (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`); return; }
+      for (const [pid, id] of now) {
+        if (known.has(id) || ended.includes(pid)) continue;
+        try { deps.endRunner?.(pid); ended.push(pid); }
+        catch (error) { notes.push(`could not end new runner ${pid} (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`); }
+      }
+    };
+    endNewRunners();
     if (current) { writeFileSync(`${target}.tmp`, current); renameSync(`${target}.tmp`, target); }
     if (record.settingsBackup && deps.restoreSettings) deps.restoreSettings(record.settingsBackup);
+    endNewRunners();
     const left = look();
-    const restarted = !left.oldAlive && left.fresh.length === 0 && current !== null && deps.restart(target);
-    save('rolled-back', `${seen.oldAlive ? 'the old runner was still running' : 'no runner had taken over'} after the wait; ended new runner ${seen.fresh.join(',') || 'none'}; previous connector${record.settingsBackup ? ' and settings' : ''} restored${restarted ? '; started the previous version once' : ''}`);
-    out(`the new runner did not take over; restored the previous connector (${record.from ?? 'none'})`);
+    const restarted = left !== null && !left.oldAlive && left.fresh.length === 0 && current !== null && deps.restart(target);
+    const files = current ? `previous connector${record.settingsBackup ? ' and settings' : ''} restored` : `no previous connector to restore; the new one stays${record.settingsBackup ? ', previous settings restored' : ''}`;
+    save('rolled-back', [`${seen === null ? 'the runners could not be listed' : seen.oldAlive ? 'the old runner was still running' : 'no runner had taken over'} after the wait`,
+      `ended new runner ${ended.join(',') || 'none'}`, files, ...(restarted ? ['started the previous version once'] : []), ...notes].join('; '));
+    out(current ? `the new runner did not take over; restored the previous connector (${record.from})` : 'the new runner did not take over; there was no previous connector to restore');
     return record;
   } catch (error) {
     if (record.step !== 'failed') { try { save('failed', error instanceof Error ? error.message.slice(0, 300) : String(error)); } catch { /* keep the original error */ } }

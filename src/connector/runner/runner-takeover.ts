@@ -45,9 +45,14 @@ export const endOlderRunners = (script: string, out: (line: string) => void, dep
   try {
     const all = (deps.list ?? listNodeProcesses)();
     // Only runners started before this one: two starting together must not end each other.
-    const mine = all.find(entry => entry.pid === process.pid)?.created;
-    const before = (entry: ProcessEntry): boolean => !mine || !entry.created || Date.parse(entry.created) < Date.parse(mine);
-    pids = olderRunners(all.filter(before), script, process.pid);
+    const candidates = olderRunners(all, script, process.pid);
+    // Order by creation time, ties (same millisecond) by pid, so of two runners exactly one ends the other. A runner
+    // whose creation time is unknown cannot be ordered: refuse rather than risk ending a newer one or running beside it.
+    const time = (entry: ProcessEntry | undefined): number => (entry?.created ? Date.parse(entry.created) : Number.NaN);
+    const mine = time(all.find(entry => entry.pid === process.pid));
+    const unknown = candidates.filter(pid => Number.isNaN(time(all.find(entry => entry.pid === pid))));
+    if (candidates.length > 0 && (Number.isNaN(mine) || unknown.length > 0)) throw new Error(`no creation time for ${Number.isNaN(mine) ? 'this runner' : `runner ${unknown.join(',')}`}`);
+    pids = candidates.filter(pid => { const theirs = time(all.find(entry => entry.pid === pid)); return theirs < mine || (theirs === mine && pid < process.pid); });
   }
   catch (error) { throw new Error(`could not look for an older runner (${error instanceof Error ? error.message.slice(0, 160) : String(error)}). Not starting, so two runners never drive the same seats.`); }
   const kill = deps.kill ?? ((pid: number) => { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 30_000 }); });

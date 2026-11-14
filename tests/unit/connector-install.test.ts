@@ -102,3 +102,39 @@ test('no runner service: installed and said so, nothing restarted', async () => 
   assert.equal(record.step, 'installed-no-service'); assert.deepEqual(readFileSync(t.target), NEW);
   t.close();
 });
+
+test('Windows rollback: a new runner that only appears while the files are put back is ended too, and recorded', async () => {
+  const t = setup(); const ended: number[] = []; let phase = 'before'; let restoring = false;
+  const runners = () => new Map<number, string>(phase === 'before' || !restoring || ended.includes(88) ? [[41, '41@a']] : [[41, '41@a'], [88, '88@d']]);
+  const record = await installConnector(t.deps({ runners, endRunner: pid => ended.push(pid), restart: () => { t.calls.push('restart'); phase = 'after'; return true; }, restoreSettings: () => { restoring = true; }, takeoverWaitMs: 4000 }));
+  assert.equal(record.step, 'rolled-back'); assert.deepEqual(ended, [88]); assert.match(record.detail, /ended new runner 88/);
+  assert.deepEqual(readFileSync(t.target), OLD); assert.deepEqual(t.calls, ['sync', 'restart']);
+  t.close();
+});
+
+test('Windows rollback: runners that cannot be listed while waiting still get the previous connector and settings back, without a blind restart', async () => {
+  const t = setup(); let phase = 'before'; const restored: string[] = [];
+  const runners = () => { if (phase === 'before') return new Map([[41, '41@a']]); throw new Error('powershell gone'); };
+  const record = await installConnector(t.deps({ runners, endRunner: () => assert.fail('nothing listed, nothing ended'), restart: () => { t.calls.push('restart'); phase = 'after'; return true; }, restoreSettings: backup => restored.push(backup), takeoverWaitMs: 4000 }));
+  assert.equal(record.step, 'rolled-back'); assert.match(record.detail, /the runners could not be listed.*could not list the runners/);
+  assert.deepEqual(readFileSync(t.target), OLD); assert.equal(restored.length, 1);
+  assert.deepEqual(t.calls, ['sync', 'restart'], 'not knowing what runs is not a reason to start another runner');
+  t.close();
+});
+
+test('Windows rollback: a new runner that cannot be ended does not stop the restore; it is recorded and nothing is started', async () => {
+  const t = setup(); let phase = 'before';
+  const runners = () => new Map<number, string>(phase === 'before' ? [[41, '41@a']] : [[41, '41@a'], [77, '77@c']]);
+  const record = await installConnector(t.deps({ runners, endRunner: () => { throw new Error('process not found'); }, restart: () => { t.calls.push('restart'); phase = 'after'; return true; }, restoreSettings: () => undefined, takeoverWaitMs: 4000 }));
+  assert.equal(record.step, 'rolled-back'); assert.match(record.detail, /ended new runner none.*could not end new runner 77/);
+  assert.deepEqual(readFileSync(t.target), OLD); assert.deepEqual(t.calls, ['sync', 'restart']);
+  t.close();
+});
+
+test('Windows rollback with no previous connector says so instead of claiming a restore', async () => {
+  const t = setup(); rmSync(t.target);
+  const record = await installConnector(t.deps({ runners: () => new Map(), endRunner: () => assert.fail('nothing to end'), restoreSettings: () => undefined, takeoverWaitMs: 4000 }));
+  assert.equal(record.step, 'rolled-back'); assert.match(record.detail, /no previous connector to restore; the new one stays, previous settings restored/);
+  assert.deepEqual(readFileSync(t.target), NEW); assert.deepEqual(t.calls, ['sync', 'restart']);
+  t.close();
+});

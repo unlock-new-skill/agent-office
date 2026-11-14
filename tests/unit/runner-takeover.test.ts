@@ -19,9 +19,10 @@ test('only plain `runner` processes of this connector count as older runners, ne
 
 test('a starting runner on Windows ends older runners with their seats; it refuses to start when one survives', () => {
   const killed: number[] = []; const lines: string[] = [];
-  assert.deepEqual(endOlderRunners(script, line => lines.push(line), { platform: 'win32', list: () => processes, kill: pid => { killed.push(pid); } }), [10, 15]);
+  const timed = () => [...processes.map(entry => ({ ...entry, created: '2026-11-14T15:00:00.0000000+07:00' })), { pid: process.pid, commandLine: processes[0]!.commandLine, created: '2026-11-14T16:00:00.0000000+07:00' }];
+  assert.deepEqual(endOlderRunners(script, line => lines.push(line), { platform: 'win32', list: timed, kill: pid => { killed.push(pid); } }), [10, 15]);
   assert.deepEqual(killed, [10, 15]); assert.equal(lines.length, 2);
-  assert.throws(() => endOlderRunners(script, () => undefined, { platform: 'win32', list: () => processes, kill: () => { throw new Error('access denied'); } }), /Not starting a second runner/);
+  assert.throws(() => endOlderRunners(script, () => undefined, { platform: 'win32', list: timed, kill: () => { throw new Error('access denied'); } }), /Not starting a second runner/);
   assert.deepEqual(endOlderRunners(script, () => undefined, { platform: 'darwin', list: () => processes, kill: () => assert.fail('never on macOS') }), []);
   assert.throws(() => endOlderRunners(script, () => undefined, { platform: 'win32', list: () => { throw new Error('no powershell'); } }), /Not starting/, 'not knowing whether another runner runs is not a reason to start a second one');
 });
@@ -36,4 +37,20 @@ test('a runner only ends runners started before it, so two starting together nev
   ];
   assert.deepEqual(endOlderRunners(script, () => undefined, { platform: 'win32', list, kill: pid => { killed.push(pid); } }), [21]);
   assert.deepEqual(killed, [21]);
+});
+
+test('a runner without a creation time cannot be ordered: refuse to start instead of ending a maybe newer runner', () => {
+  const self = process.pid; const line = '"node.exe" "C:\\Users\\tr\\.agent-office\\bin\\agent-office.mjs" runner';
+  const kill = () => assert.fail('nothing may be ended');
+  assert.throws(() => endOlderRunners(script, () => undefined, { platform: 'win32', kill, list: () => [{ pid: self, commandLine: line, created: '2026-11-14T16:00:10.0000000+07:00' }, { pid: 31, commandLine: line }] }), /no creation time for runner 31.*Not starting/);
+  assert.throws(() => endOlderRunners(script, () => undefined, { platform: 'win32', kill, list: () => [{ pid: self, commandLine: line }, { pid: 31, commandLine: line, created: '2026-11-14T16:00:10.0000000+07:00' }] }), /no creation time for this runner/);
+  assert.deepEqual(endOlderRunners(script, () => undefined, { platform: 'win32', kill, list: () => [{ pid: self, commandLine: line }] }), [], 'alone, nothing to order');
+});
+
+test('two runners created in the same millisecond: exactly one ends the other (lower pid is the older)', () => {
+  const self = process.pid; const line = '"node.exe" "C:\\Users\\tr\\.agent-office\\bin\\agent-office.mjs" runner'; const at = '2026-11-14T16:00:10.1234567+07:00';
+  const list = () => [{ pid: self, commandLine: line, created: at }, { pid: self - 1, commandLine: line, created: at }, { pid: self + 1, commandLine: line, created: at }];
+  const killed: number[] = [];
+  assert.deepEqual(endOlderRunners(script, () => undefined, { platform: 'win32', list, kill: pid => { killed.push(pid); } }), [self - 1]);
+  assert.deepEqual(killed, [self - 1]);
 });

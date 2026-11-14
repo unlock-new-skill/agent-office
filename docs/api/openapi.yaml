@@ -72,7 +72,7 @@ paths:
     post:
       description: Runner (connector credential) offers the seats of its local runner.json. Unknown seat ids are refused.
       security: [{bearerAuth: []}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [machine, seats], properties: {machine: {type: string, maxLength: 120}, seats: {type: array, maxItems: 20, items: {$ref: '#/components/schemas/RunnerSeat'}}, connectorSha256: {type: string, pattern: '^[0-9a-f]{64}$', description: 'SHA-256 of the connector file the runner runs; kept when omitted'}}}}}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [machine, seats], properties: {machine: {type: string, maxLength: 120}, seats: {type: array, maxItems: 20, items: {$ref: '#/components/schemas/RunnerSeat'}}, connectorSha256: {type: string, pattern: '^[0-9a-f]{64}$', description: 'SHA-256 of the connector file the runner runs; stored as null when omitted'}}}}}}
       responses: {'200': {description: '{refused: string[]}'}, '401': {description: Not a connector credential}}
   /v1/runners/me/commands:
     get:
