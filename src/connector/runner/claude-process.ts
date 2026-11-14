@@ -20,9 +20,19 @@ export type ClaudeEvent =
   | { kind: 'text'; text: string }
   | { kind: 'tool'; name: string; summary: string }
   | { kind: 'result'; ok: boolean; detail: string }
+  /** Claude Code waits for the host to allow a tool or answer AskUserQuestion (can_use_tool control request). */
+  | { kind: 'prompt'; requestId: string; toolUseId: string; tool: string; input: Record<string, unknown> }
+  /** Any other control request: the host cannot serve it and answers with an error so the session is not left waiting. */
+  | { kind: 'control'; requestId: string; subtype: string }
+  /** Claude Code withdrew a request it was waiting on (e.g. the turn was interrupted): it must not be answered. */
+  | { kind: 'prompt-cancel'; requestId: string }
+  /** The result of a tool call the session made (used to tell an allowed prompt from one that actually ran). */
+  | { kind: 'tool-result'; toolUseId: string; ok: boolean }
   | { kind: 'exit'; code: number | null; stderr: string };
 
-export type ClaudeProcessLike = { send: (text: string) => void; interrupt: () => void; close: () => void; kill: () => void };
+/** Answer to a can_use_tool request, passed through as Claude Code expects it. */
+export type PromptResponse = { behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string };
+export type ClaudeProcessLike = { send: (text: string) => void; interrupt: () => void; close: () => void; kill: () => void; respond?: (requestId: string, response: PromptResponse | { error: string }) => void };
 export type SpawnClaude = (seat: SeatConfig, resume: string | null, onEvent: (event: ClaudeEvent) => void) => ClaudeProcessLike;
 
 /** Allows every tool of the `agent-office` MCP server. */
@@ -34,6 +44,9 @@ const NESTED_SESSION_VARS = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_COD
 export const claudeArgs = (seat: SeatConfig, resume: string | null): string[] => [
   '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
   ...(seat.permissionMode === 'bypassPermissions' ? ['--dangerously-skip-permissions'] : ['--permission-mode', seat.permissionMode]),
+  // The runner is the host for prompts: questions (and, outside bypass mode, tool permissions) arrive as control
+  // requests on stdout and are answered on stdin, so Agent Office can route them instead of nobody seeing them.
+  '--permission-prompt-tool', 'stdio',
   ...(resume ? ['--resume', resume] : []),
   ...(seat.model ? ['--model', seat.model] : []),
   // The seat's own Agent Office tools never need a prompt: nobody is there to answer one.
@@ -52,8 +65,21 @@ const oneLine = (value: string, max: number): string => value.replace(/\s+/g, ' 
 export const parseClaudeLine = (line: string): ClaudeEvent[] => {
   let message: Record<string, unknown>;
   try { message = JSON.parse(line) as Record<string, unknown>; } catch { return []; }
+  if (message.type === 'control_cancel_request' && typeof message.request_id === 'string') return [{ kind: 'prompt-cancel', requestId: message.request_id }];
+  if (message.type === 'control_request' && typeof message.request_id === 'string') {
+    const request = message.request && typeof message.request === 'object' ? message.request as Record<string, unknown> : {};
+    if (request.subtype === 'can_use_tool' && typeof request.tool_name === 'string') {
+      return [{ kind: 'prompt', requestId: message.request_id, toolUseId: typeof request.tool_use_id === 'string' ? request.tool_use_id : '', tool: request.tool_name, input: request.input && typeof request.input === 'object' ? request.input as Record<string, unknown> : {} }];
+    }
+    return [{ kind: 'control', requestId: message.request_id, subtype: String(request.subtype ?? '') }];
+  }
   if (message.type === 'system' && message.subtype === 'init' && typeof message.session_id === 'string') return [{ kind: 'init', sessionId: message.session_id }];
   if (message.type === 'result') return [{ kind: 'result', ok: message.subtype === 'success' && message.is_error !== true, detail: oneLine(typeof message.result === 'string' ? message.result : String(message.subtype ?? ''), 300) }];
+  if (message.type === 'user') {
+    const blocks = (message.message as { content?: unknown } | undefined)?.content;
+    return Array.isArray(blocks) ? (blocks as Array<Record<string, unknown>>).filter(block => block.type === 'tool_result' && typeof block.tool_use_id === 'string')
+      .map(block => ({ kind: 'tool-result' as const, toolUseId: block.tool_use_id as string, ok: block.is_error !== true })) : [];
+  }
   if (message.type !== 'assistant') return [];
   const content = (message.message as { content?: unknown } | undefined)?.content;
   if (!Array.isArray(content)) return [];
@@ -94,6 +120,7 @@ export const spawnClaude: SpawnClaude = (seat, resume, onEvent) => {
   return {
     send: text => write({ type: 'user', message: { role: 'user', content: text } }),
     interrupt: () => write({ type: 'control_request', request_id: `interrupt-${Date.now()}`, request: { subtype: 'interrupt' } }),
+    respond: (requestId, response) => write({ type: 'control_response', response: 'error' in response ? { subtype: 'error', request_id: requestId, error: response.error } : { subtype: 'success', request_id: requestId, response } }),
     close: () => { child.stdin?.end(); },
     kill: () => { killTree(child, windows); },
   };

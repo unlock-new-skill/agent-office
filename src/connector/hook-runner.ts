@@ -88,7 +88,8 @@ export const runHook = async (raw: unknown, deps: HookDeps): Promise<HookOutput>
       const joined = refused || `[Agent Office] This session joined seat @${linkedSeat} from the link in the message — no need to call agent_office_join or open the link.\n`;
       return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: joined + seatContext(me) } };
     }
-    if (input.hook_event_name === 'PermissionRequest' && (deps.permissionWaitSeconds ?? 0) > 0) return await askManager(input, session, deps);
+    // Runner-managed sessions get their prompts routed by the runner (stdio host); the hook does not file a second one.
+    if (input.hook_event_name === 'PermissionRequest' && !deps.runnerManaged && (deps.permissionWaitSeconds ?? 0) > 0) return await askManager(input, session, deps);
     if (input.hook_event_name === 'Stop') {
       if (deps.runnerManaged) return {};
       return await listenForWake(input.session_id, input.cwd, session, deps);

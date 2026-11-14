@@ -89,6 +89,10 @@ export class RunnerService {
   }
 
   isTakenOver(agentId: string): boolean { return this.takeovers.has(agentId); }
+  /** True when this runner runs or is configured for the seat (a runner speaks only for its own seats). */
+  /** False once the runner stopped polling (or never polled since the server started). */
+  isRunnerOnline(runnerId: string): boolean { return this.online.has(runnerId); }
+  offersSeat(runnerId: string, seatId: string): boolean { return this.offered(this.row(runnerId)).has(seatId); }
   clearTakeover(agentId: string): void { this.takeovers.delete(agentId); }
 
   /**

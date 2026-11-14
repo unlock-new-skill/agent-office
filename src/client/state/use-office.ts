@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
-import type { AgentSnapshot, ChatMessage, OrgView, PermissionRequest, RunnerView, Task, ApprovalRequest } from '../../shared/contracts.js';
+import type { AgentPrompt, AgentSnapshot, ChatMessage, OrgView, PermissionRequest, RunnerView, Task, ApprovalRequest } from '../../shared/contracts.js';
 import type { Api } from '../api/http.js';
 import { connectStream } from '../api/stream.js';
 import { initialOfficeState, officeReducer, type OfficeState } from './office-store.js';
@@ -33,9 +33,11 @@ export const useOffice = (api: Api): OfficeHandle => {
 
   const refreshAll = useCallback(async () => {
     const [org, agents, tasks, permissions, runners] = await Promise.all([api.get<OrgView>('/v1/org'), api.get<{ agents: AgentSnapshot[] }>('/v1/agents'), allTasks(api), api.get<{ pending: PermissionRequest[] }>('/v1/permissions'), api.get<{ runners: RunnerView[] }>('/v1/runners')]);
+    // Older servers have no prompt routing: an empty list, not a failed load.
+    const prompts = await api.get<{ prompts: AgentPrompt[] }>('/v1/prompts').catch(() => ({ prompts: [] as AgentPrompt[] }));
     const approvals = await api.get<{ approvals: ApprovalRequest[] }>('/v1/approvals?status=pending').catch(() => ({ approvals: [] as ApprovalRequest[] }));
     dispatch({ type: 'approvals', pending: approvals.approvals });
-    dispatch({ type: 'org', org }); dispatch({ type: 'agents', agents: agents.agents }); dispatch({ type: 'tasks', tasks: tasks.tasks }); dispatch({ type: 'permissions', pending: permissions.pending }); dispatch({ type: 'runners', runners: runners.runners });
+    dispatch({ type: 'org', org }); dispatch({ type: 'agents', agents: agents.agents }); dispatch({ type: 'tasks', tasks: tasks.tasks }); dispatch({ type: 'permissions', pending: permissions.pending }); dispatch({ type: 'runners', runners: runners.runners }); dispatch({ type: 'prompts', pending: prompts.prompts.filter(prompt => prompt.status === 'pending'), recent: prompts.prompts.filter(prompt => prompt.status !== 'pending').slice(0, 8) });
   }, [api]);
 
   const loadHistory = useCallback(async (channelId: string) => {

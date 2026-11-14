@@ -74,6 +74,30 @@ export const registerRunnerRoutes = (app: Hono, deps: Deps): void => {
     office.runners.appendLog(runnerId, body.entries); return c.json({ ok: true });
   }));
 
+  // Prompts a seat's Claude session is blocked on (questions, tool permissions): filed and awaited by the runner.
+  const sessionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+  app.post('/v1/runners/me/prompts', c => asRunner(c, async runnerId => {
+    const body = z.object({
+      seatId, sessionId: sessionIdSchema, requestId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/), toolUseId: z.string().max(128).default(''),
+      tool: z.string().min(1).max(128), input: z.record(z.string(), z.unknown()).refine(value => JSON.stringify(value).length <= 256_000, 'input too large'), binding: z.string().regex(/^[0-9a-f]{64}$/),
+    }).strict().parse(await c.req.json());
+    return c.json(office.prompts.create(runnerId, body), 201);
+  }));
+  app.get('/v1/runners/me/prompts/:id', c => asRunner(c, async runnerId => {
+    const { wait } = z.object({ wait: z.coerce.number().int().min(0).max(60).default(0) }).parse(c.req.query());
+    return c.json(await office.prompts.wait(runnerId, c.req.param('id'), wait * 1000, c.req.raw.signal));
+  }));
+  app.post('/v1/runners/me/prompts/:id/delivered', c => asRunner(c, runnerId => c.json(office.prompts.delivered(runnerId, c.req.param('id')))));
+  app.post('/v1/runners/me/prompts/:id/outcome', c => asRunner(c, async runnerId => {
+    const body = z.object({ ok: z.boolean() }).strict().parse(await c.req.json());
+    return c.json(office.prompts.outcome(runnerId, c.req.param('id'), body.ok));
+  }));
+  // ids: the prompts a session withdrew or left behind; seatId: one seat; neither: every prompt of this runner (restart).
+  app.post('/v1/runners/me/prompts/cancel', c => asRunner(c, async runnerId => {
+    const body = z.object({ seatId: seatId.optional(), ids: z.array(z.string().max(40)).max(20).optional(), reason: z.string().max(120).optional() }).strict().parse(await c.req.json());
+    return c.json({ cancelled: office.prompts.cancel(runnerId, body, body.reason?.replace(/[\u0000-\u001f]+/g, ' ') || 'the runner withdrew it') });
+  }));
+
   app.get('/v1/runners', c => asManager(c, () => c.json({ runners: office.runners.views() })));
 
   // Machines managed from the web: seat config (live-synced to the runner), sessions seen there, one-line install.

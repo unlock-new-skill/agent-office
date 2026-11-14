@@ -5,7 +5,7 @@ import { daemonCall, KEEPALIVE_REASON, listenForWake } from '../hook-runner.js';
 import type { SessionStore } from '../session-store.js';
 import { spawnClaude, type SpawnClaude } from './claude-process.js';
 import { cwdProblem, RunnerState, type RunnerConfig, type SeatConfig } from './runner-config.js';
-import { SeatWorker, type CommandResult, type Listen } from './seat-worker.js';
+import { SeatWorker, type CommandResult, type Listen, type PromptRequest, type PromptVerdict } from './seat-worker.js';
 
 export type RunnerDeps = {
   store: SessionStore; fetch: typeof fetch; config: RunnerConfig; out: (line: string) => void;
@@ -50,6 +50,7 @@ export class Runner {
   /** Bumped per seat on every start/stop so an older wait-for-free-seat loop gives up. */
   private readonly launches = new Map<string, number>();
   private localStarted = false;
+  private promptsReset = false;
   private toolsCheckedAt = -Infinity;
   /** Tail of each seat's command chain. */
   private readonly seatCommands = new Map<string, Promise<void>>();
@@ -208,6 +209,10 @@ export class Runner {
   private addWorker(seat: SeatConfig): SeatWorker {
     const worker = new SeatWorker(seat, {
       spawn: this.deps.spawn ?? spawnClaude, state: this.state, listen: this.listen,
+      ask: (request, alive, onFiled) => this.askOffice(request, alive, onFiled),
+      delivered: id => { void this.call(`/v1/runners/me/prompts/${encodeURIComponent(id)}/delivered`, { body: {} }).catch(() => undefined); },
+      outcome: (id, ok) => { void this.call(`/v1/runners/me/prompts/${encodeURIComponent(id)}/outcome`, { body: { ok } }).catch(() => undefined); },
+      cancelPrompts: (ids, reason) => { void this.call('/v1/runners/me/prompts/cancel', { body: { ids, reason } }).catch(() => undefined); },
       onStatus: status => { this.statuses.set(status.seatId, status); this.deps.out(`[${status.seatId}] ${status.state}: ${status.detail}`); },
       onLog: entry => {
         // Errors also go to the machine's runner.log, so they can be read there without the web UI.
@@ -242,6 +247,46 @@ export class Runner {
     }
   }
 
+  /**
+   * Files a prompt with Agent Office and long-polls its decision while the session still waits. A failed filing, a
+   * prompt that expired or was cancelled, or a runner that loses the server past the prompt's expiry resolves as deny.
+   */
+  private async askOffice(request: PromptRequest, alive: () => boolean, onFiled: (id: string) => void): Promise<PromptVerdict> {
+    const deny = (id: string | null, message = ''): PromptVerdict => ({ id, behavior: 'deny', answers: null, message, binding: null });
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+    let filed: { id: string; createdAt: number; expiresAt: number } | null = null;
+    // Filing is idempotent (same request id), so a lost reply is simply sent again.
+    for (let attempt = 0; attempt < 3 && !filed && alive(); attempt++) {
+      try { filed = await this.call<{ id: string; createdAt: number; expiresAt: number }>('/v1/runners/me/prompts', { body: request }); }
+      catch (error) { if (/daemon_4\d\d/.test(error instanceof Error ? error.message : '')) break; await sleep(1000 * (attempt + 1)); }
+    }
+    if (!filed) return deny(null);
+    const id = filed.id;
+    // The session stopped waiting while the prompt was being filed: withdraw it at once.
+    if (!alive()) { void this.call('/v1/runners/me/prompts/cancel', { body: { ids: [id], reason: 'the session stopped waiting before it was filed' } }).catch(() => undefined); return deny(null); }
+    onFiled(id);
+    // The server's expiry, measured on this machine's clock (the two clocks may differ).
+    const giveUpAt = Date.now() + (filed.expiresAt - filed.createdAt) + 60_000;
+    let failures = 0;
+    while (alive()) {
+      const asked = Date.now();
+      try {
+        const decision = await this.call<{ status: string; behavior: 'allow' | 'deny' | null; answers: Record<string, string> | null; message: string; binding: string }>(`/v1/runners/me/prompts/${encodeURIComponent(id)}?wait=50`, { timeoutMs: 65_000 });
+        failures = 0;
+        if (decision.status === 'answered' && decision.behavior === 'allow') return { id, behavior: 'allow', answers: decision.answers, message: decision.message, binding: decision.binding };
+        if (decision.status === 'denied') return deny(id, decision.message);
+        if (decision.status !== 'pending') return deny(decision.status === 'delivered' ? null : id);
+        // A poll the server could not park (too many waiters) comes back at once: do not spin.
+        if (Date.now() - asked < 1000) await sleep(2000);
+      } catch {
+        // Unreachable server: keep trying until the prompt would have expired anyway, then deny.
+        if (Date.now() > giveUpAt) return deny(id);
+        await sleep(Math.min(2000 * 2 ** failures++, 30_000));
+      }
+    }
+    return deny(null);
+  }
+
   private call<T>(target: string, init: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<T> {
     const connector = this.deps.store.connector();
     if (!connector) throw new Error('not installed: run the install command from the web UI first');
@@ -254,6 +299,8 @@ export class Runner {
       this.deps.out(`[${seatId}] refused by the server (no such seat): stopping it`);
       await this.workers.get(seatId)?.stop(); this.workers.delete(seatId); this.statuses.delete(seatId);
     }
+    // A new runner process: prompts its previous process filed can never be answered into a session any more.
+    if (!this.promptsReset) { this.promptsReset = true; await this.call('/v1/runners/me/prompts/cancel', { body: { reason: 'the runner restarted' } }).catch(() => undefined); }
     this.registered = true; this.lastStatus = JSON.stringify([...this.statuses.values()]);
     // Local runner.json seats start after the first registration, so the daemon can say whether their seat is free.
     if (!this.localStarted) {

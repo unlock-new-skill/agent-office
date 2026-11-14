@@ -152,6 +152,28 @@ export type TaskArchivePlan = { action: 'archive' | 'restore'; applied: boolean;
 export type PermissionStatus = 'pending' | 'allowed' | 'denied' | 'expired';
 export type PermissionBehavior = 'allow' | 'deny';
 export type PermissionRequest = { id: string; agentId: string; seatId: string | null; tool: string; summary: string; status: PermissionStatus; message: string; createdAt: number; decidedAt: number | null; decidedBy: string | null };
+/**
+ * A prompt a runner-managed session is waiting on (Claude Code's can_use_tool control request): a question for the user
+ * (AskUserQuestion) or a tool permission. Answered by the delegated resolvers or the manager; delivered = the waiting
+ * session received the answer.
+ */
+export type AgentPromptKind = 'question' | 'permission';
+export type AgentPromptStatus = 'pending' | 'answered' | 'denied' | 'expired' | 'cancelled' | 'delivered';
+export type PromptQuestion = { question: string; header: string; multiSelect: boolean; options: Array<{ label: string; description: string }> };
+export type AgentPrompt = {
+  id: string; seatId: string; sessionId: string; kind: AgentPromptKind; tool: string; summary: string; questions: PromptQuestion[];
+  /** The task in progress the prompt is bound to (delegates answer only within it); null = manager only. */
+  taskId: string | null;
+  /** Who may answer and in which role: the task's technical lead(s) and the PM coordinators. */
+  resolvers: Array<{ seatId: string; role: 'technical' | 'business' }>;
+  /** After delivery of an allowed permission: whether the tool then ran (null = not reported / not applicable). */
+  outcome: 'succeeded' | 'failed' | null;
+  /** Plain-language lifecycle: who decided what, whether it reached the session, whether it ran. */
+  state: string;
+  binding: string; resolverSeatIds: string[]; managerOnly: boolean; managerReason: string; status: AgentPromptStatus;
+  behavior: PermissionBehavior | null; answers: Record<string, string> | null; message: string; decidedBy: string | null;
+  createdAt: number; expiresAt: number; decidedAt: number | null; deliveredAt: number | null;
+};
 
 /** Prefix of prompts written by Agent Office itself (wakes, runner starts); they are not a human taking over. */
 export const AUTO_PROMPT_MARK = '[Agent Office]';
@@ -204,6 +226,7 @@ export type CollabEvent =
   | { type: 'collab'; kind: 'blocker'; blocker: Blocker }
   | { type: 'collab'; kind: 'progress'; taskId: string }
   | { type: 'collab'; kind: 'permission'; pending: PermissionRequest[] }
+  | { type: 'collab'; kind: 'prompts'; pending: AgentPrompt[]; recent: AgentPrompt[] }
   | { type: 'collab'; kind: 'approvals'; pending: ApprovalRequest[]; changedId: string }
   | { type: 'collab'; kind: 'runners'; runners: RunnerView[] }
   | { type: 'collab'; kind: 'runner-command'; command: RunnerCommand }

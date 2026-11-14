@@ -24,6 +24,7 @@
     "connect": "tsx scripts/connect-local.ts",
     "mcp": "node dist/src/server/mcp-stdio.js",
     "lint": "eslint src tests scripts",
+    "typecheck": "tsc --noEmit -p .",
     "test": "node --import tsx --test tests/unit/*.test.ts tests/integration/*.test.ts",
     "format": "prettier --write .",
     "build:connector": "tsx scripts/build-connector.ts"

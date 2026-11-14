@@ -111,9 +111,56 @@ Rotate a leaked connector: change the manager password (`reset`, which revokes a
 - **Status check**: departments with tasks in progress that stay quiet `AGENT_OFFICE_STATUS_CHECK_MINUTES` (default 45; `0` = off) are reported to `@AGENT_OFFICE_COORDINATOR_SEAT` (default `pm`) in #leaders.
 - **Wake limit**: after `AGENT_OFFICE_MAX_AUTO_WAKES` consecutive auto-wakes without real work (only chat tools) a seat shows “wake limit hit”; a turn using work tools, any human prompt, a manager message in its channel or Reset re-arms it, and it re-arms by itself after 15 min.
 
+## Prompts of runner seats (questions and tool permissions)
+
+A runner starts each seat's `claude -p` with `--permission-prompt-tool stdio`, so Claude Code hands every prompt to the runner instead of a terminal nobody watches:
+
+- **AskUserQuestion** (one or several choices, or the user's own words) — in every permission mode, including bypass. Without this flag a headless session does not get the tool at all.
+- **Tool permissions** — only in seats not run with `bypassPermissions`.
+
+The runner files the prompt with Agent Office, bound to the task the seat has **in progress**. The seat shows `waiting for an answer … since …`. A short notice in that task's thread wakes the resolvers of that task:
+
+- **technical**: the leader and deputy of the task's department (for members), and the lead of its parent task. Only they answer tool permissions;
+- **business / priority**: the PM coordinators, for questions.
+
+The scope must be clear: the seat's one execution task in progress, otherwise its only task in progress. It is checked again when someone answers, so a finished or reassigned task, or a lead who lost the role, can no longer answer.
+
+Never the asking seat itself, and not a resolver who is itself blocked on a prompt.
+
+They answer with the MCP tool `agent_office_prompts` (list / get / answer); the manager answers any prompt from the bar at the top of the web UI. The first answer wins.
+
+The answer goes back to the exact request the same process is waiting on, and only for the exact input it was asked about: the binding, which the server checks against the input it receives. An allowed permission runs the original input unchanged; answers are plain text for the agent. A request Claude Code withdraws (interrupt) is cancelled, not answered.
+
+Every prompt keeps a plain state, the same in the web bar (*Recent prompts*) and over MCP:
+
+- waiting;
+- answered (or denied) but not yet delivered;
+- delivered;
+- for allowed permissions, whether the tool then ran or ran with an error;
+- expired;
+- cancelled, with the reason: session stopped, request withdrawn, runner restarted or offline. A decision the session can no longer receive is cancelled too, keeping who decided.
+
+Expired and cancelled are kept apart from a deny, although none of them ran.
+
+Never allowed by default: no answer within 20 minutes, a stopped or restarted session, or a lost server all answer the prompt as **denied**. The agent is told to continue without the answer and not to retry the action another way.
+
+The manager alone decides:
+
+- prompts of a seat with **no task in progress** or several (ambiguous scope), or with no resolver of the needed role other than itself;
+- permissions whose input is too long to show in full;
+- prompts whose input mentions secrets, credentials, system or security settings, money, production/live, deploy or destructive operations. This word list is an extra signal towards the manager, never a reason to let a delegate answer; it is checked on the whole input.
+
+Not routed (report only):
+
+- hook denials (PreToolUse DENY, e.g. privacy or scout blocks): the agent sees the hook's reason in the tool result and in the turn's permission denials;
+- OS refusals (Windows ExecutionPolicy);
+- commands waiting on interactive stdin.
+
+These need their owner to change the policy; an answer here cannot lift them. MCP elicitation is answered with an error (no MCP server of the office uses it).
+
 ## Schema upgrades
 
-v2 → v3 → v4 upgrade in place on start (v4 adds `seat_handoffs` and `permission_requests`).
+v2 → v3 → v4 upgrade in place on start (v4 adds `seat_handoffs` and `permission_requests`). Later versions are additive the same way; v31 adds `agent_prompts`.
 
 ### v1 → v2
 

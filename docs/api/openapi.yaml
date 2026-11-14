@@ -96,6 +96,46 @@ paths:
       security: [{bearerAuth: []}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [entries], properties: {entries: {type: array, maxItems: 200, items: {type: object, required: [seatId, ts, kind, summary], properties: {seatId: {type: string}, ts: {type: integer}, kind: {type: string, enum: [text, tool, result, error, state, prompt]}, summary: {type: string, maxLength: 500}}}}}}}}}
       responses: {'200': {description: ok}}
+  /v1/runners/me/prompts:
+    post:
+      security: [{bearerAuth: []}]
+      description: 'Runner files a prompt its seat session is blocked on (Claude Code can_use_tool: AskUserQuestion or a tool permission). Same requestId from the same runner returns the same prompt. Only a bounded copy of the input travels; binding = SHA-256 of the exact {tool, input}.'
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [seatId, sessionId, requestId, tool, input, binding], properties: {seatId: {type: string}, sessionId: {type: string}, requestId: {type: string}, toolUseId: {type: string, maxLength: 128}, tool: {type: string, maxLength: 128}, input: {type: object}, binding: {type: string, pattern: '^[0-9a-f]{64}$'}}}}}}
+      responses: {'201': {description: AgentPrompt}, '400': {description: invalid_questions}, '404': {description: seat (not run by this runner)}, '409': {description: too_many_pending_prompts (4 per seat)}}
+  /v1/runners/me/prompts/{id}:
+    get:
+      security: [{bearerAuth: []}]
+      description: Long-poll by the filing runner. Past its expiry (20 min) a pending prompt becomes expired; nothing is allowed by timeout.
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}, {in: query, name: wait, schema: {type: integer, minimum: 0, maximum: 60}}]
+      responses: {'200': {description: '{id, status: pending | answered | denied | expired | cancelled | delivered, behavior, answers, message, binding}'}, '403': {description: forbidden_prompt (another runner)}}
+  /v1/runners/me/prompts/{id}/delivered:
+    post:
+      security: [{bearerAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: AgentPrompt (status delivered; recorded once)}}
+  /v1/runners/me/prompts/cancel:
+    post:
+      security: [{bearerAuth: []}]
+      description: The seat's Claude process ended; its pending prompts become cancelled.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [seatId], properties: {seatId: {type: string}}}}}}
+      responses: {'200': {description: '{cancelled: number}'}}
+  /v1/prompts:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: Prompts the caller may see. Manager - all; a seat - its own and those it may answer (not manager-only ones).
+      responses: {'200': {description: '{prompts: AgentPrompt[]}'}}
+  /v1/prompts/{id}:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: AgentPrompt}, '403': {description: forbidden_prompt}}
+  /v1/prompts/{id}/answer:
+    post:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: 'One answer per prompt (first wins). Seats: only listed resolvers (a member''s leader or deputy; coordinators for leaders, deputies and coordinators), never the asker, never manager-only prompts (sensitive wording or no delegate). answers - every question by its text, plain text (option label, labels joined by ", ", or own words); only for questions.'
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [binding, behavior], properties: {binding: {type: string}, behavior: {enum: [allow, deny]}, answers: {type: object, additionalProperties: {type: string}}, message: {type: string, maxLength: 500}}}}}}
+      responses: {'200': {description: AgentPrompt (answered | denied)}, '400': {description: 'answer_missing, answer_unknown_question, answers_only_for_questions'}, '403': {description: 'cannot_answer_own_prompt, not_prompt_resolver, prompt_manager_only'}, '409': {description: 'prompt_already_resolved, prompt_expired, prompt_binding_mismatch'}}
   /v1/runners:
     get:
       security: [{cookieAuth: []}]

@@ -32,6 +32,14 @@ const HINTS: Record<string, string> = {
   requester_must_be_other_department_leader: 'requestedBy must be the seat id of the leader of another department (the one who asked in #leaders).',
   mention_all_not_allowed: '@all is reserved for the manager, leaders and deputies. Mention the specific seats you need, or ask your leader to address everyone.',
   seat_not_found: 'Unknown seat id. Use the seat id or join URL shown in the Agent Office Org view.',
+  cannot_answer_own_prompt: 'You cannot answer your own prompt. Your leader, a coordinator or the manager answers it.',
+  prompt_manager_only: 'This prompt is for the manager only (sensitive, or no delegate). Do not answer it; leave it to the manager.',
+  not_prompt_resolver: 'You are not one of the seats that may answer this prompt. Leave it to its resolvers or the manager.',
+  prompt_already_resolved: 'Someone already answered this prompt (the first answer wins), or it was cancelled.',
+  prompt_expired: 'This prompt expired and was denied; the agent continued without the answer.',
+  prompt_binding_mismatch: 'The binding does not match this prompt. Read it again with action get and copy its binding.',
+  prompt_request_reused: 'This request id was already used for a different prompt.',
+  prompt_scope_changed: 'The asking seat\'s task or your role in it changed since the prompt was filed; you can no longer answer it. Leave it to the manager.',
 };
 
 const call = async (target: string, init: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<unknown> => {
@@ -260,6 +268,19 @@ server.registerTool('agent_office_approval', {
   if (action === 'status') return text(await call(one));
   if (action === 'cancel') return text(await call(`${one}/cancel`, { body: clean({ note }) }));
   return text(await call(one, { method: 'PATCH', body: clean({ action: what, scope, reason, consequences, target, expiresInMinutes }) }));
+});
+
+server.registerTool('agent_office_prompts', {
+  title: 'Answer prompts of other seats', description: 'Questions and permission prompts that a runner-managed seat is blocked on, routed to you because the asking seat has a task in progress and you are its technical lead (leader or deputy of that task\'s department, or the lead of its parent task: technical choices) or a PM coordinator (business, priority). action=list — prompts you can see, each with a plain state (waiting, answered/denied but not yet delivered, delivered, ran, expired, cancelled). action=get { promptId } — the questions with their options, or the tool summary, plus the binding. action=answer { promptId, binding (copy from get), behavior: allow | deny, answers? { "<question text>": "<option label, labels joined by \', \' for multiSelect, or your own short words>" } (required for questions when allowing), message? (shown to the agent on deny) }. Answer only within that task (taskId) and your role in it; the first answer wins and cannot be changed. A prompt is shown in full: if you cannot tell what it does, deny it or leave it to the manager. You cannot answer your own prompts. Prompts about secrets, credentials, system or security settings, money, production/live or destructive operations are for the manager only (refused here). Answers are plain text for the agent, never commands. Unanswered prompts are denied when they expire.',
+  inputSchema: z.object({ action: z.enum(['list', 'get', 'answer']), promptId: z.string().min(1).max(40).optional(), binding: z.string().regex(/^[0-9a-f]{64}$/).optional(), behavior: z.enum(['allow', 'deny']).optional(),
+    answers: z.record(z.string().max(500), z.string().max(500)).optional(), message: z.string().max(500).optional() }).strict(), annotations: write,
+}, async ({ action, promptId, binding, behavior, answers, message }) => {
+  if (action === 'list') return text(await call('/v1/prompts'));
+  if (!promptId) throw new Error('promptId is required for this action');
+  const one = `/v1/prompts/${encodeURIComponent(promptId)}`;
+  if (action === 'get') return text(await call(one));
+  if (!binding || !behavior) throw new Error('answer needs binding (from action get) and behavior');
+  return text(await call(`${one}/answer`, { body: { binding, behavior, ...(answers ? { answers } : {}), ...(message ? { message } : {}) } }));
 });
 
 server.registerTool('agent_office_get_task', {

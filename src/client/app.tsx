@@ -78,7 +78,7 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
         <span className={`conn ${office.state.connected ? 'on' : 'off'}`}>{office.state.connected ? 'live' : 'reconnecting…'}</span>
         <button type="button" className="btn btn-small" onClick={() => void api.send('POST', '/v1/auth/logout').finally(onSignedOut)}>Sign out</button>
       </header>
-      <ApprovalsBar pending={office.state.permissions} decisions={office.state.approvals} api={api} notify={notify} />
+      <ApprovalsBar pending={office.state.permissions} decisions={office.state.approvals} prompts={office.state.prompts} promptHistory={office.state.promptHistory} api={api} notify={notify} />
       <Suspense fallback={<div className="loading">Loading…</div>}>
         {route.view === 'chat' && <ChatView office={office} channelId={channelId} onSelectChannel={id => navigate({ view: 'chat', channelId: id })} notify={notify} />}
         {route.view === 'map' && <MapView state={office.state} api={api} notify={notify} onDismiss={office.dismissAgent} onResetWakes={seatId => api.send('POST', `/v1/seats/${seatId}/reset-wakes`).then(() => undefined)} music={music} />}

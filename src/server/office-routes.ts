@@ -163,6 +163,12 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
     return c.json(office.permissions.decide(c.req.param('id'), behavior, message));
   }));
 
+  // Prompts of runner-managed sessions: delegated resolvers (and the manager) read and answer them; one answer wins.
+  const PromptAnswerSchema = z.object({ binding: z.string().regex(/^[0-9a-f]{64}$/), behavior: z.enum(['allow', 'deny']), answers: z.record(z.string().max(500), z.string().max(2000)).optional(), message: z.string().max(500).optional() }).strict();
+  app.get('/v1/prompts', c => withActor(c, ({ actor }) => c.json({ prompts: office.prompts.list(actor) })));
+  app.get('/v1/prompts/:id', c => withActor(c, ({ actor }) => c.json(office.prompts.read(actor, c.req.param('id')))));
+  app.post('/v1/prompts/:id/answer', c => withActor(c, async ({ actor }) => c.json(office.prompts.answer(actor, c.req.param('id'), PromptAnswerSchema.parse(await c.req.json())))));
+
   const TaskStatusSchema = z.enum(['todo', 'doing', 'blocked', 'done']);
   const TaskPlanSchema = { estimateMinutes: z.number().int().min(1).max(10_080).nullable().optional(), dependsOn: z.array(z.string().min(1).max(80)).max(20).optional() };
   /** The read-only service token of the request (validated and limited to read routes by app.ts), if any. */

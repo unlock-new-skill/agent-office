@@ -35,7 +35,7 @@ test('stream-json lines map to init, text, tool and result events', () => {
   assert.deepEqual(parseClaudeLine('{"type":"assistant","message":{"content":[{"type":"text","text":"hi\\nthere"},{"type":"tool_use","name":"Bash","input":{"command":"ls -la"}}]}}'), [{ kind: 'text', text: 'hi there' }, { kind: 'tool', name: 'Bash', summary: 'ls -la' }]);
   assert.deepEqual(parseClaudeLine('{"type":"result","subtype":"success","result":"done"}'), [{ kind: 'result', ok: true, detail: 'done' }]);
   assert.deepEqual(parseClaudeLine('not json'), []);
-  assert.deepEqual(claudeArgs(seat, 's-1'), ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--resume', 's-1', '--allowedTools', 'mcp__agent-office']);
+  assert.deepEqual(claudeArgs(seat, 's-1'), ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--permission-prompt-tool', 'stdio', '--resume', 's-1', '--allowedTools', 'mcp__agent-office']);
   const env = claudeEnv('dev-be', { PATH: '/bin', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'x' });
   assert.equal(env.CLAUDECODE, undefined); assert.equal(env.CLAUDE_CODE_SESSION_ID, undefined);
   assert.equal(env.AGENT_OFFICE_SEAT, 'dev-be'); assert.equal(env.AGENT_OFFICE_RUNNER, '1'); assert.equal(env.PATH, '/bin');
@@ -114,7 +114,7 @@ test('interrupt, prompt and stop commands', async () => {
 });
 
 test('bypassPermissions seats run with --dangerously-skip-permissions', () => {
-  assert.deepEqual(claudeArgs({ ...seat, permissionMode: 'bypassPermissions' }, null), ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--allowedTools', 'mcp__agent-office']);
+  assert.deepEqual(claudeArgs({ ...seat, permissionMode: 'bypassPermissions' }, null), ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--permission-prompt-tool', 'stdio', '--allowedTools', 'mcp__agent-office']);
 });
 
 test('the desktop live view renders prompts, wakes, replies, tools and results, and hides subagent chatter', async () => {

@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 30;
+export const SCHEMA_VERSION = 31;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -179,6 +179,24 @@ ALTER TABLE tasks ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE S
 CREATE INDEX tasks_project ON tasks(project_id);`;
 /** v30: the SHA-256 of the connector file each runner reports, so a rollout can be checked from the server. */
 const V30_COLUMNS = 'ALTER TABLE runners ADD COLUMN connector_sha256 TEXT;';
+/**
+ * v31: prompts runner-managed sessions wait on (questions, tool permissions), routed to delegated resolvers. The runner
+ * sends the tool input so the server can check it; only a bounded summary, the questions and the binding hash of the
+ * exact input are stored.
+ */
+const V31_TABLES = `CREATE TABLE agent_prompts(
+  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL, seat_id TEXT NOT NULL, session_id TEXT NOT NULL, request_id TEXT NOT NULL,
+  tool_use_id TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL CHECK(kind IN ('question','permission')), tool TEXT NOT NULL,
+  summary TEXT NOT NULL CHECK(length(summary) <= 2000), questions_json TEXT NOT NULL DEFAULT '[]', binding TEXT NOT NULL,
+  resolvers_json TEXT NOT NULL DEFAULT '[]', manager_only INTEGER NOT NULL DEFAULT 0, manager_reason TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK(status IN ('pending','answered','denied','expired','cancelled','delivered')),
+  behavior TEXT, answers_json TEXT, message TEXT NOT NULL DEFAULT '', decided_by TEXT,
+  task_id TEXT, outcome TEXT CHECK(outcome IN ('succeeded','failed')), outcome_at INTEGER, cancel_reason TEXT,
+  notice_channel TEXT, notice_seq INTEGER, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, decided_at INTEGER, delivered_at INTEGER,
+  UNIQUE(runner_id, request_id)
+) STRICT;
+CREATE INDEX agent_prompts_status ON agent_prompts(status, expires_at);
+CREATE INDEX agent_prompts_seat ON agent_prompts(seat_id, status);`;
 const V26_TABLES = `CREATE TABLE approval_requests(
   id TEXT PRIMARY KEY, requester_seat_id TEXT NOT NULL, task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   channel_id TEXT NOT NULL, thread_seq INTEGER, action TEXT NOT NULL CHECK(length(action) BETWEEN 1 AND 200),
@@ -330,6 +348,7 @@ export class Database {
         if (from < 28) this.raw.exec(V28_COLUMNS);
         if (from < 29) this.raw.exec(V29_TABLES);
         if (from < 30) this.raw.exec(V30_COLUMNS);
+        if (from < 31) this.raw.exec(V31_TABLES);
         if ((this.raw.prepare('PRAGMA foreign_key_check').all() as unknown[]).length > 0) throw new Error('migration_foreign_key_violation');
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
@@ -440,6 +459,7 @@ export class Database {
       ${V28_COLUMNS}
       ${V29_TABLES}
       ${V30_COLUMNS}
+      ${V31_TABLES}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,
