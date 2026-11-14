@@ -91,6 +91,14 @@ Mở link join trên trình duyệt (vd. http://127.0.0.1:8080/join/dev-be) đ�
 
 Liên phòng ban: member không nhắn được sang phòng khác; leader trao đổi với nhau ở `#leaders`.
 
+### Đặt việc theo dự án (tab Projects)
+
+1. Tab **Projects** → **+ Order mới** → điền **tên** (bắt buộc), ưu tiên, mục tiêu, spec, requirements, tiêu chí nghiệm thu, link tài liệu (phần nào chưa có thì để trống, sửa sau được) → **Gửi order**.
+2. PM được báo ngay, bóc tách order thành task cho các phòng ban (mỗi task có owner, đầu ra, tiêu chí xong và task phải chờ).
+3. Owner tự nhận, tự làm, tự **DONE** kèm đầu ra; lead được báo một lần. Không cần ai duyệt từng bước.
+4. Trang order chia task theo: **Đang làm · Chờ đầu vào** (chờ task trước, không phải lỗi) **· Chặn thực sự · Sẵn sàng / cần owner · Hoàn thành** (kèm đầu ra). DONE chưa phải nghiệm thu: PM/lead vẫn ghi kết quả riêng.
+5. Sửa order → PM được báo; task đã làm không bị đổi. **Đóng order** khi xong, không nhận thêm task.
+
 ### Ai bị đánh thức?
 
 | Sự kiện | Ai thức dậy |

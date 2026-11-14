@@ -129,7 +129,23 @@ export type Task = { id: string; departmentId: string; number: number; assigneeS
   /** When the task first moved to doing. */
   actualStart: number | null;
   /** Archived tasks are hidden from the default lists, board and dispatch; everything else about them is kept. */
-  archivedAt: number | null; archivedBy: string | null };
+  archivedAt: number | null; archivedBy: string | null;
+  /** Project (order) this task delivers part of; null for work outside any project. */
+  projectId: string | null };
+export type ProjectPriority = 'low' | 'normal' | 'high' | 'urgent';
+export type ProjectStatus = 'open' | 'closed';
+/** An order filed by the manager: what is wanted (goal, spec, requirements, acceptance); the PM splits it into tasks. */
+export type Project = { id: string; number: number; title: string; goal: string; spec: string; requirements: string; acceptance: string; priority: ProjectPriority; links: string[]; status: ProjectStatus;
+  createdByKind: 'seat' | 'manager'; createdById: string; createdAt: number; updatedAt: number; revision: number };
+export type ProjectChange = { projectId: string; revision: number; actorKind: string; actorId: string; field: string; before: unknown; after: unknown; createdAt: number };
+/**
+ * Where one task of a project stands, from its own data: done, doing, waiting (an input task is not finished yet),
+ * blocked (a real blocker, or the owner declared it blocked) or todo (can start, or needs its owner/estimate).
+ */
+export type ProjectTaskState = 'done' | 'doing' | 'waiting' | 'blocked' | 'todo';
+export type ProjectTask = { task: Task; state: ProjectTaskState; reasons: string[]; output: string | null };
+export type ProjectSummary = Project & { counts: Record<ProjectTaskState, number> };
+export type ProjectDetail = { project: Project; tasks: ProjectTask[]; counts: Record<ProjectTaskState, number>; changes: ProjectChange[] };
 /** Dry run (or result) of a bulk archive / restore: the exact tasks it applies to, with the revision each was checked at. */
 export type TaskArchivePlan = { action: 'archive' | 'restore'; applied: boolean; eligible: Array<{ id: string; revision: number; status: TaskStatus }>; refused: Array<{ id: string; reason: string }> };
 /** Realtime collaboration notifications; state lives in SQLite, clients refetch over REST after reconnect. */

@@ -13,10 +13,10 @@ export const MAX_ARCHIVE_BATCH = 1000;
 type TaskPlan = { estimateMinutes?: number | null | undefined; dependsOn?: string[] | undefined };
 /** A field left out keeps its value; assigneeSeatId null unassigns; dependsOn [] clears (leaders only). */
 export type TaskPatch = { status?: TaskStatus | undefined; note?: string | undefined; assigneeSeatId?: string | null | undefined; title?: string | undefined; body?: string | undefined; kind?: TaskKind | undefined;
-  expectedRevision?: number | undefined; reason?: string | undefined; handoffNote?: string | undefined; passRequired?: string[] | undefined; result?: TaskResult | undefined } & TaskPlan;
-type AuditField = 'title' | 'body' | 'assigneeSeatId' | 'estimateMinutes' | 'dependsOn' | 'passRequired' | 'kind' | 'status' | 'result';
+  expectedRevision?: number | undefined; reason?: string | undefined; handoffNote?: string | undefined; passRequired?: string[] | undefined; result?: TaskResult | undefined; projectId?: string | null | undefined } & TaskPlan;
+type AuditField = 'title' | 'body' | 'assigneeSeatId' | 'estimateMinutes' | 'dependsOn' | 'passRequired' | 'kind' | 'status' | 'result' | 'projectId';
 type TaskRow = Omit<Task, 'dependsOn' | 'passRequired'> & { dependsOn: string; passRequired: string };
-const TASK_COLUMNS = 'id,department_id AS departmentId,number,assignee_seat_id AS assigneeSeatId,requester_seat_id AS requesterSeatId,created_by_kind AS createdByKind,created_by_id AS createdById,title,body,status,created_at AS createdAt,updated_at AS updatedAt,estimate_minutes AS estimateMinutes,depends_on AS dependsOn,parent_id AS parentId,step,thread_seq AS threadSeq,revision,kind,pass_required AS passRequired,result,result_by AS resultBy,result_at AS resultAt,actual_start AS actualStart,archived_at AS archivedAt,archived_by AS archivedBy';
+const TASK_COLUMNS = 'id,department_id AS departmentId,number,assignee_seat_id AS assigneeSeatId,requester_seat_id AS requesterSeatId,created_by_kind AS createdByKind,created_by_id AS createdById,title,body,status,created_at AS createdAt,updated_at AS updatedAt,estimate_minutes AS estimateMinutes,depends_on AS dependsOn,parent_id AS parentId,step,thread_seq AS threadSeq,revision,kind,pass_required AS passRequired,result,result_by AS resultBy,result_at AS resultAt,actual_start AS actualStart,archived_at AS archivedAt,archived_by AS archivedBy,project_id AS projectId';
 const toTask = (row: TaskRow): Task => ({ ...row, dependsOn: JSON.parse(row.dependsOn) as string[], passRequired: JSON.parse(row.passRequired) as string[] });
 const MAX_ESTIMATE = 7 * 24 * 60; const MAX_DEPENDENCIES = 20;
 /** Agents must write what the task needs (goal, inputs, expected output, acceptance) so the manager can follow it. */
@@ -147,7 +147,7 @@ export class TaskService {
     return this.db.raw.prepare('SELECT task_id AS taskId,actor_kind AS actorKind,actor_id AS actorId,from_status AS fromStatus,to_status AS toStatus,note,created_at AS createdAt FROM task_events WHERE task_id=? ORDER BY id').all(taskId) as TaskEvent[];
   }
 
-  create(actor: Actor, input: { departmentId?: string | undefined; title: string; body: string; assigneeSeatId: string; requestedBy?: string | undefined; parentId?: string | undefined; parallel?: boolean | undefined; kind?: TaskKind | undefined; passRequired?: string[] | undefined } & TaskPlan): Task {
+  create(actor: Actor, input: { departmentId?: string | undefined; title: string; body: string; assigneeSeatId: string; requestedBy?: string | undefined; parentId?: string | undefined; parallel?: boolean | undefined; kind?: TaskKind | undefined; passRequired?: string[] | undefined; projectId?: string | undefined } & TaskPlan): Task {
     if (input.title.trim().length === 0 || input.title.length > 200 || input.body.length > 8000) throw invalid('invalid_task');
     if (input.parentId !== undefined) return this.createStep(actor, { ...input, parentId: input.parentId });
     const assignee = this.org.seat(input.assigneeSeatId);
@@ -157,6 +157,13 @@ export class TaskService {
       if (creator.role !== 'leader' && !this.isDeputy(creator)) throw forbidden('leader_only');
       departmentId = creator.departmentId;
     }
+    // Sending the same split again must not double the work: the same title for the same owner in a project is that
+    // task (even if the project was closed meanwhile, the retry gets what it already created).
+    if (input.projectId !== undefined) {
+      const same = this.projectTwin(input.projectId, input.title, input.assigneeSeatId);
+      if (same && this.canRead(actor, same)) return same;
+    }
+    const projectId = input.projectId === undefined ? null : this.checkProject(input.projectId);
     if (actor.kind === 'seat' && input.body.trim().length < MIN_REQUIREMENT) throw invalid('requirement_required: write the requirement in body (goal, inputs, expected output, acceptance criteria)');
     if (assignee.departmentId !== departmentId) throw forbidden('assignee_outside_department');
     // A cross-department request is tracked by naming the asking leader; the result is reported back to them.
@@ -169,12 +176,12 @@ export class TaskService {
     const task = this.db.transaction(() => {
       const number = (this.db.raw.prepare('SELECT COALESCE(MAX(number),0)+1 AS next FROM tasks WHERE department_id=?').get(departmentId) as { next: number }).next;
       const id = `t-${departmentId}-${number}`;
-      this.db.raw.prepare('INSERT INTO tasks(id,department_id,number,assignee_seat_id,requester_seat_id,created_by_kind,created_by_id,title,body,status,created_at,updated_at,estimate_minutes,depends_on,kind,pass_required) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-        .run(id, departmentId, number, assignee.id, requester?.id ?? null, actor.kind, actorId(actor), input.title, input.body, 'todo', timestamp, timestamp, estimate, JSON.stringify(dependsOn), input.kind ?? null, JSON.stringify(passRequired));
+      this.db.raw.prepare('INSERT INTO tasks(id,department_id,number,assignee_seat_id,requester_seat_id,created_by_kind,created_by_id,title,body,status,created_at,updated_at,estimate_minutes,depends_on,kind,pass_required,project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(id, departmentId, number, assignee.id, requester?.id ?? null, actor.kind, actorId(actor), input.title, input.body, 'todo', timestamp, timestamp, estimate, JSON.stringify(dependsOn), input.kind ?? null, JSON.stringify(passRequired), projectId);
       this.record(id, actor, null, 'todo', '');
       return this.get(id);
     });
-    this.announce(task, `Task ${task.id} "${task.title}" assigned to @${assignee.id} by ${actorLabel(actor)}.${requester ? ` Requested by @${requester.id}.` : ''}${this.planLine(task)}${task.body ? ` Details: ${task.body}` : ''}`, [assignee.id]);
+    this.announce(task, `Task ${task.id} "${task.title}" assigned to @${assignee.id} by ${actorLabel(actor)}.${projectId ? ` Project ${projectId} (read its spec with agent_office_project).` : ''}${requester ? ` Requested by @${requester.id}.` : ''}${this.planLine(task)}${task.body ? ` Details: ${task.body}` : ''}`, [assignee.id]);
     if (requester) {
       const accepted = this.messages.postSystem(LEADERS_CHANNEL_ID, `Request from @${requester.id} accepted as task ${task.id} "${task.title}" (assignee @${assignee.id}). You will be told in this thread when it is blocked or done.`, [requester.id]);
       this.db.raw.prepare('UPDATE tasks SET request_thread_seq=? WHERE id=?').run(accepted.seq, task.id);
@@ -196,14 +203,18 @@ export class TaskService {
     if (actor.kind === 'seat' && !this.isCoordinator(actor) && actor.seatId !== parent.assigneeSeatId) throw forbidden('only_task_lead_adds_steps');
     if (actor.kind === 'seat' && input.body.trim().length < MIN_REQUIREMENT) throw invalid('requirement_required: write what this step does and the expected output in body');
     const assignee = this.org.seat(input.assigneeSeatId); const departmentId = assignee.departmentId;
+    // A resent step (same title, same assignee, same parent) is the step already filed, not a second one.
+    const key = (title: string): string => title.trim().replace(/\s+/g, ' ').toLowerCase();
+    const twin = this.steps(parent.id).find(step => step.assigneeSeatId === assignee.id && step.archivedAt === null && key(step.title) === key(input.title));
+    if (twin) return twin;
     const previous = this.steps(parent.id).at(-1);
     const dependsOn = this.checkDependencies(null, [...(input.dependsOn ?? []), ...(previous && !input.parallel ? [previous.id] : [])]);
     const estimate = this.checkEstimate(input.estimateMinutes); const timestamp = Date.now();
     const task = this.db.transaction(() => {
       const number = (this.db.raw.prepare('SELECT COALESCE(MAX(number),0)+1 AS next FROM tasks WHERE department_id=?').get(departmentId) as { next: number }).next;
       const id = `t-${departmentId}-${number}`; const step = (previous?.step ?? 0) + 1;
-      this.db.raw.prepare('INSERT INTO tasks(id,department_id,number,assignee_seat_id,requester_seat_id,created_by_kind,created_by_id,title,body,status,created_at,updated_at,estimate_minutes,depends_on,parent_id,step,kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-        .run(id, departmentId, number, assignee.id, null, actor.kind, actorId(actor), input.title, input.body, 'todo', timestamp, timestamp, estimate, JSON.stringify(dependsOn), parent.id, step, input.kind ?? null);
+      this.db.raw.prepare('INSERT INTO tasks(id,department_id,number,assignee_seat_id,requester_seat_id,created_by_kind,created_by_id,title,body,status,created_at,updated_at,estimate_minutes,depends_on,parent_id,step,kind,project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(id, departmentId, number, assignee.id, null, actor.kind, actorId(actor), input.title, input.body, 'todo', timestamp, timestamp, estimate, JSON.stringify(dependsOn), parent.id, step, input.kind ?? null, parent.projectId);
       this.record(id, actor, null, 'todo', '');
       return this.get(id);
     });
@@ -215,6 +226,32 @@ export class TaskService {
     this.emit({ type: 'collab', kind: 'task', task: this.get(parent.id) });
     this.onChanged();
     return this.get(task.id);
+  }
+
+  /** A project tasks can be filed under: it must exist and still be open. */
+  private checkProject(projectId: string): string {
+    const row = this.db.raw.prepare('SELECT status FROM projects WHERE id=?').get(projectId) as { status: string } | undefined;
+    if (!row) throw notFound('project');
+    if (row.status !== 'open') throw conflict('project_closed');
+    return projectId;
+  }
+
+  /** The live task of a project with this title (case and spacing aside) for this owner, if one exists. */
+  private projectTwin(projectId: string, title: string, assigneeSeatId: string): Task | null {
+    const key = title.trim().replace(/\s+/g, ' ').toLowerCase();
+    const rows = (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE project_id=? AND assignee_seat_id=? AND archived_at IS NULL`).all(projectId, assigneeSeatId) as TaskRow[]).map(toTask);
+    return rows.find(task => task.title.trim().replace(/\s+/g, ' ').toLowerCase() === key) ?? null;
+  }
+
+  /** Every task filed under a project, archived ones left out. */
+  ofProject(projectId: string): Task[] {
+    return (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE project_id=? AND archived_at IS NULL ORDER BY created_at,id`).all(projectId) as TaskRow[]).map(toTask);
+  }
+
+  /** The note written when the task was last marked done: its delivered output. */
+  doneNote(taskId: string): string | null {
+    const row = this.db.raw.prepare("SELECT note FROM task_events WHERE task_id=? AND to_status='done' ORDER BY id DESC LIMIT 1").get(taskId) as { note: string } | undefined;
+    return row?.note ? row.note : null;
   }
 
   /** Steps of a parent task in order. */
@@ -253,7 +290,7 @@ export class TaskService {
     const authority = this.authority(actor, task); const isLeader = authority === 'leader';
     if (!authority) throw forbidden('forbidden_task_change');
     // Order of work across teams and what the task is are the leaders' call; the assignee owns status, estimate and result.
-    if (!isLeader && (['assigneeSeatId', 'dependsOn', 'passRequired', 'title', 'body', 'kind'] as const).some(field => patch[field] !== undefined)) throw forbidden('leader_only');
+    if (!isLeader && (['assigneeSeatId', 'dependsOn', 'passRequired', 'title', 'body', 'kind', 'projectId'] as const).some(field => patch[field] !== undefined)) throw forbidden('leader_only');
     if (task.status === 'done' && patch.status && patch.status !== 'done' && !isLeader) throw forbidden('reopen_requires_leader');
     const title = patch.title !== undefined ? patch.title.trim() : task.title; const body = patch.body ?? task.body;
     if (title.length === 0 || title.length > 200 || body.length > 8000) throw invalid('invalid_task');
@@ -271,6 +308,8 @@ export class TaskService {
       if (patch.status === undefined) status = 'todo';
     }
     const kind = patch.kind ?? task.kind;
+    if (patch.projectId !== undefined && task.parentId !== null && patch.projectId !== task.projectId) throw invalid('step_follows_parent_project: set projectId on the parent task');
+    const projectId = patch.projectId === undefined ? task.projectId : patch.projectId === null ? null : patch.projectId === task.projectId ? task.projectId : this.checkProject(patch.projectId);
     const estimate = patch.estimateMinutes !== undefined ? this.checkEstimate(patch.estimateMinutes) : task.estimateMinutes;
     const dependsOn = patch.dependsOn !== undefined ? this.checkDependencies(taskId, patch.dependsOn) : task.dependsOn;
     // passRequired names the dependencies that need a PASS; dropping a dependency drops its condition too.
@@ -294,20 +333,27 @@ export class TaskService {
       catch (error) { overrideLine = ` Started by override of ${actorLabel(actor)} without the readiness check (${error instanceof Error ? error.message : 'not ready'}).`; }
     }
     else if (starting) this.checkStart(actor, candidate);
-    const after: Record<AuditField, unknown> = { title, body, assigneeSeatId: assigneeId, estimateMinutes: estimate, dependsOn, passRequired, kind, status, result };
+    const after: Record<AuditField, unknown> = { title, body, assigneeSeatId: assigneeId, estimateMinutes: estimate, dependsOn, passRequired, kind, status, result, projectId };
     const changed = (Object.keys(after) as AuditField[]).filter(field => JSON.stringify(after[field]) !== JSON.stringify(task[field]));
     const replanned = changed.includes('estimateMinutes') || changed.includes('dependsOn');
     const updated = this.db.transaction(() => {
       const now = Date.now(); const resultChanged = changed.includes('result');
-      const written = this.db.raw.prepare('UPDATE tasks SET title=?,body=?,status=?,assignee_seat_id=?,estimate_minutes=?,depends_on=?,pass_required=?,kind=?,result=?,result_by=?,result_at=?,actual_start=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?')
-        .run(title, body, status, assigneeId, estimate, JSON.stringify(dependsOn), JSON.stringify(passRequired), kind, result, resultChanged ? actorId(actor) : task.resultBy, resultChanged ? now : task.resultAt, status === 'doing' && task.actualStart === null ? now : task.actualStart, now, taskId, task.revision);
+      const written = this.db.raw.prepare('UPDATE tasks SET title=?,body=?,status=?,assignee_seat_id=?,estimate_minutes=?,depends_on=?,pass_required=?,kind=?,result=?,project_id=?,result_by=?,result_at=?,actual_start=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?')
+        .run(title, body, status, assigneeId, estimate, JSON.stringify(dependsOn), JSON.stringify(passRequired), kind, result, projectId, resultChanged ? actorId(actor) : task.resultBy, resultChanged ? now : task.resultAt, status === 'doing' && task.actualStart === null ? now : task.actualStart, now, taskId, task.revision);
       if (Number(written.changes) === 0) throw stale(this.get(taskId));
       this.record(taskId, actor, task.status, status, handoff && reassigned ? `${note}${note ? ' · ' : ''}handoff: ${handoff}` : note);
       const audit = this.db.raw.prepare('INSERT INTO task_changes(task_id,revision,actor_kind,actor_id,source,field,before_json,after_json,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)');
       for (const field of changed) audit.run(taskId, task.revision + 1, actor.kind, actorId(actor), source, field, JSON.stringify(task[field]), JSON.stringify(after[field]), reason, Date.now());
+      // Steps belong to their parent's project: they move with it (audited on each step).
+      if (changed.includes('projectId')) {
+        for (const step of this.steps(taskId).filter(candidate => candidate.projectId !== projectId)) {
+          this.db.raw.prepare('UPDATE tasks SET project_id=?,revision=revision+1,updated_at=? WHERE id=?').run(projectId, now, step.id);
+          audit.run(step.id, step.revision + 1, actor.kind, actorId(actor), source, 'projectId', JSON.stringify(step.projectId), JSON.stringify(projectId), `with parent ${taskId}`, now);
+        }
+      }
       return this.get(taskId);
     });
-    const edited = changed.filter(field => field === 'title' || field === 'body' || field === 'kind' || field === 'passRequired' || field === 'result');
+    const edited = changed.filter(field => field === 'title' || field === 'body' || field === 'kind' || field === 'passRequired' || field === 'result' || field === 'projectId');
     const mentions = new Set<string>();
     // The new owner is told once; the previous owner is told the work left them.
     if (reassigned && assigneeId) mentions.add(assigneeId);
@@ -318,7 +364,7 @@ export class TaskService {
     const change = status !== task.status ? `${task.status} → ${status}` : 'updated';
     const owner = reassigned ? (assigneeId ? ` Reassigned to @${assigneeId}${task.assigneeSeatId ? ` (was @${task.assigneeSeatId})` : ''}.` : ` Unassigned (was @${task.assigneeSeatId}).`) : '';
     const handoffLine = reassigned && handoff ? ` Handoff: ${handoff}` : '';
-    const editLine = edited.length ? ` Edited: ${edited.map(field => field === 'body' ? 'requirement' : field === 'kind' ? `kind=${kind}` : field === 'result' ? `result=${result}` : field === 'passRequired' ? `needs pass from ${passRequired.join(', ') || 'none'}` : field).join(', ')}.` : '';
+    const editLine = edited.length ? ` Edited: ${edited.map(field => field === 'body' ? 'requirement' : field === 'kind' ? `kind=${kind}` : field === 'result' ? `result=${result}` : field === 'passRequired' ? `needs pass from ${passRequired.join(', ') || 'none'}` : field === 'projectId' ? `project=${projectId ?? 'none'}` : field).join(', ')}.` : '';
     const name = title !== task.title ? `"${task.title}" → "${title}"` : `"${task.title}"`;
     this.announce(updated, `Task ${task.id} ${name} ${change} by ${actorLabel(actor)}.${owner}${handoffLine}${editLine}${replanned ? this.planLine(updated) : ''}${overrideLine}${note ? ` Note: ${note}` : ''}${reason ? ` Reason: ${reason}` : ''}`, [...mentions]);
     if ((status === 'done' && task.status !== 'done') || (status === 'done' && result === 'pass' && task.result !== 'pass')) this.releaseDependents(updated);

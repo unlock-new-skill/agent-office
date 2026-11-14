@@ -164,3 +164,12 @@ On Stop the hook reads the transcript tail (`transcript_path`) and sends the mod
 ## Frozen
 
 SLO/benchmark work, heartbeat wakes, spawning seats on machines that have no runner.json entry for them.
+
+## Projects / orders (schema v29)
+
+`projects` + `project_changes`, `tasks.project_id`; `ProjectService`, `GET/POST /v1/projects`, `GET/PATCH /v1/projects/:id`, MCP `agent_office_project`, web tab **Projects**.
+- **Flow:** the manager files an order (only the title is required; goal, spec, requirements, acceptance, priority, links) → the coordinators (PM) get one line in their department channel → the PM files ordinary tasks with `projectId` (or links existing ones with `update_task projectId`) → owners start, finish with their output and the lead is told once, as for any task. No new approval, form or role: the manager and coordinators file and edit orders; every seat reads them.
+- **No duplicates:** an identical order sent again returns the first one (same title with other content → 409 `project_exists`); a task with the same title for the same assignee in the project, or a step with the same title and assignee under the same parent, is returned instead of a copy.
+- **Project page:** each visible task (filtered by `TaskService.canRead`) is `done` (with the done note as output; result untouched), `doing`, `waiting` (an input task or dependency blocker not finished), `blocked` (a non-dependency blocker, or declared blocked with no waiting reason) or `todo`. Derived from one readiness evaluation per request; it never changes a task. Steps follow their parent's project.
+- **Edits:** field edits are revision-checked and audited in `project_changes`; the coordinators are told once. A spec change never edits, reopens or reruns tasks; `status: closed` refuses new tasks under the order, existing ones keep their state.
+

@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 28;
+export const SCHEMA_VERSION = 29;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -158,6 +158,25 @@ ALTER TABLE tasks ADD COLUMN archived_by TEXT;
 CREATE INDEX tasks_archived ON tasks(archived_at);`;
 /** v28: a blocker scoped to one step of its tasks leaves the rest of the work free to start and continue. */
 const V28_COLUMNS = `ALTER TABLE blockers ADD COLUMN scope TEXT NOT NULL DEFAULT 'task' CHECK(scope IN ('task','step'));`;
+/**
+ * v29: projects (orders). The manager files an order with its spec; the PM splits it into tasks linked by
+ * tasks.project_id. Every field edit of a project is audited in project_changes; tasks keep their own audit.
+ */
+const V29_TABLES = `CREATE TABLE projects(
+  id TEXT PRIMARY KEY, number INTEGER NOT NULL UNIQUE, title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 200),
+  goal TEXT NOT NULL DEFAULT '' CHECK(length(goal) <= 4000), spec TEXT NOT NULL DEFAULT '' CHECK(length(spec) <= 20000),
+  requirements TEXT NOT NULL DEFAULT '' CHECK(length(requirements) <= 20000), acceptance TEXT NOT NULL DEFAULT '' CHECK(length(acceptance) <= 8000),
+  priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('low','normal','high','urgent')), links TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','closed')), created_by_kind TEXT NOT NULL, created_by_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 0
+) STRICT;
+CREATE TABLE project_changes(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, revision INTEGER NOT NULL,
+  actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, field TEXT NOT NULL, before_json TEXT, after_json TEXT, created_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX project_changes_project ON project_changes(project_id,id);
+ALTER TABLE tasks ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+CREATE INDEX tasks_project ON tasks(project_id);`;
 const V26_TABLES = `CREATE TABLE approval_requests(
   id TEXT PRIMARY KEY, requester_seat_id TEXT NOT NULL, task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   channel_id TEXT NOT NULL, thread_seq INTEGER, action TEXT NOT NULL CHECK(length(action) BETWEEN 1 AND 200),
@@ -307,6 +326,7 @@ export class Database {
         if (from < 26) this.raw.exec(V26_TABLES);
         if (from < 27) this.raw.exec(V27_COLUMNS);
         if (from < 28) this.raw.exec(V28_COLUMNS);
+        if (from < 29) this.raw.exec(V29_TABLES);
         if ((this.raw.prepare('PRAGMA foreign_key_check').all() as unknown[]).length > 0) throw new Error('migration_foreign_key_violation');
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
@@ -415,6 +435,7 @@ export class Database {
       ${V26_TABLES}
       ${V27_COLUMNS}
       ${V28_COLUMNS}
+      ${V29_TABLES}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

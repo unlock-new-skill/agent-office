@@ -12,11 +12,12 @@ const ChatView = lazy(() => import('./views/chat-view.js').then(module => ({ def
 const MapView = lazy(() => import('./views/map-view.js').then(module => ({ default: module.MapView })));
 const OrgView = lazy(() => import('./views/org-view.js').then(module => ({ default: module.OrgView })));
 const MachinesView = lazy(() => import('./views/machines-view.js').then(module => ({ default: module.MachinesView })));
+const ProjectsView = lazy(() => import('./views/projects-view.js').then(module => ({ default: module.ProjectsView })));
 const RequestsView = lazy(() => import('./views/requests-view.js').then(module => ({ default: module.RequestsView })));
 const LandingView = lazy(() => import('./views/landing-view.js').then(module => ({ default: module.LandingView })));
 const PublicMapView = lazy(() => import('./views/public-map-view.js').then(module => ({ default: module.PublicMapView })));
 const SetupView = lazy(() => import('./views/setup-view.js').then(module => ({ default: module.SetupView })));
-const TABS: Array<{ view: View; label: string }> = [{ view: 'chat', label: 'Chat' }, { view: 'map', label: 'Map' }, { view: 'org', label: 'Org' }, { view: 'machines', label: 'Machines' }, { view: 'requests', label: 'Tasks' }];
+const TABS: Array<{ view: View; label: string }> = [{ view: 'chat', label: 'Chat' }, { view: 'map', label: 'Map' }, { view: 'org', label: 'Org' }, { view: 'machines', label: 'Machines' }, { view: 'requests', label: 'Tasks' }, { view: 'projects', label: 'Projects' }];
 const DEFAULT_CHANNEL = 'leaders';
 /** Last opened chat room, per browser, so /chat and the Chat tab return to it. */
 const LAST_CHANNEL_KEY = 'agent-office.last-channel';
@@ -84,6 +85,7 @@ function Workspace({ csrfToken, onSignedOut }: { csrfToken: string; onSignedOut:
         {route.view === 'org' && <OrgView state={office.state} api={api} notify={notify} onDismiss={office.dismissAgent} />}
         {route.view === 'machines' && <MachinesView state={office.state} api={api} notify={notify} />}
         {route.view === 'requests' && <RequestsView state={office.state} api={api} notify={notify} />}
+        {route.view === 'projects' && <ProjectsView state={office.state} api={api} notify={notify} />}
         {route.view === 'setup' && <SetupView state={office.state} api={api} notify={notify} />}
       </Suspense>
       <MusicDock music={music} />

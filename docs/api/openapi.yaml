@@ -226,6 +226,24 @@ paths:
       description: 'Service tokens (and the manager with limit/cursor) get a page over a stable snapshot ordered by createdAt, id: tasks created after snapshotAt are left out, total is fixed, changedSinceSnapshot counts tasks updated after it (fetch again for one consistent view). Each task carries activeMs (time in doing summed over runs) and runs. Seats without limit get {tasks} (max 500, their visibility).'
       parameters: [{in: query, name: departmentId, schema: {type: string}}, {in: query, name: status, schema: {enum: [todo, doing, blocked, done]}}, {in: query, name: assignee, schema: {type: string}}, {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 200, default: 100}}, {in: query, name: cursor, schema: {type: string}}, {in: query, name: includeArchived, schema: {enum: ['true', 'false', '1', '0']}, description: 'Archived tasks are left out unless true.'}]
       responses: {'200': {description: '{tasks, total, snapshotAt, nextCursor, changedSinceSnapshot} (paged) or {tasks}'}, '400': {description: 'invalid_cursor, invalid_limit'}, '403': {description: 'forbidden_task_read, outside_token_scope'}}
+  /v1/projects:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: 'Orders, open first, each with counts {done, doing, waiting, blocked, todo} over the tasks the caller may see.'
+      responses: {'200': {description: '{projects: ProjectSummary[]}'}}
+    post:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: 'File an order (manager or coordinator). Body {title, goal?, spec?, requirements?, acceptance?, priority? low|normal|high|urgent, links?: string[]}. The coordinators are told once. An identical open order is returned instead of a copy.'
+      responses: {'201': {description: Project}, '400': {description: invalid_project}, '403': {description: project_editor_only}, '409': {description: 'project_exists (+ project): same title, different content'}}
+  /v1/projects/{id}:
+    get:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: 'ProjectDetail: the order, its visible tasks with state (done|doing|waiting|blocked|todo), readiness reasons and done output, counts, and the edit history.'
+      responses: {'200': {description: ProjectDetail}, '404': {description: not_found}}
+    patch:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: 'Edit fields or status open|closed (manager or coordinator), with expectedRevision. Audited per field; tasks are never changed.'
+      responses: {'200': {description: Project}, '403': {description: project_editor_only}, '409': {description: 'stale_revision, project_exists'}}
   /v1/tasks/archive:
     post:
       security: [{cookieAuth: []}, {bearerAuth: []}]

@@ -9,6 +9,7 @@ import { BlockerService } from './blocker-service.js';
 import { DispatchService } from './dispatch-service.js';
 import { HandoffService } from './handoff-service.js';
 import { PermissionService } from './permission-service.js';
+import { ProjectService } from './project-service.js';
 import { RunnerService } from './runner-service.js';
 import { MessageService, type ChannelSummary } from './message-service.js';
 import { OrgService } from './org-service.js';
@@ -23,7 +24,7 @@ export type { AfterTask };
 const AFTER_TASK_KEY = 'after_task.default';
 /** handoff = the seat's raw note; handoffBrief = note + open tasks + unread, ready to inject into a session's context. */
 export type WhoAmI = { agentId: string; seat: Seat | null; department: Department | null; channels: ChannelSummary[]; handoff: SeatHandoff | null; handoffBrief: string | null };
-export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; blockers: BlockerService; dispatch: DispatchService; alerts: AlertService; serviceTokens: ServiceTokenService; progress: ProgressService; approvals: ApprovalService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; trackWork: (agentId: string, kind: string, ts: string) => void; onTurnStop: (agentId: string) => void;
+export type Office = { org: OrgService; messages: MessageService; wake: WakeService; tasks: TaskService; blockers: BlockerService; dispatch: DispatchService; alerts: AlertService; serviceTokens: ServiceTokenService; progress: ProgressService; projects: ProjectService; approvals: ApprovalService; handoffs: HandoffService; permissions: PermissionService; runners: RunnerService; whoami: (agentId: string, options?: { afterCompaction?: boolean }) => WhoAmI; touchAgent: (agentId: string) => void; trackWork: (agentId: string, kind: string, ts: string) => void; onTurnStop: (agentId: string) => void;
   /** Office-wide default for what members do after a task (manager setting, else the env default). */
   afterTaskDefault: () => AfterTask; setAfterTaskDefault: (mode: AfterTask | null) => AfterTask; close: () => void };
 
@@ -67,6 +68,7 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
   const alerts = new AlertService(db, org, messages, blockers, dispatch, tasks);
   const serviceTokens = new ServiceTokenService(db, org);
   const progress = new ProgressService(db, org, tasks, dispatch, options.emit);
+  const projects = new ProjectService(db, org, messages, tasks, dispatch);
   const approvals = new ApprovalService(db, org, tasks, messages, options.emit, () => options.telegram ?? false);
   const approvalTimer = setInterval(() => { try { approvals.expireDue(); } catch (error) { logger.error(error); } }, 60_000); approvalTimer.unref();
   // Every 5 minutes: grants and windows that ended reopen their blocker, then new exceptions go out in one digest.
@@ -116,5 +118,5 @@ export const createOffice = (db: Database, options: OfficeOptions): Office => {
     try { runners.enqueue(seat.id, mode === 'clear' ? 'fresh' : 'prompt', mode === 'clear' ? null : focus, `auto: ${done} done`); } catch { /* not run by an online runner: keep the session */ }
   };
   const touchAgent = (agentId: string): void => { db.raw.prepare('UPDATE agents SET last_contact_at=? WHERE id=?').run(Date.now(), agentId); };
-  return { org, messages, wake: wakeService, tasks, blockers, dispatch, alerts, serviceTokens, progress, approvals, handoffs, permissions, runners, whoami, touchAgent, trackWork, onTurnStop, afterTaskDefault, setAfterTaskDefault, close: () => { clearInterval(sweep); clearInterval(approvalTimer); clearInterval(alertTimer); if (statusTimer) clearInterval(statusTimer); wakeService.close(); permissions.close(); runners.close(); } };
+  return { org, messages, wake: wakeService, tasks, blockers, dispatch, alerts, serviceTokens, progress, projects, approvals, handoffs, permissions, runners, whoami, touchAgent, trackWork, onTurnStop, afterTaskDefault, setAfterTaskDefault, close: () => { clearInterval(sweep); clearInterval(approvalTimer); clearInterval(alertTimer); if (statusTimer) clearInterval(statusTimer); wakeService.close(); permissions.close(); runners.close(); } };
 };

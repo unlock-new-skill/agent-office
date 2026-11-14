@@ -93,10 +93,11 @@ While the limit is hit the seat keeps listening and picks its mentions up as soo
 |---|---|---|
 | List | \`agent_office_list_tasks { status?, mine?, departmentId?, includeArchived? }\` | anyone (own department); coordinators (PM) see all; archived tasks only with includeArchived |
 | Get | \`agent_office_get_task { taskId }\` | whoever sees the task: task + status history + field audit |
-| Create | \`agent_office_create_task { title, body?, assigneeSeatId, requestedBy?, estimateMinutes?, dependsOn?, kind? }\` | leaders (and the deputy), for seats in their own department; the PM in any department |
+| Create | \`agent_office_create_task { title, body?, assigneeSeatId, requestedBy?, estimateMinutes?, dependsOn?, kind?, projectId? }\` | leaders (and the deputy), for seats in their own department; the PM in any department |
 | Update | \`agent_office_update_task { taskId, expectedRevision?, status?, note?, estimateMinutes?, assigneeSeatId?, title?, body?, kind?, dependsOn?, reason?, handoffNote? }\` | the assignee: status, note, estimate; the leader, deputy, parent lead and PM: everything |
 | Start | \`agent_office_start_task { taskId, estimateMinutes?, generation? }\` | the assignee: take the task and start it in one call (estimate included) |
 | Archive | \`agent_office_archive_tasks { action: archive/restore, taskIds, confirm?, revisions?, reason? }\` | manager, PM; a leader or deputy in their own department. Dry run first, then confirm with \`revisions\` = the eligible list of the dry run as-is. Nothing is deleted; an archived task is read-only until restored |
+| Projects | \`agent_office_project { action: list/get/create/update, projectId?, title?, goal?, spec?, requirements?, acceptance?, priority?, links?, status? }\` | everyone reads orders and their spec; the manager and the PM file and edit them. The PM splits an order into tasks with \`projectId\`; owners work, finish with their output and hand over to their lead as usual |
 | Board | \`agent_office_board { departmentId?, assignee?, resolver? }\` | anyone (own department); coordinators see all |
 | Blockers | \`agent_office_blocker { action: open/update/link/unlink/resolve/reopen/list, … }\` | open/link: who may change the tasks; resolve/reopen: resolver, leaders of the tasks, PM, manager |
 | Add step | \`agent_office_create_task { parentId, title, body, assigneeSeatId, parallel? }\` | the task's lead (its assignee) and the PM; assignee in any department |

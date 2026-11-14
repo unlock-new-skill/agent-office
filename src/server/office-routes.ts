@@ -205,9 +205,18 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
   const TaskIdList = z.array(z.string().min(1).max(80)).max(20);
   const sourceOf = (actor: Actor): 'ui' | 'mcp' => actor.kind === 'manager' ? 'ui' : 'mcp';
   app.post('/v1/tasks', c => withActor(c, async ({ actor }) => {
-    const input = z.object({ departmentId: z.string().max(64).optional(), title: z.string().max(200), body: z.string().max(8000).default(''), assigneeSeatId: z.string().min(1).max(64), requestedBy: z.string().min(1).max(64).optional(), parentId: z.string().min(1).max(80).optional(), parallel: z.boolean().optional(), kind: TaskKindSchema.optional(), passRequired: TaskIdList.optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
+    const input = z.object({ departmentId: z.string().max(64).optional(), title: z.string().max(200), body: z.string().max(8000).default(''), assigneeSeatId: z.string().min(1).max(64), requestedBy: z.string().min(1).max(64).optional(), parentId: z.string().min(1).max(80).optional(), parallel: z.boolean().optional(), kind: TaskKindSchema.optional(), passRequired: TaskIdList.optional(), projectId: z.string().min(1).max(40).optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
     return c.json(office.tasks.create(actor, input), 201);
   }));
+  /**
+   * Projects (orders): the manager or a coordinator files and edits them; every seat reads them. Tasks join a project
+   * through projectId on task create/update; the detail shows each visible task's state, owner and delivered output.
+   */
+  const ProjectFields = { goal: z.string().max(4000).optional(), spec: z.string().max(20_000).optional(), requirements: z.string().max(20_000).optional(), acceptance: z.string().max(8000).optional(), priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(), links: z.array(z.string().max(500)).max(20).optional() };
+  app.get('/v1/projects', c => withActor(c, ({ actor }) => c.json({ projects: office.projects.list(actor) })));
+  app.get('/v1/projects/:id', c => withActor(c, ({ actor }) => c.json(office.projects.detail(actor, c.req.param('id')))));
+  app.post('/v1/projects', c => withActor(c, async ({ actor }) => c.json(office.projects.create(actor, z.object({ title: z.string().max(200), ...ProjectFields }).strict().parse(await c.req.json())), 201)));
+  app.patch('/v1/projects/:id', c => withActor(c, async ({ actor }) => c.json(office.projects.update(actor, c.req.param('id'), z.object({ title: z.string().max(200).optional(), status: z.enum(['open', 'closed']).optional(), expectedRevision: z.number().int().min(0).optional(), ...ProjectFields }).strict().parse(await c.req.json())))));
   /**
    * Bulk archive / restore of exact task ids (manager, coordinators, a leader or deputy in their department). Without
    * confirm: a dry run listing eligible ids with their revision and refused ids with the reason. With confirm: applied
@@ -339,7 +348,7 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
   app.post('/v1/blockers/:id/reopen', c => withActor(c, async ({ actor }) => c.json(office.blockers.reopen(actor, c.req.param('id'), z.object({ reason: z.string().max(1000) }).strict().parse(await c.req.json()).reason))));
   app.post('/v1/tasks/:id/thread', c => withActor(c, ({ actor }) => c.json(office.tasks.thread(actor, c.req.param('id')))));
   app.patch('/v1/tasks/:id', c => withActor(c, async ({ actor }) => {
-    const patch = z.object({ status: TaskStatusSchema.optional(), note: z.string().max(2000).optional(), assigneeSeatId: z.string().min(1).max(64).nullable().optional(), title: z.string().min(1).max(200).optional(), body: z.string().max(8000).optional(), kind: TaskKindSchema.optional(), expectedRevision: z.number().int().min(0).optional(), reason: z.string().max(2000).optional(), handoffNote: z.string().max(2000).optional(), passRequired: TaskIdList.optional(), result: z.enum(TASK_RESULTS).optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
+    const patch = z.object({ status: TaskStatusSchema.optional(), note: z.string().max(2000).optional(), assigneeSeatId: z.string().min(1).max(64).nullable().optional(), title: z.string().min(1).max(200).optional(), body: z.string().max(8000).optional(), kind: TaskKindSchema.optional(), expectedRevision: z.number().int().min(0).optional(), reason: z.string().max(2000).optional(), handoffNote: z.string().max(2000).optional(), passRequired: TaskIdList.optional(), result: z.enum(TASK_RESULTS).optional(), projectId: z.string().min(1).max(40).nullable().optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
     // The web UI acts as the manager; agents call through their MCP tools with a bearer token.
     return c.json(office.tasks.update(actor, c.req.param('id'), patch, sourceOf(actor)));
   }));
