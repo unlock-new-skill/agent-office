@@ -8,6 +8,7 @@ import { agentOfficeHooks, hookCommand, LISTEN_SECONDS, mergeAgentOfficeHooks, r
 import { startMcpServer } from './mcp-server.js';
 import { loadRunnerConfig, runnerConfigFile, sampleConfig } from './runner/runner-config.js';
 import { installService, restartServiceIfInstalled, uninstallService } from './runner/runner-service-install.js';
+import { endOlderRunners } from './runner/runner-takeover.js';
 import { Runner } from './runner/runner.js';
 import { runWatch } from './runner/session-watch.js';
 import { closeWatchWindow, openWatchWindow } from './runner/watch-window.js';
@@ -123,6 +124,7 @@ const runner = async (): Promise<void> => {
     process.stdout.write(`${installService(self, store.home)}\n`); return;
   }
   const permissionWait = numberEnv('AGENT_OFFICE_PERMISSION_WAIT_SECONDS', 120);
+  endOlderRunners(self, line => process.stdout.write(`${new Date().toISOString()} ${line}\n`));
   const active = new Runner({ store, fetch, config: loadRunnerConfig(store), ensureTools: () => ensureClaudeSetup(process.execPath, self, permissionWait), openWatch: seatId => openWatchWindow(store, seatId, self), closeWatch: seatId => closeWatchWindow(store, seatId), out: line => process.stdout.write(`${new Date().toISOString()} ${line}\n`) });
   const shutdown = (): void => { void active.close().finally(() => process.exit(0)); };
   process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
