@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { constants, copyFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claude, ensureClaudeSetup, mcpEntry, readSettings, registerMcp, settingsFile, writeSettings } from './claude-setup.js';
@@ -20,6 +21,8 @@ import { SessionStore } from './session-store.js';
  *   mcp        agent_office_* MCP tools over stdio
  *   install    --url <daemon> --code <install code>: store a connector credential, merge hooks, register MCP
  *   update     replace this file with the daemon's current connector, then re-sync the hook list in settings
+ *              (`--sha256 <hex>` refuses a download whose bytes differ from that hash)
+ *   install-self --sha256 <hex>: run from a downloaded, checked copy; installs exactly these bytes as the connector
  *   sync-hooks merge the current hook list into ~/.claude/settings.json (run by update with the new file)
  *   uninstall  remove our hooks, the MCP registration and the stored connector
  *   runner     run the seats in ~/.agent-office/runner.json headless and take commands from the web
@@ -77,17 +80,67 @@ const install = async (): Promise<void> => {
   }
 };
 
+const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+const pinnedHash = (): string | null => {
+  const value = option('sha256')?.toLowerCase() ?? null;
+  if (value !== null && !/^[0-9a-f]{64}$/.test(value)) throw new Error('--sha256 takes the full 64-character hex SHA-256');
+  return value;
+};
+
 const update = async (): Promise<void> => {
   const connector = new SessionStore().connector();
   if (!connector) throw new Error('not installed: run the install command from the web UI (Connect machine) first.');
+  const pinned = pinnedHash();
   const response = await fetch(`${connector.daemonUrl}/connector/agent-office.mjs`, { signal: AbortSignal.timeout(30_000) });
-  const text = await response.text();
-  if (!response.ok || !text.includes('agent-office.mjs')) throw new Error(`download failed (${response.status})`);
-  writeFileSync(`${self}.tmp`, text); renameSync(`${self}.tmp`, self);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!response.ok || !Buffer.from(bytes).toString('utf8').includes('agent-office.mjs')) throw new Error(`download failed (${response.status})`);
+  if (pinned && sha256(bytes) !== pinned) throw new Error(`the downloaded connector is ${sha256(bytes)}, not the pinned ${pinned}; nothing was changed`);
+  writeFileSync(`${self}.tmp`, bytes); renameSync(`${self}.tmp`, self);
   // The new file may hook more events than this (old) process knows about, so let it merge its own hook list.
   execFileSync(process.execPath, [self, 'sync-hooks'], { stdio: 'inherit' });
   const restarted = restartServiceIfInstalled(self, new SessionStore().home);
   process.stdout.write(`Connector updated from ${connector.daemonUrl}. ${restarted ? 'Runner service restarted. ' : ''}Restart running Claude sessions to use it.\n`);
+};
+
+/**
+ * Installs the bytes of this very file as the machine's connector, but only when they hash to --sha256: what runs
+ * afterwards is exactly what was checked, unlike `update`, which downloads again. Before changing anything it keeps
+ * the current connector under a new backup name and writes a checkpoint (old/new hash, backup paths) that a later
+ * check or rollback reads; then it syncs the hook list with the installed file and restarts the runner service.
+ */
+const installSelf = (): void => {
+  const pinned = pinnedHash();
+  if (!pinned) throw new Error('usage: node <downloaded-file> install-self --sha256 <64-hex>');
+  const mine = sha256(readFileSync(self));
+  if (mine !== pinned) throw new Error(`this file is ${mine}, not the pinned ${pinned}; nothing was changed`);
+  const store = new SessionStore();
+  const target = path.join(store.home, 'bin', 'agent-office.mjs');
+  if (path.resolve(self).toLowerCase() === path.resolve(target).toLowerCase()) throw new Error('run install-self from the downloaded copy, not from the installed connector');
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '');
+  const backup = `${target}.bak-${stamp}`;
+  const checkpoint = path.join(store.home, `rollout-${stamp}.json`);
+  const previous = existsSync(target) ? sha256(readFileSync(target)) : null;
+  const record: Record<string, unknown> = { at: new Date().toISOString(), target, from: previous, to: pinned, connectorBackup: previous ? backup : null, settingsBackup: null, step: 'checkpoint' };
+  const save = (): void => { writeFileSync(`${checkpoint}.tmp`, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 }); renameSync(`${checkpoint}.tmp`, checkpoint); };
+  if (existsSync(checkpoint)) throw new Error(`${checkpoint} already exists; nothing was changed`);
+  save();
+  if (previous) {
+    copyFileSync(target, backup, constants.COPYFILE_EXCL);
+    if (sha256(readFileSync(backup)) !== previous) throw new Error(`backup ${backup} does not match the current connector; nothing else was changed`);
+  }
+  copyFileSync(self, `${target}.tmp`); renameSync(`${target}.tmp`, target);
+  const installed = sha256(readFileSync(target));
+  record.step = installed === pinned ? 'installed' : 'install-mismatch'; save();
+  if (installed !== pinned) throw new Error(`installed file is ${installed}, not ${pinned}; restore ${backup}`);
+  const synced = execFileSync(process.execPath, [target, 'sync-hooks'], { encoding: 'utf8' });
+  record.settingsBackup = /previous version: (.+?)\)/.exec(synced)?.[1] ?? null; record.step = 'hooks-synced'; save();
+  process.stdout.write(synced);
+  // On Windows the restarted runner ends the old one with all its seats, which may include this process: the
+  // checkpoint already says "restarting", and the runner reports the hash it runs to the server once it is up.
+  record.step = 'restarting'; save();
+  const restarted = restartServiceIfInstalled(target, store.home);
+  record.step = restarted ? 'restarted' : 'installed-no-service'; save();
+  process.stdout.write(`Installed ${pinned} as ${target}. Checkpoint ${checkpoint}. ${restarted ? 'Runner service restarted.' : 'No runner service installed: restart the runner yourself.'}\n`);
 };
 
 const syncHooks = (): void => {
@@ -125,7 +178,7 @@ const runner = async (): Promise<void> => {
   }
   const permissionWait = numberEnv('AGENT_OFFICE_PERMISSION_WAIT_SECONDS', 120);
   endOlderRunners(self, line => process.stdout.write(`${new Date().toISOString()} ${line}\n`));
-  const active = new Runner({ store, fetch, config: loadRunnerConfig(store), ensureTools: () => ensureClaudeSetup(process.execPath, self, permissionWait), openWatch: seatId => openWatchWindow(store, seatId, self), closeWatch: seatId => closeWatchWindow(store, seatId), out: line => process.stdout.write(`${new Date().toISOString()} ${line}\n`) });
+  const active = new Runner({ store, fetch, connectorSha256: sha256(readFileSync(self)), config: loadRunnerConfig(store), ensureTools: () => ensureClaudeSetup(process.execPath, self, permissionWait), openWatch: seatId => openWatchWindow(store, seatId, self), closeWatch: seatId => closeWatchWindow(store, seatId), out: line => process.stdout.write(`${new Date().toISOString()} ${line}\n`) });
   const shutdown = (): void => { void active.close().finally(() => process.exit(0)); };
   process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
   await active.run();
@@ -145,7 +198,8 @@ if (mode === 'hook') {
 } else if (mode === 'mcp') startMcpServer();
 else if (mode === 'install') await install().catch(error => { process.stderr.write(`agent-office install failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
 else if (mode === 'update') await update().catch(error => { process.stderr.write(`agent-office update failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
+else if (mode === 'install-self') { try { installSelf(); } catch (error) { process.stderr.write(`agent-office install-self failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; } }
 else if (mode === 'sync-hooks') syncHooks();
 else if (mode === 'uninstall') uninstall();
 else if (mode === 'runner') await runner().catch(error => { process.stderr.write(`agent-office runner: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
-else { process.stderr.write('usage: agent-office.mjs hook | mcp | install --url <url> --code <code> | update | sync-hooks | uninstall | runner [init | watch <seat> | install-service | uninstall-service]\n'); process.exitCode = 2; }
+else { process.stderr.write('usage: agent-office.mjs hook | mcp | install --url <url> --code <code> | update [--sha256 <hex>] | install-self --sha256 <hex> | sync-hooks | uninstall | runner [init | watch <seat> | install-service | uninstall-service]\n'); process.exitCode = 2; }

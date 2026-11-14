@@ -126,3 +126,15 @@ test('deleting a machine that is online does not crash the next sweep', async ()
   assert.equal(fixture.office.runners.views().some(view => view.id === machine.id), false);
   fixture.close();
 });
+
+test('a runner reports the hash of the connector it runs; an older runner that does not keeps the last one', async () => {
+  const fixture = createAppFixture(); const { token } = fixture.auth.createConnectorCredential();
+  const hash = 'a'.repeat(64);
+  const view = async () => ((await (await fixture.manager('/v1/runners')).json()) as { runners: RunnerView[] }).runners[0]!;
+  assert.equal((await fixture.agent(token, '/v1/runners/register', { body: { machine: 'win', seats: [], connectorSha256: hash } })).status, 200);
+  assert.equal((await view()).connectorSha256, hash);
+  assert.equal((await fixture.agent(token, '/v1/runners/register', { body: { machine: 'win', seats: [] } })).status, 200);
+  assert.equal((await view()).connectorSha256, hash, 'not reporting it keeps the last reported hash');
+  assert.equal((await fixture.agent(token, '/v1/runners/register', { body: { machine: 'win', seats: [], connectorSha256: 'short' } })).status, 400);
+  fixture.close();
+});

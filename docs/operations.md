@@ -145,3 +145,22 @@ npm run lint
 npm test
 postman collection lint postman/collections/agent-office-core
 ```
+
+## Pinned connector rollout
+
+To install one exact connector build on a machine (for example under a one-time approval):
+
+1. Download to a new file and check it: `curl.exe -fsS -o "%TEMP%\ao-target-<stamp>.mjs" <office>/connector/agent-office.mjs`,
+   then `certutil -hashfile <file> SHA256` (macOS/Linux: `curl -fsS -o … && shasum -a 256 …`). Stop if it differs from the pinned hash.
+2. `node <that file> install-self --sha256 <64-hex>`. It refuses unless its own bytes match, writes a checkpoint
+   `~/.agent-office/rollout-<stamp>.json` (old/new hash, connector backup, settings backup, step) before changing
+   anything, keeps the current connector as `agent-office.mjs.bak-<stamp>` (never overwrites one), installs exactly
+   those bytes, syncs the Agent Office hooks (settings backup `settings.json.bak-agent-office-<ms>`), and restarts the
+   runner service. The runner it restarts ends the seats' processes, background jobs included: run it only when they are idle.
+3. Check from the server: each runner reports the SHA-256 of the connector it runs (`connectorSha256` in `/v1/runners`).
+4. Rollback: end the new runner (match PID and start time), copy the backup over `agent-office.mjs`, optionally copy
+   the settings backup back, then start the runner (`schtasks /Run /TN AgentOfficeRunner` on Windows).
+
+On Windows a starting runner ends any older `agent-office.mjs runner` process with its seats before taking over (the
+scheduled task cannot stop the one it started), and refuses to start if it cannot. `update --sha256 <hex>` refuses a
+download that does not match.

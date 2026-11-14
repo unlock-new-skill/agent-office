@@ -49,8 +49,8 @@ export const registerRunnerRoutes = (app: Hono, deps: Deps): void => {
   const asManager = (c: Context, run: () => Promise<Response> | Response): Promise<Response> => deps.manager(c.req.raw) ? handle(run) : Promise.resolve(json('unauthorized', 401));
 
   app.post('/v1/runners/register', c => asRunner(c, async runnerId => {
-    const body = z.object({ machine: z.string().min(1).max(120), seats: z.array(RunnerSeatSchema).max(20) }).strict().parse(await c.req.json());
-    return c.json(office.runners.register(runnerId, body.machine, body.seats));
+    const body = z.object({ machine: z.string().min(1).max(120), seats: z.array(RunnerSeatSchema).max(20), connectorSha256: z.string().regex(/^[0-9a-f]{64}$/).optional() }).strict().parse(await c.req.json());
+    return c.json(office.runners.register(runnerId, body.machine, body.seats, body.connectorSha256));
   }));
   app.get('/v1/runners/me/commands', c => asRunner(c, async runnerId => {
     const { wait, version } = z.object({ wait: z.coerce.number().int().min(0).max(60).default(0), version: z.coerce.number().int().min(-1).default(-1) }).parse(c.req.query());

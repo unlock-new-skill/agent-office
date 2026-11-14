@@ -9,7 +9,9 @@ import { SeatWorker, type CommandResult, type Listen } from './seat-worker.js';
 
 export type RunnerDeps = {
   store: SessionStore; fetch: typeof fetch; config: RunnerConfig; out: (line: string) => void;
-  spawn?: SpawnClaude; sleep?: (ms: number) => Promise<void>; machine?: string; checkCwd?: (cwd: string) => string | null;
+  spawn?: SpawnClaude; sleep?: (ms: number) => Promise<void>; machine?: string;
+  /** SHA-256 of the connector file this runner runs, reported so the web shows which build each machine runs. */
+  connectorSha256?: string; checkCwd?: (cwd: string) => string | null;
   /** Desktop live-view window for a seat (`runner watch`); returns why none was opened, or null. */
   openWatch?: (seatId: string) => string | null; closeWatch?: (seatId: string) => void;
   /** Re-adds the Agent Office MCP server and hooks to Claude Code when missing; run before a seat launches. */
@@ -247,7 +249,7 @@ export class Runner {
   }
 
   private async register(): Promise<void> {
-    const { refused, config } = await this.call<{ refused: string[]; config: MachineConfig }>('/v1/runners/register', { body: { machine: this.deps.machine ?? hostname(), seats: [...this.statuses.values()] } });
+    const { refused, config } = await this.call<{ refused: string[]; config: MachineConfig }>('/v1/runners/register', { body: { machine: this.deps.machine ?? hostname(), seats: [...this.statuses.values()], ...(this.deps.connectorSha256 ? { connectorSha256: this.deps.connectorSha256 } : {}) } });
     for (const seatId of refused) {
       this.deps.out(`[${seatId}] refused by the server (no such seat): stopping it`);
       await this.workers.get(seatId)?.stop(); this.workers.delete(seatId); this.statuses.delete(seatId);

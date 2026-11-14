@@ -12,8 +12,8 @@ const LOG_RING = 300; const MAX_COMMANDS_PER_MINUTE = 30; const MAX_WAITERS = 64
 const COLUMNS = 'id,runner_id AS runnerId,seat_id AS seatId,kind,text,status,result,requested_by AS requestedBy,created_at AS createdAt,done_at AS doneAt';
 
 type AgentRow = { id: string; sessionId: string; endedAt: string | null; lastContactAt: number | null };
-type Row = { id: string; label: string | null; machine: string; seatsJson: string; lastSeenAt: number; configJson: string; configVersion: number };
-const ROW = 'id,label,machine,seats_json AS seatsJson,last_seen_at AS lastSeenAt,config_json AS configJson,config_version AS configVersion';
+type Row = { id: string; label: string | null; machine: string; seatsJson: string; lastSeenAt: number; configJson: string; configVersion: number; connectorSha256: string | null };
+const ROW = 'id,label,machine,seats_json AS seatsJson,last_seen_at AS lastSeenAt,config_json AS configJson,config_version AS configVersion,connector_sha256 AS connectorSha256';
 
 /**
  * Per-machine runners (identified by their connector credential). A runner offers the seats of its local runner.json;
@@ -31,10 +31,11 @@ export class RunnerService {
   constructor(private readonly db: Database, private readonly org: OrgService, private readonly emit: (event: CollabEvent) => void) {}
 
   /** Records the runner and the seats it offers; returns unknown seat ids and the web-managed config to apply. */
-  register(runnerId: string, machine: string, seats: RunnerSeat[]): { refused: string[]; config: MachineConfig } {
+  register(runnerId: string, machine: string, seats: RunnerSeat[], connectorSha256?: string): { refused: string[]; config: MachineConfig } {
     const known = seats.filter(seat => this.seatExists(seat.seatId)); const refused = seats.filter(seat => !known.includes(seat)).map(seat => seat.seatId);
-    this.db.raw.prepare('INSERT INTO runners(id,machine,seats_json,last_seen_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET machine=excluded.machine,seats_json=excluded.seats_json,last_seen_at=excluded.last_seen_at')
-      .run(runnerId, machine.slice(0, 120), JSON.stringify(known), Date.now());
+    // An older connector does not report its hash; the last reported one is kept rather than shown as unknown.
+    this.db.raw.prepare('INSERT INTO runners(id,machine,seats_json,last_seen_at,connector_sha256) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET machine=excluded.machine,seats_json=excluded.seats_json,last_seen_at=excluded.last_seen_at,connector_sha256=COALESCE(excluded.connector_sha256,runners.connector_sha256)')
+      .run(runnerId, machine.slice(0, 120), JSON.stringify(known), Date.now(), connectorSha256 ?? null);
     this.touch(runnerId); this.publish();
     return { refused, config: this.config(runnerId) };
   }
@@ -179,7 +180,7 @@ export class RunnerService {
   }
 
   views(): RunnerView[] {
-    return this.rows().map(row => ({ id: row.id, label: row.label, machine: row.machine, online: this.isOnline(row), lastSeenAt: row.lastSeenAt, seats: this.seatsOf(row), config: { version: row.configVersion, seats: this.configSeats(row) } }));
+    return this.rows().map(row => ({ id: row.id, label: row.label, machine: row.machine, online: this.isOnline(row), lastSeenAt: row.lastSeenAt, connectorSha256: row.connectorSha256, seats: this.seatsOf(row), config: { version: row.configVersion, seats: this.configSeats(row) } }));
   }
 
   /** Periodic sweep: expires stale commands and announces runners that went quiet. */
