@@ -157,8 +157,6 @@ const V27_COLUMNS = `ALTER TABLE tasks ADD COLUMN archived_at INTEGER;
 ALTER TABLE tasks ADD COLUMN archived_by TEXT;
 CREATE INDEX tasks_archived ON tasks(archived_at);`;
 /** v28: a blocker scoped to one step of its tasks leaves the rest of the work free to start and continue. */
-/** v30: the SHA-256 of the connector file each runner reports, so a rollout can be checked from the server. */
-const V30_COLUMNS = 'ALTER TABLE runners ADD COLUMN connector_sha256 TEXT;';
 const V28_COLUMNS = `ALTER TABLE blockers ADD COLUMN scope TEXT NOT NULL DEFAULT 'task' CHECK(scope IN ('task','step'));`;
 /**
  * v29: projects (orders). The manager files an order with its spec; the PM splits it into tasks linked by
@@ -179,6 +177,8 @@ CREATE TABLE project_changes(
 CREATE INDEX project_changes_project ON project_changes(project_id,id);
 ALTER TABLE tasks ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
 CREATE INDEX tasks_project ON tasks(project_id);`;
+/** v30: the SHA-256 of the connector file each runner reports, so a rollout can be checked from the server. */
+const V30_COLUMNS = 'ALTER TABLE runners ADD COLUMN connector_sha256 TEXT;';
 const V26_TABLES = `CREATE TABLE approval_requests(
   id TEXT PRIMARY KEY, requester_seat_id TEXT NOT NULL, task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   channel_id TEXT NOT NULL, thread_seq INTEGER, action TEXT NOT NULL CHECK(length(action) BETWEEN 1 AND 200),

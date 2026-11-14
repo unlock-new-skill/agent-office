@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { constants, copyFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claude, ensureClaudeSetup, mcpEntry, readSettings, registerMcp, settingsFile, writeSettings } from './claude-setup.js';
@@ -9,7 +8,8 @@ import { agentOfficeHooks, hookCommand, LISTEN_SECONDS, mergeAgentOfficeHooks, r
 import { startMcpServer } from './mcp-server.js';
 import { loadRunnerConfig, runnerConfigFile, sampleConfig } from './runner/runner-config.js';
 import { installService, restartServiceIfInstalled, uninstallService } from './runner/runner-service-install.js';
-import { endOlderRunners } from './runner/runner-takeover.js';
+import { endOlderRunners, listNodeProcesses, olderRunners, type ProcessEntry } from './runner/runner-takeover.js';
+import { installConnector, sha256 } from './connector-install.js';
 import { Runner } from './runner/runner.js';
 import { runWatch } from './runner/session-watch.js';
 import { closeWatchWindow, openWatchWindow } from './runner/watch-window.js';
@@ -80,7 +80,6 @@ const install = async (): Promise<void> => {
   }
 };
 
-const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const pinnedHash = (): string | null => {
   const value = option('sha256')?.toLowerCase() ?? null;
   if (value !== null && !/^[0-9a-f]{64}$/.test(value)) throw new Error('--sha256 takes the full 64-character hex SHA-256');
@@ -102,45 +101,33 @@ const update = async (): Promise<void> => {
   process.stdout.write(`Connector updated from ${connector.daemonUrl}. ${restarted ? 'Runner service restarted. ' : ''}Restart running Claude sessions to use it.\n`);
 };
 
-/**
- * Installs the bytes of this very file as the machine's connector, but only when they hash to --sha256: what runs
- * afterwards is exactly what was checked, unlike `update`, which downloads again. Before changing anything it keeps
- * the current connector under a new backup name and writes a checkpoint (old/new hash, backup paths) that a later
- * check or rollback reads; then it syncs the hook list with the installed file and restarts the runner service.
- */
-const installSelf = (): void => {
+/** `install-self`: see installConnector. Hook sync and restart use the installed path, never this downloaded copy. */
+const installSelf = async (): Promise<void> => {
   const pinned = pinnedHash();
   if (!pinned) throw new Error('usage: node <downloaded-file> install-self --sha256 <64-hex>');
-  const mine = sha256(readFileSync(self));
-  if (mine !== pinned) throw new Error(`this file is ${mine}, not the pinned ${pinned}; nothing was changed`);
   const store = new SessionStore();
-  const target = path.join(store.home, 'bin', 'agent-office.mjs');
-  if (path.resolve(self).toLowerCase() === path.resolve(target).toLowerCase()) throw new Error('run install-self from the downloaded copy, not from the installed connector');
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '');
-  const backup = `${target}.bak-${stamp}`;
-  const checkpoint = path.join(store.home, `rollout-${stamp}.json`);
-  const previous = existsSync(target) ? sha256(readFileSync(target)) : null;
-  const record: Record<string, unknown> = { at: new Date().toISOString(), target, from: previous, to: pinned, connectorBackup: previous ? backup : null, settingsBackup: null, step: 'checkpoint' };
-  const save = (): void => { writeFileSync(`${checkpoint}.tmp`, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 }); renameSync(`${checkpoint}.tmp`, checkpoint); };
-  if (existsSync(checkpoint)) throw new Error(`${checkpoint} already exists; nothing was changed`);
-  save();
-  if (previous) {
-    copyFileSync(target, backup, constants.COPYFILE_EXCL);
-    if (sha256(readFileSync(backup)) !== previous) throw new Error(`backup ${backup} does not match the current connector; nothing else was changed`);
-  }
-  copyFileSync(self, `${target}.tmp`); renameSync(`${target}.tmp`, target);
-  const installed = sha256(readFileSync(target));
-  record.step = installed === pinned ? 'installed' : 'install-mismatch'; save();
-  if (installed !== pinned) throw new Error(`installed file is ${installed}, not ${pinned}; restore ${backup}`);
-  const synced = execFileSync(process.execPath, [target, 'sync-hooks'], { encoding: 'utf8' });
-  record.settingsBackup = /previous version: (.+?)\)/.exec(synced)?.[1] ?? null; record.step = 'hooks-synced'; save();
-  process.stdout.write(synced);
-  // On Windows the restarted runner ends the old one with all its seats, which may include this process: the
-  // checkpoint already says "restarting", and the runner reports the hash it runs to the server once it is up.
-  record.step = 'restarting'; save();
-  const restarted = restartServiceIfInstalled(target, store.home);
-  record.step = restarted ? 'restarted' : 'installed-no-service'; save();
-  process.stdout.write(`Installed ${pinned} as ${target}. Checkpoint ${checkpoint}. ${restarted ? 'Runner service restarted.' : 'No runner service installed: restart the runner yourself.'}\n`);
+  const installed = path.join(store.home, 'bin', 'agent-office.mjs');
+  if (path.resolve(self).toLowerCase() === path.resolve(installed).toLowerCase()) throw new Error('run install-self from the downloaded copy, not from the installed connector');
+  // A pid is only the same process if its creation time matches too (Windows reuses pids).
+  const identity = (entry: ProcessEntry): string => `${entry.pid}@${entry.created ?? ''}`;
+  const windows = process.platform === 'win32';
+  const record = await installConnector({
+    source: readFileSync(self), home: store.home, pinned, now: () => new Date(), out: line => process.stdout.write(`${line}\n`),
+    syncHooks: target => {
+      const synced = execFileSync(process.execPath, [target, 'sync-hooks'], { encoding: 'utf8' });
+      process.stdout.write(synced);
+      return /\(previous version: (.+)\)\.$/m.exec(synced)?.[1] ?? null;
+    },
+    restart: target => restartServiceIfInstalled(target, store.home),
+    restoreSettings: backup => { copyFileSync(backup, settingsFile()); },
+    // Windows: the runners running now, by pid + creation time, to tell the old runner from the new one.
+    ...(windows ? {
+      runners: () => { const all = listNodeProcesses(); const plain = olderRunners(all, installed, process.pid); return new Map(all.filter(entry => plain.includes(entry.pid)).map(entry => [entry.pid, identity(entry)])); },
+      endRunner: (pid: number) => { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 30_000 }); },
+    } : {}),
+  });
+  process.stdout.write(`${record.step}: ${record.to} at ${record.target}${record.detail ? ` (${record.detail})` : ''}. Checkpoint in ${store.home}.\n`);
+  if (record.step === 'rolled-back') process.exitCode = 1;
 };
 
 const syncHooks = (): void => {
@@ -177,8 +164,10 @@ const runner = async (): Promise<void> => {
     process.stdout.write(`${installService(self, store.home)}\n`); return;
   }
   const permissionWait = numberEnv('AGENT_OFFICE_PERMISSION_WAIT_SECONDS', 120);
-  endOlderRunners(self, line => process.stdout.write(`${new Date().toISOString()} ${line}\n`));
   const active = new Runner({ store, fetch, connectorSha256: sha256(readFileSync(self)), config: loadRunnerConfig(store), ensureTools: () => ensureClaudeSetup(process.execPath, self, permissionWait), openWatch: seatId => openWatchWindow(store, seatId, self), closeWatch: seatId => closeWatchWindow(store, seatId), out: line => process.stdout.write(`${new Date().toISOString()} ${line}\n`) });
+  // Windows: only after its config and seats are set up does it end older runners, so a build that cannot even load
+  // its config never stops the running seats.
+  endOlderRunners(self, line => process.stdout.write(`${new Date().toISOString()} ${line}\n`));
   const shutdown = (): void => { void active.close().finally(() => process.exit(0)); };
   process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
   await active.run();
@@ -198,7 +187,7 @@ if (mode === 'hook') {
 } else if (mode === 'mcp') startMcpServer();
 else if (mode === 'install') await install().catch(error => { process.stderr.write(`agent-office install failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
 else if (mode === 'update') await update().catch(error => { process.stderr.write(`agent-office update failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
-else if (mode === 'install-self') { try { installSelf(); } catch (error) { process.stderr.write(`agent-office install-self failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; } }
+else if (mode === 'install-self') await installSelf().catch(error => { process.stderr.write(`agent-office install-self failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
 else if (mode === 'sync-hooks') syncHooks();
 else if (mode === 'uninstall') uninstall();
 else if (mode === 'runner') await runner().catch(error => { process.stderr.write(`agent-office runner: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });

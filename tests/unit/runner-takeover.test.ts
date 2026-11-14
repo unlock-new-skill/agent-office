@@ -23,7 +23,17 @@ test('a starting runner on Windows ends older runners with their seats; it refus
   assert.deepEqual(killed, [10, 15]); assert.equal(lines.length, 2);
   assert.throws(() => endOlderRunners(script, () => undefined, { platform: 'win32', list: () => processes, kill: () => { throw new Error('access denied'); } }), /Not starting a second runner/);
   assert.deepEqual(endOlderRunners(script, () => undefined, { platform: 'darwin', list: () => processes, kill: () => assert.fail('never on macOS') }), []);
-  const logged: string[] = [];
-  assert.deepEqual(endOlderRunners(script, line => logged.push(line), { platform: 'win32', list: () => { throw new Error('no powershell'); } }), []);
-  assert.match(logged[0] ?? '', /starting anyway/);
+  assert.throws(() => endOlderRunners(script, () => undefined, { platform: 'win32', list: () => { throw new Error('no powershell'); } }), /Not starting/, 'not knowing whether another runner runs is not a reason to start a second one');
+});
+
+test('a runner only ends runners started before it, so two starting together never end each other', () => {
+  const self = process.pid; const killed: number[] = [];
+  const line = '"node.exe" "C:\\Users\\tr\\.agent-office\\bin\\agent-office.mjs" runner';
+  const list = () => [
+    { pid: self, commandLine: line, created: '2026-11-14T16:00:10.0000000+07:00' },
+    { pid: 21, commandLine: line, created: '2026-11-14T15:00:00.0000000+07:00' },
+    { pid: 22, commandLine: line, created: '2026-11-14T16:00:20.0000000+07:00' },
+  ];
+  assert.deepEqual(endOlderRunners(script, () => undefined, { platform: 'win32', list, kill: pid => { killed.push(pid); } }), [21]);
+  assert.deepEqual(killed, [21]);
 });

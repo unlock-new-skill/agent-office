@@ -33,8 +33,8 @@ export class RunnerService {
   /** Records the runner and the seats it offers; returns unknown seat ids and the web-managed config to apply. */
   register(runnerId: string, machine: string, seats: RunnerSeat[], connectorSha256?: string): { refused: string[]; config: MachineConfig } {
     const known = seats.filter(seat => this.seatExists(seat.seatId)); const refused = seats.filter(seat => !known.includes(seat)).map(seat => seat.seatId);
-    // An older connector does not report its hash; the last reported one is kept rather than shown as unknown.
-    this.db.raw.prepare('INSERT INTO runners(id,machine,seats_json,last_seen_at,connector_sha256) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET machine=excluded.machine,seats_json=excluded.seats_json,last_seen_at=excluded.last_seen_at,connector_sha256=COALESCE(excluded.connector_sha256,runners.connector_sha256)')
+    // An older connector does not report its hash: shown as unknown, never as the hash of a build it no longer runs.
+    this.db.raw.prepare('INSERT INTO runners(id,machine,seats_json,last_seen_at,connector_sha256) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET machine=excluded.machine,seats_json=excluded.seats_json,last_seen_at=excluded.last_seen_at,connector_sha256=excluded.connector_sha256')
       .run(runnerId, machine.slice(0, 120), JSON.stringify(known), Date.now(), connectorSha256 ?? null);
     this.touch(runnerId); this.publish();
     return { refused, config: this.config(runnerId) };
