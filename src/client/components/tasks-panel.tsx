@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { MAX_EXECUTION_MINUTES, TASK_RESULTS, type Channel, type Seat, type Task, type TaskKind, type TaskResult, type TaskStatus } from '../../shared/contracts.js';
+import { MAX_EXECUTION_MINUTES, TASK_RESULTS, type Channel, type Seat, type Task, type TaskArchivePlan, type TaskKind, type TaskResult, type TaskStatus } from '../../shared/contracts.js';
 import { errorText, type Api } from '../api/http.js';
 import { TaskProgress } from './progress-parts.js';
 import { useProgress } from '../state/use-progress.js';
@@ -89,6 +89,58 @@ function EditForm({ task: live, seats, api, notify, onDone }: { task: Task; seat
   );
 }
 
+/** "t-dev-1..t-dev-5" or "t-dev-1..5" expands to the exact ids; the server only ever receives exact ids. */
+const expandIds = (text: string): string[] => ids(text).flatMap(token => {
+  const range = /^(t-[a-z0-9-]+?-)(\d+)\.\.(?:\1)?(\d+)$/.exec(token);
+  if (!range) return [token];
+  const [, prefix, from, to] = range; const start = Number(from); const end = Number(to);
+  return end < start || end - start >= 1000 ? [token] : Array.from({ length: end - start + 1 }, (_, index) => `${prefix}${start + index}`);
+});
+
+/**
+ * Bulk archive / restore of exact task ids: preview first (eligible tasks with their revision, refused ones with the
+ * reason), then confirm the previewed eligible set. A task changed meanwhile fails the whole batch; nothing is deleted.
+ */
+function ArchiveForm({ api, notify, onDone }: { api: Api; notify: (text: string) => void; onDone: () => void }): ReactNode {
+  const [action, setAction] = useState<'archive' | 'restore'>('archive'); const [text, setText] = useState(''); const [reason, setReason] = useState('');
+  const [plan, setPlan] = useState<TaskArchivePlan | null>(null); const [busy, setBusy] = useState(false);
+  const taskIds = [...new Set(expandIds(text))];
+  const preview = async (event: FormEvent): Promise<void> => {
+    event.preventDefault(); setBusy(true);
+    try { setPlan(await api.send<TaskArchivePlan>('POST', `/v1/tasks/${action}`, { taskIds })); } catch (error) { notify(errorText(error)); } finally { setBusy(false); }
+  };
+  const confirm = async (): Promise<void> => {
+    if (!plan || plan.eligible.length === 0) return;
+    setBusy(true);
+    try {
+      const done = await api.send<TaskArchivePlan>('POST', `/v1/tasks/${plan.action}`, { taskIds: plan.eligible.map(entry => entry.id), confirm: true, reason, expectedRevisions: Object.fromEntries(plan.eligible.map(entry => [entry.id, entry.revision])) });
+      notify(`${done.action === 'archive' ? 'Archived' : 'Restored'} ${done.eligible.length} task(s).`); onDone();
+    } catch (error) {
+      notify(errorText(error));
+      // Show the server's current view instead of a blank form: the refused ids and their reasons.
+      try { setPlan(await api.send<TaskArchivePlan>('POST', `/v1/tasks/${plan.action}`, { taskIds: plan.eligible.map(entry => entry.id) })); } catch { setPlan(null); }
+    } finally { setBusy(false); }
+  };
+  return (
+    <form className="task-form" onSubmit={event => void preview(event)}>
+      <label>Action<select value={action} onChange={event => { setAction(event.target.value as 'archive' | 'restore'); setPlan(null); }}><option value="archive">Archive (hide from board, keep everything)</option><option value="restore">Restore archived tasks</option></select></label>
+      <label>Task ids (exact; ranges like t-dev-1..40 expand)<textarea value={text} onChange={event => { setText(event.target.value); setPlan(null); }} rows={4} required placeholder="t-dev-12, t-dev-30..45" /></label>
+      <span className={taskIds.length > 1000 ? 'task-no-estimate' : 'task-assignee'}>{taskIds.length} id(s){taskIds.length > 1000 ? ' — at most 1000 per batch' : ''}</span>
+      <label>Reason (kept in each task's history)<input value={reason} onChange={event => setReason(event.target.value)} maxLength={2000} /></label>
+      {plan && <div role="status" className="task-plan">
+        <span>{plan.eligible.length} eligible{plan.refused.length ? `, ${plan.refused.length} refused` : ''}.</span>
+        {plan.refused.length > 0 && <ul className="task-steps">{plan.refused.slice(0, 50).map(entry => <li key={entry.id}><code>{entry.id}</code> {entry.reason}</li>)}{plan.refused.length > 50 && <li>+{plan.refused.length - 50} more</li>}</ul>}
+        {plan.refused.length > 0 && <span className="task-no-estimate">Confirm sends only the eligible ids; the server checks the set again.</span>}
+      </div>}
+      <div className="row-actions">
+        <button type="submit" className="btn" disabled={busy || taskIds.length === 0 || taskIds.length > 1000}>Preview</button>
+        <button type="button" className="btn btn-primary" disabled={busy || !plan || plan.eligible.length === 0 || reason.trim() === ''} onClick={() => void confirm()}>{plan ? `Confirm ${plan.action} of ${plan.eligible.length}` : 'Confirm'}</button>
+        <button type="button" className="btn" onClick={onDone}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
 export function TasksPanel({ state, channel, api, notify, onOpenThread }: Props): ReactNode {
   const progress = useProgress(api, state);
   const allSeats = state.org?.seats ?? [];
@@ -99,7 +151,7 @@ export function TasksPanel({ state, channel, api, notify, onOpenThread }: Props)
   const stepsOf = (parentId: string): Task[] => Object.values(state.tasks).filter(task => task.parentId === parentId).sort((a, b) => (a.step ?? 0) - (b.step ?? 0));
   const [title, setTitle] = useState(''); const [body, setBody] = useState(''); const [assignee, setAssignee] = useState(''); const [open, setOpen] = useState(false);
   const [estimate, setEstimate] = useState(''); const [dependsOn, setDependsOn] = useState(''); const [stepFor, setStepFor] = useState<string | null>(null); const [editing, setEditing] = useState<string | null>(null);
-  const [kind, setKind] = useState<TaskKind>('execution');
+  const [kind, setKind] = useState<TaskKind>('execution'); const [archiving, setArchiving] = useState(false);
   const isOpen = (taskId: string): boolean => state.tasks[taskId]?.status !== 'done';
   const seatTitle = (seatId: string | null): string => allSeats.find(seat => seat.id === seatId)?.title ?? 'unassigned';
 
@@ -136,6 +188,7 @@ export function TasksPanel({ state, channel, api, notify, onOpenThread }: Props)
             <div className="row-actions"><button type="submit" className="btn btn-primary">Create task</button><button type="button" className="btn" onClick={() => setOpen(false)}>Cancel</button></div>
           </form>
         : <button type="button" className="btn btn-block" onClick={() => setOpen(true)}>+ New task</button>}
+      {archiving ? <ArchiveForm api={api} notify={notify} onDone={() => setArchiving(false)} /> : <button type="button" className="btn btn-block" onClick={() => setArchiving(true)}>Archive / restore tasks…</button>}
       {[...STATUSES.map(status => ({ key: status, label: status, group: tasks.filter(task => task.kind !== 'tracking' && task.status === status) })),
         { key: 'tracking', label: 'tracking', group: tasks.filter(task => task.kind === 'tracking') }].map(({ key, label, group }) => {
         if (group.length === 0) return null;

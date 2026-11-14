@@ -3,7 +3,7 @@ import type { Database } from '../db/database.js';
 import type { ChangeSource, CollabEvent, ParticipantRole, ParticipantState, SeatActivity, Task, TaskOutput, TaskParticipant, TaskResult } from '../../shared/contracts.js';
 import type { DispatchService } from './dispatch-service.js';
 import type { Actor } from './message-service.js';
-import { forbidden, invalid, notFound } from './office-error.js';
+import { conflict, forbidden, invalid, notFound } from './office-error.js';
 import type { OrgService } from './org-service.js';
 import { doingTime, type TaskService } from './task-service.js';
 
@@ -49,7 +49,7 @@ export class ProgressService {
 
   /** Adds or updates a seat's role on a task. */
   setParticipant(actor: Actor, taskId: string, input: { seatId: string; role: ParticipantRole; state: ParticipantState; phase?: string | undefined; note?: string | undefined }, source: ChangeSource): TaskParticipant {
-    const task = this.tasks.get(taskId); const seat = this.org.seat(input.seatId.replace(/^@/, ''));
+    const task = this.live(taskId); const seat = this.org.seat(input.seatId.replace(/^@/, ''));
     if (!ROLES.includes(input.role) || !STATES.includes(input.state)) throw invalid('invalid_participant');
     const phase = (input.phase ?? '').trim(); const note = (input.note ?? '').trim();
     if (phase.length > 200 || note.length > 500) throw invalid('invalid_participant');
@@ -83,7 +83,7 @@ export class ProgressService {
 
   /** Records a partial output (received, not accepted). The task's managers, its assignee and its participants record. */
   recordOutput(actor: Actor, taskId: string, input: { name: string; scope?: string | undefined; evidence?: string | undefined; result?: TaskResult | undefined; missing?: string | undefined }, source: ChangeSource): TaskOutput {
-    const task = this.tasks.get(taskId);
+    const task = this.live(taskId);
     if (!this.manages(actor, task) && !this.participates(actor, taskId)) throw forbidden('forbidden_progress');
     const fields = this.outputFields(input);
     const id = `o-${randomBytes(5).toString('hex')}`; const now = Date.now();
@@ -136,7 +136,8 @@ export class ProgressService {
    * Owning a blocked task says nothing about the person: it is listed under `also`, not used as the state.
    */
   activity(now = Date.now()): SeatActivity[] {
-    const tasks = new Map(this.tasks.all().map(task => [task.id, task]));
+    // Archived tasks are not live work: they never make a seat look busy or blocked.
+    const tasks = new Map(this.tasks.all().filter(task => task.archivedAt === null).map(task => [task.id, task]));
     const open = (taskId: string): boolean => { const task = tasks.get(taskId); return Boolean(task) && task!.status !== 'done'; };
     const rows = this.participants();
     const withParticipants = new Set(rows.map(row => row.taskId));
@@ -183,6 +184,13 @@ export class ProgressService {
       if (finished) return { ...base, state: 'unknown' as const, taskId: finished.taskId, taskTitle: title(finished.taskId), role: finished.role, phase: finished.phase, since: finished.updatedAt, source: `last role ${finished.role} ${finished.state} (${finished.source} by ${finished.updatedBy})`, stale: !fresh(finished.updatedAt), reasons: ['no availability confirmed'] };
       return { ...base, state: 'unknown' as const, taskId: null, taskTitle: null, role: null, phase: '', since: null, source: 'no activity recorded', stale: false, reasons: [] };
     });
+  }
+
+  /** A task that still takes new progress: an archived task is read-only until it is restored. */
+  private live(taskId: string): Task {
+    const task = this.tasks.get(taskId);
+    if (task.archivedAt !== null) throw conflict('task_archived', { task });
+    return task;
   }
 
   /** The task's leaders (manager, PM, department leader/deputy, parent lead) and, unless leadersOnly, its assignee. */

@@ -140,12 +140,17 @@ export class DispatchService {
     return snapshot.tasks.map(task => ({ task, evaluation: snapshot.evals.get(task.id)! }));
   }
 
+  /**
+   * Live tasks (archived ones left out of readiness, offers, the board and alerts) plus every task by id, so a live
+   * task that waits on an archived open one still waits: archiving never makes dependent work ready.
+   */
   private snapshot(): Snapshot {
-    const tasks = this.tasks.all(); const byId = new Map(tasks.map(task => [task.id, task]));
+    const everything = this.tasks.all(); const byId = new Map(everything.map(task => [task.id, task]));
+    const tasks = everything.filter(task => task.archivedAt === null);
     const all = this.blockers.list(); const blockers = new Map(all.map(blocker => [blocker.id, blocker]));
     const open = new Map<string, Blocker[]>();
     for (const blocker of all.filter(candidate => candidate.status === 'open')) for (const taskId of blocker.taskIds) open.set(taskId, [...open.get(taskId) ?? [], blocker]);
-    const evals = new Map(tasks.map(task => [task.id, evaluate(task, { task: id => byId.get(id), openBlockers: id => open.get(id) ?? [] })]));
+    const evals = new Map(everything.map(task => [task.id, evaluate(task, { task: id => byId.get(id), openBlockers: id => open.get(id) ?? [] })]));
     return { tasks, byId, open, blockers, evals };
   }
 
@@ -160,7 +165,7 @@ export class DispatchService {
   private offerFor(snapshot: Snapshot, owner: string | null): string | null {
     if (!owner) return null;
     if (snapshot.tasks.some(task => task.kind === 'execution' && task.status === 'doing' && task.assigneeSeatId === owner)) return null;
-    const rows = this.db.raw.prepare("SELECT r.task_id AS taskId FROM task_readiness r JOIN tasks t ON t.id=r.task_id WHERE r.ready=1 AND t.assignee_seat_id=? AND t.kind='execution' AND t.status IN ('todo','blocked') ORDER BY r.ready_since,t.id").all(owner) as Array<{ taskId: string }>;
+    const rows = this.db.raw.prepare("SELECT r.task_id AS taskId FROM task_readiness r JOIN tasks t ON t.id=r.task_id WHERE r.ready=1 AND t.archived_at IS NULL AND t.assignee_seat_id=? AND t.kind='execution' AND t.status IN ('todo','blocked') ORDER BY r.ready_since,t.id").all(owner) as Array<{ taskId: string }>;
     return rows.map(row => row.taskId).find(id => snapshot.evals.get(id)?.state === 'ready') ?? null;
   }
 

@@ -224,8 +224,20 @@ paths:
     get:
       security: [{cookieAuth: []}, {bearerAuth: []}, {serviceToken: []}]
       description: 'Service tokens (and the manager with limit/cursor) get a page over a stable snapshot ordered by createdAt, id: tasks created after snapshotAt are left out, total is fixed, changedSinceSnapshot counts tasks updated after it (fetch again for one consistent view). Each task carries activeMs (time in doing summed over runs) and runs. Seats without limit get {tasks} (max 500, their visibility).'
-      parameters: [{in: query, name: departmentId, schema: {type: string}}, {in: query, name: status, schema: {enum: [todo, doing, blocked, done]}}, {in: query, name: assignee, schema: {type: string}}, {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 200, default: 100}}, {in: query, name: cursor, schema: {type: string}}]
+      parameters: [{in: query, name: departmentId, schema: {type: string}}, {in: query, name: status, schema: {enum: [todo, doing, blocked, done]}}, {in: query, name: assignee, schema: {type: string}}, {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 200, default: 100}}, {in: query, name: cursor, schema: {type: string}}, {in: query, name: includeArchived, schema: {enum: ['true', 'false', '1', '0']}, description: 'Archived tasks are left out unless true.'}]
       responses: {'200': {description: '{tasks, total, snapshotAt, nextCursor, changedSinceSnapshot} (paged) or {tasks}'}, '400': {description: 'invalid_cursor, invalid_limit'}, '403': {description: 'forbidden_task_read, outside_token_scope'}}
+  /v1/tasks/archive:
+    post:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: 'Bulk archive of exact task ids (manager, coordinators; a leader or deputy in its own department). Without confirm: dry run {action, applied: false, eligible: [{id, revision, status}], refused: [{id, reason}]}. With confirm: needs a reason and expectedRevisions for every eligible id; applied only when nothing is refused and every revision is still current, otherwise 409 and nothing is written. Refused: not_found, forbidden, already_archived, doing, needed_by_active, parent_active, active_steps. Nothing is deleted: only archivedAt/archivedBy are set and the revision bumped (audit field archived). Archived tasks leave the default lists, board, dispatch and activity, stay readable by id, and refuse edits (409 task_archived) until restored.'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TaskArchiveInput'}}}}
+      responses: {'200': {description: TaskArchivePlan}, '400': {description: 'invalid_task_ids, reason_required'}, '403': {description: archive_requires_leader}, '409': {description: 'archive_refused (+ plan), archive_stale (+ plan, changed)'}}
+  /v1/tasks/restore:
+    post:
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      description: 'Same rules as archive, reversed: clears archivedAt/archivedBy only, so the task comes back exactly as it was (status, result, dependencies, history). Refused: not_found, forbidden, not_archived.'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TaskArchiveInput'}}}}
+      responses: {'200': {description: TaskArchivePlan}, '403': {description: archive_requires_leader}, '409': {description: 'archive_refused, archive_stale'}}
   /v1/progress:
     get:
       security: [{cookieAuth: []}, {bearerAuth: []}]
@@ -338,6 +350,15 @@ components:
   responses:
     Unauthorized: {description: Authentication failed}
   schemas:
+    TaskArchiveInput:
+      type: object
+      required: [taskIds]
+      additionalProperties: false
+      properties:
+        taskIds: {type: array, minItems: 1, maxItems: 1000, items: {type: string, maxLength: 80}}
+        confirm: {type: boolean}
+        expectedRevisions: {type: object, additionalProperties: {type: integer, minimum: 0}}
+        reason: {type: string, maxLength: 2000}
     RunnerSeat:
       type: object
       required: [seatId, state, sessionId, restarts, permissionMode, detail]

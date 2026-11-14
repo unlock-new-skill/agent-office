@@ -40,10 +40,13 @@ test('org events replace org; snapshot loads org and agents; reset clears histor
 });
 
 test('task events upsert tasks by id', () => {
-  const task: Task = { id: 't-dev-1', departmentId: 'dev', number: 1, assigneeSeatId: 'dev-be', requesterSeatId: null, createdByKind: 'manager', createdById: 'manager', title: 'A', body: '', status: 'todo', createdAt: 1, updatedAt: 1, estimateMinutes: null, dependsOn: [], parentId: null, step: null, threadSeq: null, revision: 0, kind: null, passRequired: [], result: 'unknown', resultBy: null, resultAt: null, actualStart: null };
+  const task: Task = { id: 't-dev-1', departmentId: 'dev', number: 1, assigneeSeatId: 'dev-be', requesterSeatId: null, createdByKind: 'manager', createdById: 'manager', title: 'A', body: '', status: 'todo', createdAt: 1, updatedAt: 1, estimateMinutes: null, dependsOn: [], parentId: null, step: null, threadSeq: null, revision: 0, kind: null, passRequired: [], result: 'unknown', resultBy: null, resultAt: null, actualStart: null, archivedAt: null, archivedBy: null };
   let state = officeReducer(initialOfficeState, { type: 'tasks', tasks: [task] });
   state = officeReducer(state, { type: 'collab', event: { type: 'collab', kind: 'task', task: { ...task, status: 'done' } } });
   assert.equal(Object.keys(state.tasks).length, 1); assert.equal(state.tasks['t-dev-1']?.status, 'done');
+  // An archived task leaves the live list; the server keeps it for direct reads and includeArchived.
+  state = officeReducer(state, { type: 'collab', event: { type: 'collab', kind: 'task', task: { ...task, status: 'done', archivedAt: 5, archivedBy: 'manager' } } });
+  assert.equal(state.tasks['t-dev-1'], undefined);
 });
 
 test('unread counts use the client read cursor', () => {

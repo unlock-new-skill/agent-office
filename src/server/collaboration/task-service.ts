@@ -1,18 +1,21 @@
 import type { Database } from '../db/database.js';
-import { MAX_EXECUTION_MINUTES, type ChangeSource, type CollabEvent, type Seat, type Task, type TaskChange, type TaskKind, type TaskResult, type TaskStatus } from '../../shared/contracts.js';
+import { MAX_EXECUTION_MINUTES, type ChangeSource, type TaskArchivePlan, type CollabEvent, type Seat, type Task, type TaskChange, type TaskKind, type TaskResult, type TaskStatus } from '../../shared/contracts.js';
 import type { Actor, MessageService } from './message-service.js';
 import { conflict, forbidden, invalid, notFound } from './office-error.js';
 import { LEADERS_CHANNEL_ID, OUTPUTS_CHANNEL_ID, type OrgService } from './org-service.js';
 
 export type TaskEvent = { taskId: string; actorKind: string; actorId: string; fromStatus: TaskStatus | null; toStatus: TaskStatus; note: string; createdAt: number };
-type TaskFilter = { departmentId?: string | undefined; status?: TaskStatus | undefined; assignee?: string | undefined };
+type TaskFilter = { departmentId?: string | undefined; status?: TaskStatus | undefined; assignee?: string | undefined; includeArchived?: boolean | undefined };
+/** Bulk archive / restore input: exact ids; without confirm it is a dry run, with confirm every eligible id needs its revision. */
+export type ArchiveInput = { taskIds: string[]; confirm?: boolean | undefined; expectedRevisions?: Record<string, number> | undefined; reason?: string | undefined };
+export const MAX_ARCHIVE_BATCH = 1000;
 type TaskPlan = { estimateMinutes?: number | null | undefined; dependsOn?: string[] | undefined };
 /** A field left out keeps its value; assigneeSeatId null unassigns; dependsOn [] clears (leaders only). */
 export type TaskPatch = { status?: TaskStatus | undefined; note?: string | undefined; assigneeSeatId?: string | null | undefined; title?: string | undefined; body?: string | undefined; kind?: TaskKind | undefined;
   expectedRevision?: number | undefined; reason?: string | undefined; handoffNote?: string | undefined; passRequired?: string[] | undefined; result?: TaskResult | undefined } & TaskPlan;
 type AuditField = 'title' | 'body' | 'assigneeSeatId' | 'estimateMinutes' | 'dependsOn' | 'passRequired' | 'kind' | 'status' | 'result';
 type TaskRow = Omit<Task, 'dependsOn' | 'passRequired'> & { dependsOn: string; passRequired: string };
-const TASK_COLUMNS = 'id,department_id AS departmentId,number,assignee_seat_id AS assigneeSeatId,requester_seat_id AS requesterSeatId,created_by_kind AS createdByKind,created_by_id AS createdById,title,body,status,created_at AS createdAt,updated_at AS updatedAt,estimate_minutes AS estimateMinutes,depends_on AS dependsOn,parent_id AS parentId,step,thread_seq AS threadSeq,revision,kind,pass_required AS passRequired,result,result_by AS resultBy,result_at AS resultAt,actual_start AS actualStart';
+const TASK_COLUMNS = 'id,department_id AS departmentId,number,assignee_seat_id AS assigneeSeatId,requester_seat_id AS requesterSeatId,created_by_kind AS createdByKind,created_by_id AS createdById,title,body,status,created_at AS createdAt,updated_at AS updatedAt,estimate_minutes AS estimateMinutes,depends_on AS dependsOn,parent_id AS parentId,step,thread_seq AS threadSeq,revision,kind,pass_required AS passRequired,result,result_by AS resultBy,result_at AS resultAt,actual_start AS actualStart,archived_at AS archivedAt,archived_by AS archivedBy';
 const toTask = (row: TaskRow): Task => ({ ...row, dependsOn: JSON.parse(row.dependsOn) as string[], passRequired: JSON.parse(row.passRequired) as string[] });
 const MAX_ESTIMATE = 7 * 24 * 60; const MAX_DEPENDENCIES = 20;
 /** Agents must write what the task needs (goal, inputs, expected output, acceptance) so the manager can follow it. */
@@ -82,6 +85,7 @@ export class TaskService {
     else if (departmentId) { clauses.push('department_id=?'); params.push(departmentId); }
     if (filter.status) { clauses.push('status=?'); params.push(filter.status); }
     if (assignee) { clauses.push('assignee_seat_id=?'); params.push(assignee); }
+    if (!filter.includeArchived) clauses.push('archived_at IS NULL');
     return (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY status='done',updated_at DESC LIMIT 500`).all(...params) as TaskRow[]).map(toTask);
   }
 
@@ -96,7 +100,7 @@ export class TaskService {
    * later are left out, so pages never shift and total stays the same. Tasks changed after snapshotAt still appear with
    * their current values; changedSinceSnapshot counts them so a reader can fetch again if it needs one consistent view.
    */
-  page(scope: { departments: string[] | null; departmentId?: string | undefined; status?: TaskStatus | undefined }, limit = 100, cursor?: string, now = Date.now()): TaskPage {
+  page(scope: { departments: string[] | null; departmentId?: string | undefined; status?: TaskStatus | undefined; includeArchived?: boolean | undefined }, limit = 100, cursor?: string, now = Date.now()): TaskPage {
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE) throw invalid('invalid_limit');
     let position: { s: number; c: number; i: string } | null = null;
     if (cursor) {
@@ -108,9 +112,11 @@ export class TaskService {
     const departments = scope.departmentId ? [scope.departmentId] : scope.departments;
     if (departments) { clauses.push(`department_id IN (${departments.map(() => '?').join(',')})`); params.push(...departments); }
     if (scope.status) { clauses.push('status=?'); params.push(scope.status); }
+    // Archiving keeps updated_at: a task archived after the snapshot still counts as changed, so a reader refetches.
+    const changedSinceSnapshot = (this.db.raw.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE ${clauses.join(' AND ')} AND (updated_at>? OR archived_at>?)`).get(...params, snapshotAt, snapshotAt) as { count: number }).count;
+    if (!scope.includeArchived) clauses.push('archived_at IS NULL');
     const where = clauses.join(' AND ');
     const total = (this.db.raw.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE ${where}`).get(...params) as { count: number }).count;
-    const changedSinceSnapshot = (this.db.raw.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE ${where} AND updated_at>?`).get(...params, snapshotAt) as { count: number }).count;
     const after = position ? ' AND (created_at>? OR (created_at=? AND id>?))' : '';
     const rows = (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE ${where}${after} ORDER BY created_at,id LIMIT ?`).all(...params, ...(position ? [position.c, position.c, position.i] : []), limit + 1) as TaskRow[]).map(toTask);
     const pageTasks = rows.slice(0, limit); const last = pageTasks.at(-1);
@@ -185,6 +191,7 @@ export class TaskService {
     const parent = this.get(input.parentId);
     if (parent.parentId !== null) throw invalid('steps_are_one_level: add the step to the parent task');
     if (parent.status === 'done') throw invalid('parent_task_done');
+    if (parent.archivedAt !== null) throw conflict('task_archived', { task: parent });
     if (actor.kind === 'seat' && !this.isCoordinator(actor) && actor.seatId !== parent.assigneeSeatId) throw forbidden('only_task_lead_adds_steps');
     if (actor.kind === 'seat' && input.body.trim().length < MIN_REQUIREMENT) throw invalid('requirement_required: write what this step does and the expected output in body');
     const assignee = this.org.seat(input.assigneeSeatId); const departmentId = assignee.departmentId;
@@ -239,6 +246,8 @@ export class TaskService {
     const task = this.get(taskId); const leader = this.leaderOf(task.departmentId); const note = patch.note ?? ''; const reason = patch.reason ?? ''; const handoff = patch.handoffNote?.trim() ?? '';
     if (note.length > MAX_NOTE || reason.length > MAX_NOTE || handoff.length > MAX_NOTE) throw invalid('invalid_task');
     if (patch.expectedRevision !== undefined && patch.expectedRevision !== task.revision) throw stale(task);
+    // An archived task is read-only until it is restored: no status, result or plan change slips past the archive.
+    if (task.archivedAt !== null) throw conflict('task_archived', { task });
     const parent = task.parentId ? this.get(task.parentId) : null;
     const authority = this.authority(actor, task); const isLeader = authority === 'leader';
     if (!authority) throw forbidden('forbidden_task_change');
@@ -345,7 +354,7 @@ export class TaskService {
 
   /** Tells the assignee of each open task that was waiting only on `done` that it can start now. */
   private releaseDependents(done: Task): void {
-    const waiting = (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE status!='done' AND depends_on LIKE ?`).all(`%"${done.id}"%`) as TaskRow[]).map(toTask);
+    const waiting = (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE status!='done' AND archived_at IS NULL AND depends_on LIKE ?`).all(`%"${done.id}"%`) as TaskRow[]).map(toTask);
     for (const task of waiting) {
       if (!task.dependsOn.includes(done.id) || this.unmetDependencies(task.dependsOn, task.passRequired).length > 0) continue;
       if (task.kind === 'execution' && this.dispatching()) continue;
@@ -375,7 +384,9 @@ export class TaskService {
   private checkDependencies(taskId: string | null, ids: string[]): string[] {
     const unique = [...new Set(ids)];
     if (unique.length > MAX_DEPENDENCIES || (taskId && unique.includes(taskId))) throw invalid('invalid_dependencies');
-    for (const id of unique) this.get(id);
+    // An archived open task never finishes while archived: new work may not wait on it (restore it first).
+    const existing = taskId ? this.get(taskId).dependsOn : [];
+    for (const id of unique) { const dependency = this.get(id); if (!existing.includes(id) && dependency.archivedAt !== null && dependency.status !== 'done') throw invalid(`dependency_archived: ${id} is archived and not done; restore it first`); }
     if (taskId) {
       const seen = new Set<string>(); const stack = [...unique];
       while (stack.length) {
@@ -430,6 +441,112 @@ export class TaskService {
 
   /** All tasks (any department), for readiness. */
   all(): Task[] { return (this.db.raw.prepare(`SELECT ${TASK_COLUMNS} FROM tasks`).all() as TaskRow[]).map(toTask); }
+
+  /**
+   * Bulk archive or restore of exact task ids. Without `confirm` it is a dry run that lists the eligible tasks with
+   * their revision and the refused ones with the reason. With `confirm`, nothing is written unless no id is refused and
+   * every eligible id comes with the revision it was previewed at, still current: a task started, edited or archived
+   * meanwhile fails the whole batch (fail closed, never forced). Archive and restore only set or clear archived_at /
+   * archived_by and bump the revision; status, result, dependencies, parent, history and approval links stay as they
+   * are, so a restored task is exactly what it was. Each change is audited in task_changes (field `archived`).
+   * Rights: the manager and coordinators anywhere; a department's leader or deputy inside that department only.
+   */
+  archive(actor: Actor, action: 'archive' | 'restore', input: ArchiveInput, source: ChangeSource = 'api'): TaskArchivePlan {
+    const unique = [...new Set(input.taskIds)];
+    if (unique.length === 0 || unique.length > MAX_ARCHIVE_BATCH || unique.length !== input.taskIds.length) throw invalid('invalid_task_ids: 1 to 1000 distinct task ids');
+    const reason = (input.reason ?? '').trim();
+    if (reason.length > MAX_NOTE) throw invalid('invalid_reason');
+    if (actor.kind === 'seat' && !this.isCoordinator(actor)) {
+      const seat = this.org.seat(actor.seatId);
+      if (seat.role !== 'leader' && !this.isDeputy(seat)) throw forbidden('archive_requires_leader');
+    }
+    const plan = (): TaskArchivePlan => this.archivePlan(actor, action, unique);
+    if (!input.confirm) return plan();
+    if (reason.length === 0) throw invalid('reason_required: say why these tasks are archived or restored');
+    const expected = input.expectedRevisions ?? {};
+    const timestamp = Date.now(); const by = actorId(actor);
+    const applied = this.db.transaction(() => {
+      const checked = plan();
+      if (checked.refused.length > 0) throw conflict('archive_refused', { plan: checked });
+      const moved = checked.eligible.filter(entry => expected[entry.id] !== entry.revision).map(entry => entry.id);
+      if (moved.length > 0) throw conflict('archive_stale', { plan: checked, changed: moved });
+      const write = this.db.raw.prepare('UPDATE tasks SET archived_at=?,archived_by=?,revision=revision+1 WHERE id=? AND revision=?');
+      const audit = this.db.raw.prepare('INSERT INTO task_changes(task_id,revision,actor_kind,actor_id,source,field,before_json,after_json,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)');
+      for (const entry of checked.eligible) {
+        const archiving = action === 'archive';
+        if (Number(write.run(archiving ? timestamp : null, archiving ? by : null, entry.id, entry.revision).changes) === 0) throw conflict('archive_stale', { plan: checked, changed: [entry.id] });
+        audit.run(entry.id, entry.revision + 1, actor.kind, by, source, 'archived', JSON.stringify(!archiving), JSON.stringify(archiving), reason, timestamp);
+      }
+      return { ...checked, applied: true };
+    });
+    for (const entry of applied.eligible) this.emit({ type: 'collab', kind: 'task', task: this.get(entry.id) });
+    this.onChanged();
+    return applied;
+  }
+
+  /**
+   * Which ids may move. Static refusals first (missing, rights, wrong archive state, doing); then the relational checks
+   * run against the set still eligible, repeated until it is stable, so a refused id never shields another one and the
+   * confirm call (eligible ids only) is accepted as previewed. Archive must not hide an open task that live work waits
+   * for, the open step of a live parent or the parent of live steps; restore must not bring back work whose open
+   * dependency, parent or open steps stay archived. One read of the task table, then maps (no per-id scans).
+   */
+  private archivePlan(actor: Actor, action: 'archive' | 'restore', ids: string[]): TaskArchivePlan {
+    const all = this.all(); const byId = new Map(all.map(task => [task.id, task]));
+    const dependents = new Map<string, Task[]>(); const stepsOf = new Map<string, Task[]>();
+    for (const task of all) {
+      for (const id of task.dependsOn) dependents.set(id, [...dependents.get(id) ?? [], task]);
+      if (task.parentId) stepsOf.set(task.parentId, [...stepsOf.get(task.parentId) ?? [], task]);
+    }
+    const refused: TaskArchivePlan['refused'] = []; let candidates: Task[] = [];
+    for (const id of ids) {
+      const task = byId.get(id);
+      if (!task) refused.push({ id, reason: 'not_found' });
+      else if (!this.canArchive(actor, task)) refused.push({ id, reason: 'forbidden: outside your departments' });
+      else if (action === 'restore' && task.archivedAt === null) refused.push({ id, reason: 'not_archived' });
+      else if (action === 'archive' && task.archivedAt !== null) refused.push({ id, reason: 'already_archived' });
+      else if (action === 'archive' && task.status === 'doing') refused.push({ id, reason: 'doing: work in progress is never archived' });
+      else candidates.push(task);
+    }
+    // A seat leader only sees ids it may read in the reasons; other tasks are counted, not named.
+    const name = (tasks: Task[]): string => tasks.map(task => this.canRead(actor, task) ? task.id : 'a task outside your departments').join(', ');
+    const open = (task: Task): boolean => task.status !== 'done';
+    const check = (task: Task, moving: Set<string>): string | null => {
+      if (action === 'archive') {
+        // After the archive a task is live when it is not archived and not moving with this batch.
+        const live = (other: Task): boolean => other.archivedAt === null && !moving.has(other.id) && open(other);
+        const waiting = open(task) ? (dependents.get(task.id) ?? []).filter(live) : [];
+        if (waiting.length > 0) return `needed_by_active: ${name(waiting)}`;
+        const parent = task.parentId ? byId.get(task.parentId) : undefined;
+        if (open(task) && parent && live(parent)) return `parent_active: ${name([parent])}`;
+        const steps = (stepsOf.get(task.id) ?? []).filter(live);
+        return steps.length > 0 ? `active_steps: ${name(steps)}` : null;
+      }
+      const hidden = (other: Task): boolean => other.archivedAt !== null && !moving.has(other.id);
+      const inputs = open(task) ? task.dependsOn.map(id => byId.get(id)).filter((other): other is Task => Boolean(other) && hidden(other!) && open(other!)) : [];
+      if (inputs.length > 0) return `dependency_archived: ${name(inputs)}`;
+      const parent = task.parentId ? byId.get(task.parentId) : undefined;
+      if (parent && hidden(parent)) return `parent_archived: ${name([parent])}`;
+      const steps = open(task) ? (stepsOf.get(task.id) ?? []).filter(step => hidden(step) && open(step)) : [];
+      return steps.length > 0 ? `archived_steps: ${name(steps)}` : null;
+    };
+    for (;;) {
+      const moving = new Set(candidates.map(task => task.id)); const kept: Task[] = [];
+      for (const task of candidates) { const reason = check(task, moving); if (reason) refused.push({ id: task.id, reason }); else kept.push(task); }
+      if (kept.length === candidates.length) break;
+      candidates = kept;
+    }
+    const order = new Map(ids.map((id, index) => [id, index]));
+    refused.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+    return { action, applied: false, eligible: candidates.map(task => ({ id: task.id, revision: task.revision, status: task.status })), refused };
+  }
+
+  /** Who may archive or restore a task: the manager and coordinators anywhere, a leader or deputy in their own department. */
+  private canArchive(actor: Actor, task: Task): boolean {
+    if (actor.kind === 'manager' || this.isCoordinator(actor)) return true;
+    const seat = this.org.seat(actor.seatId);
+    return (seat.role === 'leader' && seat.departmentId === task.departmentId) || this.isDeputy(seat, task.departmentId);
+  }
 
   /** The manager, coordinators, the task's department, its assignee and participants, the lead of its parent and the assignees of its steps see a task. */
   canRead(actor: Actor, task: Task): boolean {

@@ -113,6 +113,15 @@ Schema v10. `POST /v1/machines` creates a runner row (`m-…`) before anything i
 - **After a decision:** a line in the task thread (or the original thread) mentions the requester and its department lead, which wakes them. The Telegram message is edited with the outcome.
 - **Approval only records the decision:** it runs nothing and changes no task status, result or dependency.
 
+## Task archive (schema v27)
+
+`tasks.archived_at` / `archived_by`; `TaskService.archive`, `POST /v1/tasks/archive|restore`, MCP `agent_office_archive_tasks`, web *Archive / restore tasks…* in Tasks.
+- **Reversible, nothing deleted:** archive sets the two columns and bumps the revision; restore clears them. Status, result, dependencies, parent, history, field audit, approval links and messages never change. Each change is one `task_changes` row (field `archived`, reason required). A bulk archive posts no chat lines; it emits one `task` event per task.
+- **Rights:** manager and coordinators anywhere; a leader or deputy in its own department; members never.
+- **Exact ids, dry run, confirm:** without `confirm` it lists eligible ids with their revision and refused ids with the reason. With `confirm` the whole batch is re-checked inside one transaction and written only if nothing is refused and every `expectedRevisions` entry is still current (409 `archive_refused` / `archive_stale`, nothing written). No force option.
+- **Never strands or readies work:** refused are doing tasks, open tasks a live task waits for, open steps of a live parent, and tasks with live steps (archive them together instead). Dispatch evaluates live tasks against every task by id, so an archived open dependency keeps its dependents waiting.
+- **Where archived tasks are hidden:** default `/v1/tasks` list and pages (`includeArchived=true` shows them), board, readiness offers, alerts, status check, handoff brief, seat activity. `GET /v1/tasks/:id` still returns them. They are read-only (`task_archived` on update, START, participants, outputs, new steps) until restored.
+
 ## Public map and lobby
 
 `GET /v1/public/map` (no auth, cached 2 s) returns the org and live agents through `publicMap`: seat descriptions, channels, session ids and project paths are removed and agent ids are replaced by per-response aliases; the client renders it read-only at `/map` for anonymous visitors. The lobby shows unseated sessions that have not exited, were not dismissed (`agents.dismissed_at`, schema v11, cleared on the next registration) and reached the daemon within 5 minutes (`isLobbySession`). Machine seats may set `model`, passed to `claude --model`.

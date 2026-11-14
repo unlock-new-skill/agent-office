@@ -157,9 +157,14 @@ server.registerTool('agent_office_save_handoff', {
 });
 
 server.registerTool('agent_office_list_tasks', {
-  title: 'List tasks', description: 'List tasks of your department (or "mine" for tasks assigned to you), optionally filtered by status. Coordinators (the PM) see every department, or one with departmentId. Each task shows estimateMinutes, dependsOn, kind and revision.',
-  inputSchema: z.object({ status: z.enum(['todo', 'doing', 'blocked', 'done']).optional(), mine: z.boolean().default(false), departmentId: id.optional() }).strict(), annotations: readOnly,
-}, async ({ status, mine, departmentId }) => text(await call(`/v1/tasks?${new URLSearchParams({ ...(status ? { status } : {}), ...(mine ? { assignee: 'me' } : {}), ...(departmentId ? { departmentId } : {}) }).toString()}`)));
+  title: 'List tasks', description: 'List tasks of your department (or "mine" for tasks assigned to you), optionally filtered by status. Coordinators (the PM) see every department, or one with departmentId. Each task shows estimateMinutes, dependsOn, kind and revision. Archived tasks are left out unless includeArchived=true (a task id still opens with agent_office_get_task).',
+  inputSchema: z.object({ status: z.enum(['todo', 'doing', 'blocked', 'done']).optional(), mine: z.boolean().default(false), departmentId: id.optional(), includeArchived: z.boolean().default(false) }).strict(), annotations: readOnly,
+}, async ({ status, mine, departmentId, includeArchived }) => text(await call(`/v1/tasks?${new URLSearchParams({ ...(status ? { status } : {}), ...(mine ? { assignee: 'me' } : {}), ...(departmentId ? { departmentId } : {}), ...(includeArchived ? { includeArchived: 'true' } : {}) }).toString()}`)));
+
+server.registerTool('agent_office_archive_tasks', {
+  title: 'Archive or restore tasks', description: 'Manager, the PM, or a leader / deputy inside their own department: archive (hide from the board, lists, dispatch and activity) or restore exact task ids. Nothing is deleted: id, status, result, dependencies, parent, history and approval links stay, and a restored task is exactly what it was. Step 1: call without confirm = dry run listing eligible ids with their revision and refused ids with the reason (doing, needed by a live task, open step of a live parent, live steps, already archived, outside your departments). Step 2: call again with confirm=true, the eligible ids only, expectedRevisions = { id: revision } from the dry run and a reason. Any refused id or changed revision fails the whole batch and writes nothing; preview again.',
+  inputSchema: z.object({ action: z.enum(['archive', 'restore']), taskIds: z.array(z.string().min(1).max(80)).min(1).max(1000), confirm: z.boolean().default(false), expectedRevisions: z.record(z.string().max(80), z.number().int().min(0)).optional(), reason: z.string().max(2000).optional() }).strict(), annotations: write,
+}, async ({ action, ...input }) => text(await call(`/v1/tasks/${action}`, { body: input })));
 
 server.registerTool('agent_office_task_thread', {
   title: 'Task thread', description: 'Open the discussion thread of a task (created if missing): returns its channelId and seq and shows the thread. Chat about the task there with agent_office_send_message { channelId, threadSeq: seq }; mention any seat of the office to bring it into the discussion. Works for tasks of your department, tasks you lead, and the parent task of a step you were given.',

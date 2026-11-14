@@ -83,7 +83,11 @@ export const officeReducer = (state: OfficeState, action: OfficeAction): OfficeS
     case 'collab': {
       const event = action.event;
       if (event.kind === 'org') return { ...state, org: event.org };
-      if (event.kind === 'task') return { ...state, tasks: { ...state.tasks, [event.task.id]: event.task } };
+      if (event.kind === 'task') {
+        // An archived task leaves the live board; a restored one comes back with its original state.
+        if (event.task.archivedAt) return { ...state, tasks: Object.fromEntries(Object.entries(state.tasks).filter(([id]) => id !== event.task.id)) };
+        return { ...state, tasks: { ...state.tasks, [event.task.id]: event.task } };
+      }
       if (event.kind === 'permission') return { ...state, permissions: event.pending };
       if (event.kind === 'approvals') return { ...state, approvals: event.pending };
       if (event.kind === 'runners') return { ...state, runners: event.runners };

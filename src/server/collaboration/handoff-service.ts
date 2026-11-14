@@ -49,7 +49,7 @@ export class HandoffService {
   brief(seatId: string, options: { afterCompaction?: boolean; now?: number } = {}): string {
     const now = options.now ?? Date.now();
     const note = this.db.raw.prepare(`SELECT ${HANDOFF_COLUMNS} FROM seat_handoffs WHERE seat_id=?`).get(seatId) as SeatHandoff | undefined;
-    const tasks = this.db.raw.prepare("SELECT id,number,title,status FROM tasks WHERE assignee_seat_id=? AND status<>'done' ORDER BY status='todo',updated_at DESC LIMIT ?").all(seatId, MAX_TASKS) as Array<{ id: string; number: number; title: string; status: TaskStatus }>;
+    const tasks = this.db.raw.prepare("SELECT id,number,title,status FROM tasks WHERE assignee_seat_id=? AND status<>'done' AND archived_at IS NULL ORDER BY status='todo',updated_at DESC LIMIT ?").all(seatId, MAX_TASKS) as Array<{ id: string; number: number; title: string; status: TaskStatus }>;
     const unread = this.messages.channelsForSeat(seatId).filter(channel => channel.unread > 0);
     const lines = [`[Agent Office] Handoff for @${seatId} — what previous sessions on this seat left for you:`];
     if (note?.body) {
@@ -76,8 +76,8 @@ export class HandoffService {
     if (seat.role !== 'leader' && department.deputySeatId !== seatId) return [];
     const leaderId = seat.role === 'leader' ? seat.id : (this.db.raw.prepare("SELECT id FROM seats WHERE department_id=? AND role='leader'").get(seat.departmentId) as { id: string } | undefined)?.id;
     type Row = { id: string; title: string; status: TaskStatus; other: string };
-    const serving = this.db.raw.prepare("SELECT id,title,status,requester_seat_id AS other FROM tasks WHERE department_id=? AND requester_seat_id IS NOT NULL AND status<>'done' ORDER BY updated_at DESC LIMIT ?").all(seat.departmentId, MAX_TASKS) as Row[];
-    const waiting = leaderId ? this.db.raw.prepare("SELECT id,title,status,department_id AS other FROM tasks WHERE requester_seat_id=? AND status<>'done' ORDER BY updated_at DESC LIMIT ?").all(leaderId, MAX_TASKS) as Row[] : [];
+    const serving = this.db.raw.prepare("SELECT id,title,status,requester_seat_id AS other FROM tasks WHERE department_id=? AND requester_seat_id IS NOT NULL AND status<>'done' AND archived_at IS NULL ORDER BY updated_at DESC LIMIT ?").all(seat.departmentId, MAX_TASKS) as Row[];
+    const waiting = leaderId ? this.db.raw.prepare("SELECT id,title,status,department_id AS other FROM tasks WHERE requester_seat_id=? AND status<>'done' AND archived_at IS NULL ORDER BY updated_at DESC LIMIT ?").all(leaderId, MAX_TASKS) as Row[] : [];
     return [
       serving.length ? `Requests your department is serving:\n${serving.map(task => `- ${task.id} [${task.status}] ${task.title} ← @${task.other}`).join('\n')}` : 'Requests your department is serving: none.',
       waiting.length ? `Your requests still open in other departments:\n${waiting.map(task => `- ${task.id} [${task.status}] ${task.title} → ${task.other}`).join('\n')}` : 'Your requests still open in other departments: none.',

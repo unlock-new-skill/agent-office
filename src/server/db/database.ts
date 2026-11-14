@@ -12,7 +12,7 @@ const assertPrivate = (filename: string, directory: boolean): void => {
   }
 };
 
-export const SCHEMA_VERSION = 26;
+export const SCHEMA_VERSION = 27;
 
 /** v8: the summary Claude Code produced at a seat's latest context compaction (auto handoff for the next session). */
 const V8_TABLES = `CREATE TABLE seat_compactions(
@@ -149,6 +149,13 @@ const V24_TABLES = `CREATE TABLE service_tokens(
  * Manager approval requests: a seat asks the manager for one specific decision tied to a task or a thread. The decision
  * (status) and the Telegram delivery are kept apart; `nonce` is the opaque, per-revision token the Telegram buttons carry.
  */
+/**
+ * v27: reversible task archive. An archived task leaves the default lists, board, dispatch and activity but keeps its
+ * id, number, status, result, dependencies, parent, history and approval links; restoring clears the two columns only.
+ */
+const V27_COLUMNS = `ALTER TABLE tasks ADD COLUMN archived_at INTEGER;
+ALTER TABLE tasks ADD COLUMN archived_by TEXT;
+CREATE INDEX tasks_archived ON tasks(archived_at);`;
 const V26_TABLES = `CREATE TABLE approval_requests(
   id TEXT PRIMARY KEY, requester_seat_id TEXT NOT NULL, task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   channel_id TEXT NOT NULL, thread_seq INTEGER, action TEXT NOT NULL CHECK(length(action) BETWEEN 1 AND 200),
@@ -296,6 +303,7 @@ export class Database {
         if (from < 24) this.raw.exec(V24_TABLES);
         if (from < 25) this.raw.exec(V25_TABLES);
         if (from < 26) this.raw.exec(V26_TABLES);
+        if (from < 27) this.raw.exec(V27_COLUMNS);
         if ((this.raw.prepare('PRAGMA foreign_key_check').all() as unknown[]).length > 0) throw new Error('migration_foreign_key_violation');
         this.raw.exec(`PRAGMA user_version=${SCHEMA_VERSION};`);
       });
@@ -402,6 +410,7 @@ export class Database {
       ${V24_TABLES}
       ${V25_TABLES}
       ${V26_TABLES}
+      ${V27_COLUMNS}
       CREATE TABLE task_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         actor_kind TEXT NOT NULL, actor_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,

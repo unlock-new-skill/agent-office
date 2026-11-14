@@ -24,7 +24,7 @@ export class StatusCheck {
     const lines: string[] = [];
     for (const department of this.org.view().departments) {
       if (department.id === coordinator.departmentId || department.paused) continue;
-      const open = this.db.raw.prepare(`SELECT id,status FROM tasks WHERE department_id=? AND status IN ${ACTIVE} ORDER BY updated_at`).all(department.id) as OpenTask[];
+      const open = this.db.raw.prepare(`SELECT id,status FROM tasks WHERE department_id=? AND status IN ${ACTIVE} AND archived_at IS NULL ORDER BY updated_at`).all(department.id) as OpenTask[];
       if (open.length === 0) continue;
       const quietFor = now - this.lastActivity(department.id);
       const since = this.flagged.get(department.id) ?? 0;

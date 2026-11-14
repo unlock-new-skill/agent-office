@@ -6,6 +6,7 @@ import type { AuthService, Credential } from './auth/auth-service.js';
 import type { ServiceScope } from './auth/service-token-service.js';
 import type { Actor } from './collaboration/message-service.js';
 import type { Office } from './collaboration/office.js';
+import { MAX_ARCHIVE_BATCH } from './collaboration/task-service.js';
 import { OfficeError } from './collaboration/office-error.js';
 import { logger } from './logger.js';
 
@@ -180,15 +181,17 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
       return run(scope);
     });
   };
-  const PageQuery = z.object({ departmentId: z.string().max(64).optional(), status: TaskStatusSchema.optional(), assignee: z.string().max(64).optional(), limit: z.coerce.number().int().min(1).max(200).optional(), cursor: z.string().max(400).optional() });
+  const PageQuery = z.object({ departmentId: z.string().max(64).optional(), status: TaskStatusSchema.optional(), assignee: z.string().max(64).optional(), limit: z.coerce.number().int().min(1).max(200).optional(), cursor: z.string().max(400).optional(), includeArchived: z.enum(['true', 'false', '1', '0']).optional() });
+  /** Archived tasks are left out unless the caller asks for them (old clients never do, so they keep seeing live work only). */
+  const withArchived = (value: string | undefined): boolean => value === 'true' || value === '1';
   app.get('/v1/tasks', c => asService(c, scope => {
     const query = PageQuery.parse(c.req.query());
-    return c.json(office.tasks.page({ departments: scope.departments, departmentId: query.departmentId, status: query.status }, query.limit ?? 100, query.cursor));
+    return c.json(office.tasks.page({ departments: scope.departments, departmentId: query.departmentId, status: query.status, includeArchived: withArchived(query.includeArchived) }, query.limit ?? 100, query.cursor));
   }) ?? withActor(c, ({ actor }) => {
     const query = PageQuery.parse(c.req.query());
     // The manager may page the whole office (stable snapshot); without limit/cursor the classic list is returned.
-    if (actor.kind === 'manager' && (query.limit !== undefined || query.cursor !== undefined)) return c.json(office.tasks.page({ departments: null, departmentId: query.departmentId, status: query.status }, query.limit ?? 100, query.cursor));
-    return c.json({ tasks: office.tasks.list(actor, { departmentId: query.departmentId, status: query.status, assignee: query.assignee }) });
+    if (actor.kind === 'manager' && (query.limit !== undefined || query.cursor !== undefined)) return c.json(office.tasks.page({ departments: null, departmentId: query.departmentId, status: query.status, includeArchived: withArchived(query.includeArchived) }, query.limit ?? 100, query.cursor));
+    return c.json({ tasks: office.tasks.list(actor, { departmentId: query.departmentId, status: query.status, assignee: query.assignee, includeArchived: withArchived(query.includeArchived) }) });
   }));
   /** Departments and seats (names for ids) in the caller's scope. */
   app.get('/v1/directory', c => {
@@ -205,6 +208,14 @@ export const registerOfficeRoutes = (app: Hono, deps: Deps): void => {
     const input = z.object({ departmentId: z.string().max(64).optional(), title: z.string().max(200), body: z.string().max(8000).default(''), assigneeSeatId: z.string().min(1).max(64), requestedBy: z.string().min(1).max(64).optional(), parentId: z.string().min(1).max(80).optional(), parallel: z.boolean().optional(), kind: TaskKindSchema.optional(), passRequired: TaskIdList.optional(), ...TaskPlanSchema }).strict().parse(await c.req.json());
     return c.json(office.tasks.create(actor, input), 201);
   }));
+  /**
+   * Bulk archive / restore of exact task ids (manager, coordinators, a leader or deputy in their department). Without
+   * confirm: a dry run listing eligible ids with their revision and refused ids with the reason. With confirm: applied
+   * only if nothing is refused and every eligible id comes with its previewed revision (409 otherwise, nothing written).
+   */
+  const ArchiveBody = z.object({ taskIds: z.array(z.string().min(1).max(80)).min(1).max(MAX_ARCHIVE_BATCH), confirm: z.boolean().optional(), expectedRevisions: z.record(z.string().max(80), z.number().int().min(0)).optional(), reason: z.string().max(2000).optional() }).strict();
+  app.post('/v1/tasks/archive', c => withActor(c, async ({ actor }) => c.json(office.tasks.archive(actor, 'archive', ArchiveBody.parse(await c.req.json()), sourceOf(actor)))));
+  app.post('/v1/tasks/restore', c => withActor(c, async ({ actor }) => c.json(office.tasks.archive(actor, 'restore', ArchiveBody.parse(await c.req.json()), sourceOf(actor)))));
   const taskDetail = (actor: Actor, taskId: string, keep: (departmentId: string) => boolean, withProgress = true): Record<string, unknown> => {
     const read = office.tasks.read(actor, taskId);
     const blockers = office.blockers.list({ taskId }).map(blocker => ({ ...blocker, taskIds: blocker.taskIds.filter(id => keep(office.tasks.get(id).departmentId)) }));

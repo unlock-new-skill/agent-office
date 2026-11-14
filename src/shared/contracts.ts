@@ -124,7 +124,11 @@ export type Task = { id: string; departmentId: string; number: number; assigneeS
   /** Dependencies (subset of dependsOn) that need the predecessor done AND its result pass; the others only need done. */
   passRequired: string[]; result: TaskResult; resultBy: string | null; resultAt: number | null;
   /** When the task first moved to doing. */
-  actualStart: number | null };
+  actualStart: number | null;
+  /** Archived tasks are hidden from the default lists, board and dispatch; everything else about them is kept. */
+  archivedAt: number | null; archivedBy: string | null };
+/** Dry run (or result) of a bulk archive / restore: the exact tasks it applies to, with the revision each was checked at. */
+export type TaskArchivePlan = { action: 'archive' | 'restore'; applied: boolean; eligible: Array<{ id: string; revision: number; status: TaskStatus }>; refused: Array<{ id: string; reason: string }> };
 /** Realtime collaboration notifications; state lives in SQLite, clients refetch over REST after reconnect. */
 export type PermissionStatus = 'pending' | 'allowed' | 'denied' | 'expired';
 export type PermissionBehavior = 'allow' | 'deny';
