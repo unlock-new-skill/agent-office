@@ -1,4 +1,17 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+
+/**
+ * On Windows the seat runs as cmd.exe → claude (shell: true), so killing the child only ends cmd.exe: claude and anything
+ * it started keep the pipes open, 'close' never fires and a stop waits forever. taskkill /T ends the whole tree.
+ */
+export const killTree = (child: Pick<ChildProcess, 'pid' | 'kill'>, windows = process.platform === 'win32'): void => {
+  if (windows && child.pid) {
+    const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    killer.on('error', () => child.kill());
+    return;
+  }
+  child.kill();
+};
 import type { SeatConfig } from './runner-config.js';
 
 /** What the runner needs from Claude Code's stream-json output; everything else is ignored. */
@@ -82,6 +95,6 @@ export const spawnClaude: SpawnClaude = (seat, resume, onEvent) => {
     send: text => write({ type: 'user', message: { role: 'user', content: text } }),
     interrupt: () => write({ type: 'control_request', request_id: `interrupt-${Date.now()}`, request: { subtype: 'interrupt' } }),
     close: () => { child.stdin?.end(); },
-    kill: () => { child.kill(); },
+    kill: () => { killTree(child, windows); },
   };
 };

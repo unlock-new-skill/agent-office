@@ -49,6 +49,8 @@ export class Runner {
   private readonly launches = new Map<string, number>();
   private localStarted = false;
   private toolsCheckedAt = -Infinity;
+  /** Tail of each seat's command chain. */
+  private readonly seatCommands = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: RunnerDeps) {
     this.state = new RunnerState(deps.store);
@@ -221,7 +223,14 @@ export class Runner {
     const worker = ['start', 'restart', 'fresh'].includes(command.kind) ? this.revive(command.seatId) : this.workers.get(command.seatId);
     if (!worker) return { ok: false, message: this.statuses.get(command.seatId)?.detail ?? `seat ${command.seatId} is not configured on this machine` };
     switch (command.kind) {
-      case 'start': return this.startSeat(worker);
+      case 'start': {
+        // Already running: say so instead of "starting", and bring back the live view if it was closed.
+        if (!['stopped', 'failed'].includes(worker.snapshot().state)) {
+          if (worker.seat.showWindow) this.openWatch(command.seatId);
+          return { ok: true, message: worker.seat.showWindow ? 'already running (live view opened if it was closed)' : 'already running' };
+        }
+        return this.startSeat(worker);
+      }
       case 'stop': this.launches.set(command.seatId, (this.launches.get(command.seatId) ?? 0) + 1); return worker.stop();
       case 'restart': await worker.stop(); return this.startSeat(worker);
       case 'fresh': await worker.stop(); worker.forgetSession(); return this.startSeat(worker);
@@ -261,11 +270,7 @@ export class Runner {
         failures = 0;
         this.reviveUnavailable();
         if (configVersion !== this.configVersion) await this.applyConfig(await this.call<MachineConfig>('/v1/runners/me/config'));
-        for (const command of commands) {
-          this.deps.out(`command ${command.kind} ${command.seatId} (by ${command.requestedBy})`);
-          const result = await this.execute(command).catch(error => ({ ok: false, message: error instanceof Error ? error.message : 'failed' }));
-          await this.call(`/v1/runners/me/commands/${encodeURIComponent(command.id)}/result`, { body: result }).catch(() => undefined);
-        }
+        for (const command of commands) this.queueCommand(command);
       } catch (error) {
         // The daemon may have restarted or lost us: register again before the next poll.
         this.registered = false;
@@ -274,6 +279,21 @@ export class Runner {
         await this.sleep(delay);
       }
     }
+  }
+
+  /**
+   * Commands run one after another per seat but never hold up the poll: a seat that takes long to stop must not keep
+   * the other seats' commands (or its own next one) waiting until they expire.
+   */
+  private queueCommand(command: RunnerCommand): void {
+    this.deps.out(`command ${command.kind} ${command.seatId} (by ${command.requestedBy})`);
+    const previous = this.seatCommands.get(command.seatId) ?? Promise.resolve();
+    const next = previous.then(async () => {
+      const result = await this.execute(command).catch(error => ({ ok: false, message: error instanceof Error ? error.message : 'failed' }));
+      await this.call(`/v1/runners/me/commands/${encodeURIComponent(command.id)}/result`, { body: result }).catch(() => undefined);
+    });
+    this.seatCommands.set(command.seatId, next);
+    void next.finally(() => { if (this.seatCommands.get(command.seatId) === next) this.seatCommands.delete(command.seatId); });
   }
 
   private async flushLoop(): Promise<void> {

@@ -55,6 +55,42 @@ test('runner API: register (unknown seats refused), manager command round trip, 
   fixture.close();
 });
 
+test('a seat slow to stop never holds up the other commands; start on a running seat says so', async () => {
+  const fixture = createAppFixture();
+  const appFetch = ((input: string | URL | Request, init?: RequestInit) => Promise.resolve(fixture.app.request(String(input), init))) as typeof fetch;
+  const store = new SessionStore(mkdtempSync(path.join(tmpdir(), 'ao-runner-slow-')));
+  store.saveConnector({ daemonUrl: `http://${HOST}`, token: fixture.auth.createConnectorCredential().token });
+  const exits = new Map<string, () => void>(); const started: string[] = [];
+  const repo = (): string => mkdtempSync(path.join(tmpdir(), 'ao-runner-repo-'));
+  const runner = new Runner({
+    store, fetch: appFetch, out: () => undefined, machine: 'test-box', sleep: () => new Promise(resolve => setTimeout(resolve, 5)),
+    config: { seats: ['dev-be', 'dev-fe'].map(seatId => ({ seatId, cwd: repo(), permissionMode: 'acceptEdits' as const, autoStart: false, showWindow: false })) },
+    // dev-be's session ignores the close (a turn still running) until it is let go; dev-fe exits at once.
+    spawn: (seat, _resume, onEvent) => {
+      started.push(seat.seatId); const exit = (): void => onEvent({ kind: 'exit', code: 0, stderr: '' });
+      exits.set(seat.seatId, exit);
+      return { send: () => undefined, interrupt: () => undefined, close: () => { if (seat.seatId !== 'dev-be') exit(); }, kill: exit };
+    },
+  });
+  const running = runner.run();
+  const status = (id: string): string | undefined => fixture.office.runners.commands(id.split(':')[0]!).find(command => command.id === id.split(':')[1])?.status;
+  const result = (seatId: string, id: string): string | null | undefined => fixture.office.runners.commands(seatId).find(command => command.id === id)?.result;
+  const until = async (check: () => boolean): Promise<void> => { for (let i = 0; i < 400 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 5)); assert.ok(check()); };
+  await until(() => fixture.office.runners.views().some(view => view.online));
+  for (const seatId of ['dev-be', 'dev-fe']) fixture.office.runners.enqueue(seatId, 'start', null, 'manager');
+  await until(() => started.length === 2);
+  const stop = fixture.office.runners.enqueue('dev-be', 'stop', null, 'manager');
+  const again = fixture.office.runners.enqueue('dev-fe', 'start', null, 'manager');
+  await until(() => status(`dev-fe:${again.id}`) === 'done');
+  assert.equal(result('dev-fe', again.id), 'already running', 'no fake "starting" and no second session');
+  assert.equal(started.length, 2);
+  assert.equal(status(`dev-be:${stop.id}`), 'sent', 'the slow stop is still waiting, alone');
+  exits.get('dev-be')!();
+  await until(() => status(`dev-be:${stop.id}`) === 'done');
+  await runner.close(); fixture.office.runners.close(); await running;
+  fixture.close();
+});
+
 test('the runner executes a web command on its headless seat and reports back', async () => {
   const fixture = createAppFixture();
   const appFetch = ((input: string | URL | Request, init?: RequestInit) => Promise.resolve(fixture.app.request(String(input), init))) as typeof fetch;
